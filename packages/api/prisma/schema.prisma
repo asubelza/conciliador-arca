@@ -1,0 +1,81 @@
+// Prisma data model for conciliador-arca (mvp-carga-comprobantes).
+// Mirrors the SQL migrations in prisma/migrations/*.sql.
+// Production provider is PostgreSQL (shared schema + RLS per design/architecture.md).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  cuit      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("tenants")
+}
+
+model AfipTipoMap {
+  id          Int      @id @default(autoincrement()) @map("id")
+  tipo        String   @db.Char(3)
+  descripcion String
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("afip_tipo_map")
+}
+
+model VoucherStaging {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  rawData   Json     @map("raw_data")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("vouchers_staging")
+}
+
+model VoucherCanonical {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  fecha        DateTime?
+  tipo         String   @db.Char(3)
+  cuitEmisor   String   @map("cuit_emisor") @db.VarChar(11)
+  puntoVenta   Int      @map("punto_venta")
+  numero       Int
+  importeTotal Decimal  @map("importe_total") @db.Decimal(15, 2)
+  iva          Float?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("vouchers_canonical")
+}
+
+model ReconciliationResult {
+  id                 String   @id @default(uuid())
+  tenantId           String   @map("tenant_id")
+  voucherCanonicalId String?  @map("voucher_canonical_id")
+  arcaRow            Json?    @map("arca_row")
+  tipoClasificacion  String   @map("tipo_clasificacion")
+  ivaImpacto         Decimal? @map("iva_impacto") @db.Decimal(15, 2)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@map("reconciliation_results")
+}
+
+model AuditTrail {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  userId    String?  @map("user_id")
+  action    String
+  entity    String?
+  entityId  String?  @map("entity_id")
+  details   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("audit_trail")
+}
