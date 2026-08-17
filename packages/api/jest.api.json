@@ -1,0 +1,10 @@
+{
+  "preset": "ts-jest",
+  "testEnvironment": "node",
+  "rootDir": ".",
+  "moduleNameMapper": {
+    "^shared-types$": "<rootDir>/../packages/shared-types/src"
+  },
+  "testMatch": ["<rootDir>/src/**/*.test.ts"],
+  "collectCoverageFrom": ["src/**/*.ts"]
+}

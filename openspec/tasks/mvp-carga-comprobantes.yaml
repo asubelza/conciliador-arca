@@ -1,0 +1,51 @@
+# Tasks: mvp-carga-comprobantes
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~920 |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | PR-1 (foundation) → PR-2 (ingestion + normalization) → PR-3 (matching + reporting + frontend) |
+| Delivery strategy | auto-forecast → C3 Chained |
+| Chain strategy | pending |
+
+Decision needed before apply: Yes
+Chained PRs recommended: Yes
+Chain strategy: pending
+400-line budget risk: High
+
+## Phase 1: Foundation (PR-1 — base: main)
+
+- [ ] T01: Scaffold monorepo — `package.json`, `packages/shared-types`, `packages/api`, `packages/web` workspace configs, Jest, Prisma, Nest CLI, Next CLI (S, shared, PR-1)
+- [ ] T02: Create DB migrations `tenants`, `vouchers_staging`, `vouchers_canonical`, `reconciliation_results`, `audit_trail` with `tenant_id` leading indexes + RLS (S, infra, PR-1)
+- [ ] T03: Seed `afip_tipo_map` table with ARCA official tipo_cbte enum (1=Factura A, 2=ND A, 3=NC A, 6=FB, 7=ND B, 8=NC B, 11=Factura C, ...) (S, infra, PR-1)
+
+## Phase 2: Ingestion + Normalization (PR-2 — base: PR-1)
+
+- [ ] T04: POST `/api/reconciliations` — validate exactly 2 files, size < 50 MB, extension whitelist (.csv/.xlsx/.xls); return 400/413/415 (M, api, PR-2)
+- [ ] T05: Streaming multipart parser → `COPY FROM STDIN` into `vouchers_staging`; enqueue BullMQ job; return `job_id` + status URL (M, api, PR-2)
+- [ ] T06: GET `/api/reconciliations/:jobId/status` — return `{ status: 'pending' | 'processing' | 'completed' | 'error', counts? }` (S, api, PR-2)
+- [ ] T07: `afip_tipo_map` lookup service + column-variant adapters for ARCA, Tango, Bejerman, Xubio, Contabilium (S, api, PR-2)
+- [ ] T08: `ComprobanteCanonical` normalizer — CUIT strip (11-digit), comma-decimal → numeric, date parse (dd/mm/yyyy + Excel serial), NC/ND negative sign (S, api, PR-2)
+
+## Phase 3: Matching + Reporting + Frontend (PR-3 — base: PR-2)
+
+- [ ] T09: Reconciliation engine — same-side dedupe on composite key, tenant-scoped `Map` exact-match probe O(n+m) (M, api, PR-3)
+- [ ] T10: 5-category classification (`matched` / `unmatched-arca` / `unmatched-contabilidad` / `duplicates` / `errors`); sort unmatched by `iva_amount` DESC (S, api, PR-3)
+- [ ] T11: GET `/api/reconciliations/:jobId/report?format=csv|xlsx` — CSV diff (matched + deltas + both unmatched + errors) or Excel with 4 sheets (M, api, PR-3)
+- [ ] T12: Append-only `audit_trail` logging (upload/normalize/match/export/user_mark); user marking `revisado`/`explicado`; persist to `feedback_loop` (S, api, PR-3)
+- [ ] T13: Frontend upload form + progress indicator + diff report viewer (Next.js 14 + Tailwind + RTL) (S, frontend, PR-3)
+
+## TDD Focus Notes
+
+- T01: RED — shared-types package with `ComprobanteCanonical` DTO fails before creation; GREEN — DTO compiles; REFACTOR — add validation decorators
+- T04: RED — POST returns 202 before endpoint; test 400/413/415 paths first
+- T05: RED — staging row count via `pg-mem`; test COPY path with 1,000 synthetic rows
+- T07–T08: RED — snapshot tests on real ARCA + Contabilium sample rows (comma-decimal, dates, NC sign)
+- T09: RED — O(n+m) probe test with synthetic Map (assert single probe per key, not nested loop)
+- T10: RED — classification covers all 5 categories; IVA sort test with seeded amounts
+- T11: RED — CSV contains expected headers + row counts before report exists
+- T12: RED — audit entry immutable (UPDATE/DELETE REVOKE tested); user_mark inserts feedback_loop row
+- T13: RED — RTL renders error state when both files not selected; GREEN — upload + report viewer

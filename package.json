@@ -1,0 +1,27 @@
+{
+  "name": "conciliador-arca-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "jest",
+    "test:api": "jest --config jest.api.json",
+    "test:coverage": "jest --coverage",
+    "build": "jest --listTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@nestjs/common": "^11.2.1",
+    "@nestjs/core": "^11.2.1",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.19.43",
+    "jest": "^29.7.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "sqlite3": "^5.1.7",
+    "ts-jest": "^29.4.12",
+    "typescript": "^5.9.3"
+  }
+}

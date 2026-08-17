@@ -1,0 +1,15 @@
+{
+  "name": "shared-types",
+  "version": "0.1.0",
+  "description": "Shared canonical types for conciliador-arca (AFIP tipo map, comprobante DTOs)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": [
+    "dist"
+  ]
+}

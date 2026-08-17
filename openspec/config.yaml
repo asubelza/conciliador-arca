@@ -1,0 +1,43 @@
+schema: spec-driven
+
+context: |
+  Conciliador Inteligente de Comprobantes — account-reconciliation contest app (vs ARCA).
+  Frontend: Next.js 14 + Tailwind CSS (Vercel). Backend: NestJS + PostgreSQL (Railway/Render). Auth: Clerk. Monorepo: packages/web, packages/api, packages/shared-types. Greenfield git repo. Tests: Jest + React Testing Library (web), Jest + Supertest (api). Strict TDD on. Commits: conventional.
+
+strict_tdd: true
+persistence: hybrid
+
+testing:
+  runner: jest
+  test_command: npx jest
+  frontend_test_command: npx jest
+  api_test_command: npx jest --config jest.api.json
+  coverage_command: npx jest --coverage
+  stack:
+    - jest
+    - react-testing-library
+    - supertest
+  coverage_threshold: 80
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns
+    tdd: true
+    test_command: "npx jest"
+  verify:
+    test_command: "npx jest"
+    build_command: "npm run build"
+    coverage_threshold: 80
+  archive:
+    - Warn before merging destructive deltas

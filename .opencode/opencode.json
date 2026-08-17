@@ -1,0 +1,59 @@
+{
+  "model": {
+    "default": "opencode/laguna-s-2.1-free",
+    "sdd_phases": {
+      "sdd-init": "opencode/laguna-s-2.1-free",
+      "sdd-explore": "opencode/laguna-s-2.1-free",
+      "sdd-propose": "opencode/laguna-s-2.1-free",
+      "sdd-spec": "opencode/laguna-s-2.1-free",
+      "sdd-design": "opencode/laguna-s-2.1-free",
+      "sdd-tasks": "opencode/laguna-s-2.1-free",
+      "sdd-apply": "opencode/laguna-s-2.1-free",
+      "sdd-verify": "opencode/laguna-s-2.1-free",
+      "sdd-archive": "opencode/laguna-s-2.1-free",
+      "sdd-onboard": "opencode/laguna-s-2.1-free"
+    }
+  },
+  "skills": {
+    "paths": [
+      "~/.config/opencode/skills"
+    ],
+    "auto_forecast_prs": true,
+    "chained_pr_line_threshold": 400,
+    "review_line_limit": 800
+  },
+  "project": {
+    "name": "conciliador-arca",
+    "type": "monorepo",
+    "stack": {
+      "frontend": "Next.js 14 + Tailwind CSS",
+      "backend": "NestJS + PostgreSQL",
+      "auth": "Clerk Auth",
+      "deploy": {
+        "frontend": "Vercel",
+        "backend": "Railway / Render"
+      }
+    },
+    "conventions": {
+      "folder_structure": [
+        "packages/web",
+        "packages/api",
+        "packages/shared-types"
+      ],
+      "commits": "conventional commits",
+      "testing": {
+        "strict_tdd": true,
+        "runner": "jest",
+        "frontend": {
+          "frameworks": ["jest", "react-testing-library"],
+          "command": "npx jest"
+        },
+        "api": {
+          "frameworks": ["jest", "supertest"],
+          "command": "npx jest --config jest.api.json"
+        },
+        "coverage_command": "npx jest --coverage"
+      }
+    }
+  }
+}
