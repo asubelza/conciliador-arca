@@ -11,16 +11,16 @@
 | Delivery strategy | auto-forecast → C3 Chained |
 | Chain strategy | pending |
 
-Decision needed before apply: Yes
+Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ## Phase 1: Foundation (PR-1 — base: main)
 
-- [ ] T01: Scaffold monorepo — `package.json`, `packages/shared-types`, `packages/api`, `packages/web` workspace configs, Jest, Prisma, Nest CLI, Next CLI (S, shared, PR-1)
-- [ ] T02: Create DB migrations `tenants`, `vouchers_staging`, `vouchers_canonical`, `reconciliation_results`, `audit_trail` with `tenant_id` leading indexes + RLS (S, infra, PR-1)
-- [ ] T03: Seed `afip_tipo_map` table with ARCA official tipo_cbte enum (1=Factura A, 2=ND A, 3=NC A, 6=FB, 7=ND B, 8=NC B, 11=Factura C, ...) (S, infra, PR-1)
+- [x] T01: Scaffold shared-types package with AFIP tipo map enum + canonical voucher types (shared, PR-1)
+- [x] T02: Database migrations setup (tenants, vouchers_staging, vouchers_canonical, afip_tipo_map, reconciliation_results, audit_trail) with tenant_id leading indexes + RLS (infra, PR-1)
+- [x] T03: Seed initial afip_tipo_map data — 15 canonical AFIP tipos from shared-types (infra, PR-1)
 
 ## Phase 2: Ingestion + Normalization (PR-2 — base: PR-1)
 
