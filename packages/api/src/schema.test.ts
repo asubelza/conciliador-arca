@@ -24,6 +24,19 @@ function readMigrations(): string {
     .join('\n');
 }
 
+/**
+ * Strips `-- ...` line comments before ordering checks, so a comment that
+ * merely *mentions* a keyword (e.g. explaining why gen_random_uuid() needs
+ * pgcrypto) can't be mistaken for the real statement when asserting
+ * statement order across migration files.
+ */
+function stripSqlComments(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/--.*$/, ''))
+    .join('\n');
+}
+
 function readSchema(): string {
   if (!fs.existsSync(SCHEMA_PATH)) return '';
   return fs.readFileSync(SCHEMA_PATH, 'utf8');
@@ -32,6 +45,7 @@ function readSchema(): string {
 const sql = readMigrations();
 const schema = readSchema();
 const sqlLc = sql.toLowerCase();
+const sqlLcNoComments = stripSqlComments(sql).toLowerCase();
 
 describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
   describe('migrations exist', () => {
@@ -159,6 +173,45 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
 
     it('audit_trail is append-only (UPDATE/DELETE revoked from app role)', () => {
       expect(sqlLc).toMatch(/revoke\s+update\s*,\s*delete\s+on\s+audit_trail/);
+    });
+  });
+
+  describe('bootstrap prerequisites (000): pgcrypto + app_role', () => {
+    // Found during PR-1 review: 007 REVOKEs on app_role and every table PK
+    // defaults to gen_random_uuid() (pgcrypto), but nothing created either
+    // one — this fails on a fresh PostgreSQL instance with
+    // "role app_role does not exist" / "function gen_random_uuid() does not
+    // exist". A migration numbered before 001 must provision both.
+    const files = fs.existsSync(MIGRATIONS_DIR)
+      ? fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
+      : [];
+
+    it('defines a migration that sorts before 001_init_tenants', () => {
+      const bootstrap = files.find((f) => /^000/.test(f));
+      expect(bootstrap).toBeDefined();
+      expect(files.indexOf(bootstrap as string)).toBeLessThan(
+        files.indexOf('001_init_tenants.sql'),
+      );
+    });
+
+    it('enables the pgcrypto extension (required by gen_random_uuid() defaults)', () => {
+      expect(sqlLc).toMatch(/create\s+extension\s+if\s+not\s+exists\s+pgcrypto/);
+    });
+
+    it('creates app_role before 007 revokes privileges from it', () => {
+      const createIdx = sqlLcNoComments.search(/create\s+role\s+app_role/);
+      const revokeIdx = sqlLcNoComments.search(/revoke\s+update\s*,\s*delete\s+on\s+audit_trail\s+from\s+app_role/);
+      expect(createIdx).toBeGreaterThan(-1);
+      expect(revokeIdx).toBeGreaterThan(-1);
+      expect(createIdx).toBeLessThan(revokeIdx);
+    });
+
+    it('pgcrypto extension is declared before the first gen_random_uuid() default', () => {
+      const extensionIdx = sqlLcNoComments.search(/create\s+extension\s+if\s+not\s+exists\s+pgcrypto/);
+      const firstUsageIdx = sqlLcNoComments.search(/gen_random_uuid\(\)/);
+      expect(extensionIdx).toBeGreaterThan(-1);
+      expect(firstUsageIdx).toBeGreaterThan(-1);
+      expect(extensionIdx).toBeLessThan(firstUsageIdx);
     });
   });
 

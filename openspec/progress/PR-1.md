@@ -56,6 +56,7 @@
 2. **Tipo DTO ↔ DB code mismatch** — must be kept consistent in the normalization layer; a future dev could misalign `tipo_cbte` (int) and `tipo` (char) silently.
 3. **Bootstrap coverage** — `main.ts`/`app.module.ts` are 0% covered (scaffolding only).
 4. **sqlite3 type strictness** — `db.all` returns `unknown[]` under the bundled types, requiring explicit casts in tests.
+5. **RESOLVED (post-hoc review, 2026-08-18):** migrations assumed `pgcrypto` and `app_role` already existed on the target database. Neither is created anywhere, so a fresh PostgreSQL instance (e.g. a new Railway/Render DB) would fail on migration 001 (`gen_random_uuid()` requires pgcrypto) and again on 007 (`REVOKE ... FROM app_role` requires the role to exist). Fixed by adding `000_bootstrap_extensions_and_roles.sql`, which runs before 001 and provisions both. `schema.test.ts` gained a `bootstrap prerequisites (000)` block asserting the migration exists, sorts first, and that pgcrypto/app_role are declared *before* their first use (comment-stripped ordering check, so the assertion isn't fooled by prose mentioning the keywords). Suite is now 53/53 green, `tsc --noEmit` clean.
 
 ## Workload / PR Boundary
 
