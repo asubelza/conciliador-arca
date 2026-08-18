@@ -1,8 +1,12 @@
 import { Module } from '@nestjs/common';
+import { ReconciliationsModule } from './reconciliations/reconciliations.module';
 
 /**
- * AppModule — API root module (PR-1 scaffold).
- * Reconciliations feature modules are added in PR-2 (RF-01..RF-04 ingestion).
+ * AppModule — API root module.
+ * T04 (PR-2) wires the reconciliations upload endpoint; T05+ add the
+ * ingestion/matching/reporting modules as they land.
  */
-@Module({})
+@Module({
+  imports: [ReconciliationsModule],
+})
 export class AppModule {}

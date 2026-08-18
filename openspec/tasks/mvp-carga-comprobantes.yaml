@@ -24,7 +24,7 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Ingestion + Normalization (PR-2 — base: PR-1)
 
-- [ ] T04: POST `/api/reconciliations` — validate exactly 2 files, size < 50 MB, extension whitelist (.csv/.xlsx/.xls); return 400/413/415 (M, api, PR-2)
+- [x] T04: POST `/api/reconciliations` — validate exactly 2 files, size < 50 MB, extension whitelist (.csv/.xlsx/.xls); return 400/413/415 (M, api, PR-2)
 - [ ] T05: Streaming multipart parser → `COPY FROM STDIN` into `vouchers_staging`; enqueue BullMQ job; return `job_id` + status URL (M, api, PR-2)
 - [ ] T06: GET `/api/reconciliations/:jobId/status` — return `{ status: 'pending' | 'processing' | 'completed' | 'error', counts? }` (S, api, PR-2)
 - [ ] T07: `afip_tipo_map` lookup service + column-variant adapters for ARCA, Tango, Bejerman, Xubio, Contabilium (S, api, PR-2)
