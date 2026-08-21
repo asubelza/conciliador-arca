@@ -77,6 +77,22 @@ describe('T05 RF-03: processReconciliationJob', () => {
     );
     expect(resultRows[0].n).toBe(8);
 
+    // T12 (RF-11): 'upload' + 'match' audit_trail events are logged inside
+    // the same transaction as the job that produced them.
+    const { rows: auditRows } = await pool.query(
+      "SELECT action, details FROM audit_trail WHERE tenant_id = $1 AND entity = 'reconciliation_job' AND entity_id = $2 ORDER BY created_at",
+      [tenantId, jobId],
+    );
+    expect(auditRows.map((r) => r.action)).toEqual(['upload', 'match']);
+    expect(auditRows[0].details).toEqual({ rows: 8, arca_rows: 5, contabilidad_rows: 3 });
+    expect(auditRows[1].details).toEqual({
+      matched: 0,
+      'unmatched-arca': 0,
+      'unmatched-contabilidad': 0,
+      duplicates: 0,
+      errors: 8,
+    });
+
     await expect(fs.access(arcaPath)).rejects.toThrow();
     await expect(fs.access(contabilidadPath)).rejects.toThrow();
   });
@@ -111,5 +127,15 @@ describe('T05 RF-03: processReconciliationJob', () => {
       [tenantId, jobId],
     );
     expect(resultRows).toHaveLength(0);
+
+    // T12: the 'upload' audit event is logged after both files stage, inside
+    // the same transaction — a contabilidad-corrupt failure rolls it back
+    // too (it never even got there: the corrupt file fails during staging,
+    // before the 'upload' log call is reached).
+    const { rows: auditRows } = await pool.query(
+      "SELECT action FROM audit_trail WHERE tenant_id = $1 AND entity = 'reconciliation_job' AND entity_id = $2",
+      [tenantId, jobId],
+    );
+    expect(auditRows).toHaveLength(0);
   });
 });

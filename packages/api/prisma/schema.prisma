@@ -84,3 +84,15 @@ model AuditTrail {
 
   @@map("audit_trail")
 }
+
+model FeedbackLoop {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  userId         String?  @map("user_id")
+  compositeKey   String   @map("composite_key")
+  classification String
+  note           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("feedback_loop")
+}

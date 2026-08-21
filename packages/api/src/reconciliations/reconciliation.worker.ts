@@ -23,6 +23,7 @@ import { streamRowsFromFile } from './file-row-stream';
 import { writeRowsToStaging } from './staging-writer';
 import { classifyStagedRows } from './classification-engine';
 import { writeResultsToDb } from './results-writer';
+import { logAuditEvent } from './audit-logger';
 import type { RawRow } from './file-row-stream';
 import {
   RECONCILIATION_QUEUE_NAME,
@@ -87,8 +88,32 @@ export async function processReconciliationJob(
     const arcaRawRows = await readStagedRows(client, data.tenantId, jobId, 'arca');
     const contabilidadRawRows = await readStagedRows(client, data.tenantId, jobId, 'contabilidad');
 
+    // T12 (RF-11): logged inside the same transaction as the staging writes
+    // it describes, so a job that ultimately rolls back never leaves a
+    // dangling 'upload' audit row behind — the log and the data it
+    // references land, or roll back, together.
+    await logAuditEvent(client, {
+      tenantId: data.tenantId,
+      action: 'upload',
+      entity: 'reconciliation_job',
+      entityId: jobId,
+      details: {
+        rows: arcaStaged.rowCount + contabilidadStaged.rowCount,
+        arca_rows: arcaStaged.rowCount,
+        contabilidad_rows: contabilidadStaged.rowCount,
+      },
+    });
+
     const { results, counts } = classifyStagedRows(arcaRawRows, contabilidadRawRows, data.contabilidadSourceSystem);
     await writeResultsToDb(client, data.tenantId, jobId, results);
+
+    await logAuditEvent(client, {
+      tenantId: data.tenantId,
+      action: 'match',
+      entity: 'reconciliation_job',
+      entityId: jobId,
+      details: { ...counts },
+    });
 
     await client.query('COMMIT');
 

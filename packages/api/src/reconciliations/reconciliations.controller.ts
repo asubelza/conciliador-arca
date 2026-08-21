@@ -32,6 +32,9 @@ import { mapJobToStatusResponse } from './job-status';
 import { getPgPool } from '../db/pg-pool';
 import { buildDiffReportRows, toCsv, toXlsxBuffer } from './report-generator';
 import type { PersistedResultRow } from './report-generator';
+import { logAuditEvent } from './audit-logger';
+import { validateMarkRequest } from './marks-validation';
+import { insertFeedbackMark } from './feedback-writer';
 
 /**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
@@ -149,19 +152,7 @@ export class ReconciliationsController {
    */
   @Get(':jobId/report')
   async report(@Param('jobId') jobId: string, @Query('format') format: unknown, @Res() res: Response) {
-    const queue = getReconciliationQueue();
-    const job = await queue.getJob(jobId);
-    if (!job) {
-      throw new HttpException({ error: 'Reconciliation job not found' }, HttpStatus.NOT_FOUND);
-    }
-
-    const state = await job.getState();
-    if (state !== 'completed') {
-      throw new HttpException(
-        { error: `Reconciliation job is not completed yet (status: ${state})` },
-        HttpStatus.CONFLICT,
-      );
-    }
+    const job = await this.getCompletedJobOrThrow(jobId);
 
     const resolvedFormat = format === undefined ? 'csv' : format;
     if (resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx') {
@@ -177,6 +168,17 @@ export class ReconciliationsController {
     );
 
     const reportRows = buildDiffReportRows(rows);
+
+    // T12 (RF-11): every export is logged. Awaited before the response is
+    // sent so a logging failure surfaces as an error rather than a silently
+    // unaudited download.
+    await logAuditEvent(pool, {
+      tenantId: job.data.tenantId,
+      action: 'export',
+      entity: 'reconciliation_job',
+      entityId: jobId,
+      details: { format: resolvedFormat, rows: reportRows.length },
+    });
 
     if (resolvedFormat === 'xlsx') {
       const buffer = await toXlsxBuffer(reportRows);
@@ -196,5 +198,52 @@ export class ReconciliationsController {
         'Content-Disposition': `attachment; filename="reconciliation-${jobId}.csv"`,
       })
       .send(csv);
+  }
+
+  /**
+   * T12 (RF-11): user marks a voucher `revisado` (reviewed) or `explicado`
+   * (explained, with a note) — persisted to `feedback_loop`, and logged to
+   * `audit_trail` as `action: 'user_mark'`. Same 404/409 guard as the report
+   * endpoint above: a mark only makes sense once the job's results exist.
+   */
+  @Post(':jobId/marks')
+  @HttpCode(HttpStatus.CREATED)
+  async createMark(@Param('jobId') jobId: string, @Body() body: unknown) {
+    const job = await this.getCompletedJobOrThrow(jobId);
+
+    const validation = validateMarkRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const pool = getPgPool();
+    const mark = await insertFeedbackMark(pool, job.data.tenantId, validation.value);
+
+    await logAuditEvent(pool, {
+      tenantId: job.data.tenantId,
+      userId: validation.value.user_id,
+      action: 'user_mark',
+      entity: 'feedback_loop',
+      entityId: mark.id,
+      details: { composite_key: validation.value.composite_key, classification: validation.value.classification },
+    });
+
+    return mark;
+  }
+
+  private async getCompletedJobOrThrow(jobId: string) {
+    const queue = getReconciliationQueue();
+    const job = await queue.getJob(jobId);
+    if (!job) {
+      throw new HttpException({ error: 'Reconciliation job not found' }, HttpStatus.NOT_FOUND);
+    }
+    const state = await job.getState();
+    if (state !== 'completed') {
+      throw new HttpException(
+        { error: `Reconciliation job is not completed yet (status: ${state})` },
+        HttpStatus.CONFLICT,
+      );
+    }
+    return job;
   }
 }

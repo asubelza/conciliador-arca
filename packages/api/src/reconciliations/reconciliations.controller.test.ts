@@ -57,6 +57,37 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     await app.close();
   });
 
+  /**
+   * Uploads a matched+unmatched-arca pair (same fixture as the T10 test
+   * above) and polls to a terminal state. Shared by the T11 and T12 describe
+   * blocks below, both of which need a completed job to act on.
+   */
+  async function uploadAndWaitForCompletion(): Promise<string> {
+    const uploadRes = await request(app.getHttpServer())
+      .post('/api/reconciliations')
+      .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
+      .attach(
+        'arca_file',
+        Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
+        'arca.csv',
+      )
+      .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
+    expect(uploadRes.status).toBe(202);
+    const jobId = uploadRes.body.job_id as string;
+
+    const queue = getReconciliationQueue();
+    const job = await queue.getJob(jobId);
+    const deadline = Date.now() + 10000;
+    let state = await job!.getState();
+    while (state !== 'completed' && state !== 'failed' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      state = await job!.getState();
+    }
+    expect(state).toBe('completed');
+    return jobId;
+  }
+
   it('AC1: returns 202 with job_id + status_url for two valid files + tenant_id + source system', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
@@ -310,33 +341,6 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   });
 
   describe('T11: GET /api/reconciliations/:jobId/report', () => {
-    /** Uploads a matched+unmatched-arca pair (same fixture as the T10 test above) and polls to a terminal state. */
-    async function uploadAndWaitForCompletion(): Promise<string> {
-      const uploadRes = await request(app.getHttpServer())
-        .post('/api/reconciliations')
-        .field('tenant_id', tenantId)
-        .field('contabilidad_source_system', 'tango')
-        .attach(
-          'arca_file',
-          Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
-          'arca.csv',
-        )
-        .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
-      expect(uploadRes.status).toBe(202);
-      const jobId = uploadRes.body.job_id as string;
-
-      const queue = getReconciliationQueue();
-      const job = await queue.getJob(jobId);
-      const deadline = Date.now() + 10000;
-      let state = await job!.getState();
-      while (state !== 'completed' && state !== 'failed' && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 100));
-        state = await job!.getState();
-      }
-      expect(state).toBe('completed');
-      return jobId;
-    }
-
     it('AC: returns 404 for an unknown job id', async () => {
       const res = await request(app.getHttpServer()).get(
         '/api/reconciliations/00000000-0000-0000-0000-000000000000/report',
@@ -418,6 +422,106 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         'Errors',
       ]);
       expect(workbook.getWorksheet('Matched')!.rowCount).toBe(2); // header + 1 matched row
+    }, 15000);
+
+    it('AC: logs an "export" audit_trail event scoped to the job', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=csv`);
+      expect(res.status).toBe(200);
+
+      const { rows } = await pool.query(
+        "SELECT action, details FROM audit_trail WHERE tenant_id = $1 AND entity = 'reconciliation_job' AND entity_id = $2 AND action = 'export'",
+        [tenantId, jobId],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].details).toEqual({ format: 'csv', rows: 2 });
+    }, 15000);
+  });
+
+  describe('T12: POST /api/reconciliations/:jobId/marks', () => {
+    it('AC: returns 404 for an unknown job id', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/00000000-0000-0000-0000-000000000000/marks')
+        .send({ composite_key: 'k', classification: 'revisado' });
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'Reconciliation job not found' });
+    });
+
+    it('AC: returns 409 when the job has not finished processing yet', async () => {
+      const queue = getReconciliationQueue();
+      await queue.pause();
+      try {
+        const uploadRes = await request(app.getHttpServer())
+          .post('/api/reconciliations')
+          .field('tenant_id', tenantId)
+          .field('contabilidad_source_system', 'tango')
+          .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
+          .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
+        expect(uploadRes.status).toBe(202);
+        const jobId = uploadRes.body.job_id as string;
+
+        const res = await request(app.getHttpServer())
+          .post(`/api/reconciliations/${jobId}/marks`)
+          .send({ composite_key: 'k', classification: 'revisado' });
+        expect(res.status).toBe(409);
+      } finally {
+        await queue.resume();
+      }
+    });
+
+    it('AC: returns 400 when composite_key is missing', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer())
+        .post(`/api/reconciliations/${jobId}/marks`)
+        .send({ classification: 'revisado' });
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'composite_key is required' });
+    }, 15000);
+
+    it('AC: returns 400 for an unknown classification value', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer())
+        .post(`/api/reconciliations/${jobId}/marks`)
+        .send({ composite_key: 'k', classification: 'aprobado' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/classification/);
+    }, 15000);
+
+    it('AC: inserts into feedback_loop and logs a user_mark audit_trail event', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer())
+        .post(`/api/reconciliations/${jobId}/marks`)
+        .send({
+          composite_key: '30111111112|1|1|1',
+          classification: 'explicado',
+          note: 'Nota de crédito por descuento comercial',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({
+        tenant_id: tenantId,
+        composite_key: '30111111112|1|1|1',
+        classification: 'explicado',
+        note: 'Nota de crédito por descuento comercial',
+      });
+
+      const { rows: feedbackRows } = await pool.query(
+        'SELECT * FROM feedback_loop WHERE tenant_id = $1 AND composite_key = $2',
+        [tenantId, '30111111112|1|1|1'],
+      );
+      expect(feedbackRows).toHaveLength(1);
+      expect(feedbackRows[0].classification).toBe('explicado');
+
+      const { rows: auditRows } = await pool.query(
+        "SELECT action, details FROM audit_trail WHERE tenant_id = $1 AND entity = 'feedback_loop' AND entity_id = $2",
+        [tenantId, res.body.id],
+      );
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0].action).toBe('user_mark');
+      expect(auditRows[0].details).toEqual({
+        composite_key: '30111111112|1|1|1',
+        classification: 'explicado',
+      });
     }, 15000);
   });
 });
