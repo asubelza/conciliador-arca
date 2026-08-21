@@ -27,5 +27,90 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot: applies prisma/migrations/*.sql (tracked in a schema_migrations
+  # table, so it's safe to re-run every `docker compose up` against a
+  # Postgres volume that already has some/all of them applied) and seeds the
+  # 15 AFIP tipos. Exits when done; api/worker wait for it to succeed.
+  migrate:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    image: conciliador-api-app:local
+    container_name: conciliador-migrate
+    command: sh -c "node dist/migrate-runner.js && node dist/seed-runner.js || true"
+    environment:
+      DATABASE_URL: postgresql://conciliador:conciliador@postgres:5432/conciliador_arca
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    image: conciliador-api-app:local
+    container_name: conciliador-api
+    command: node dist/main.js
+    environment:
+      DATABASE_URL: postgresql://conciliador:conciliador@postgres:5432/conciliador_arca
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    ports:
+      - "3000:3000"
+    volumes:
+      # api writes uploaded files to os.tmpdir()/conciliador-uploads
+      # (reconciliations.controller.ts) and the worker reads them back by
+      # path from the same job's data -- as separate containers they don't
+      # share a filesystem by default, so without this the worker crashes
+      # with ENOENT the moment it tries to open a file the api just wrote.
+      # Confirmed by reproducing the crash without this volume first.
+      - conciliador-uploads:/tmp/conciliador-uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    image: conciliador-api-app:local
+    container_name: conciliador-worker
+    command: node dist/reconciliations/reconciliation.worker.main.js
+    environment:
+      DATABASE_URL: postgresql://conciliador:conciliador@postgres:5432/conciliador_arca
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    volumes:
+      - conciliador-uploads:/tmp/conciliador-uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+      args:
+        # Baked into the browser bundle at build time -- must be reachable
+        # from the user's browser on the host, not the Docker network, so
+        # this is localhost:3000 (the api service's published port), not
+        # http://api:3000 (which only resolves between containers).
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:3000
+    container_name: conciliador-web
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+
 volumes:
   conciliador-pg-data:
+  conciliador-uploads:

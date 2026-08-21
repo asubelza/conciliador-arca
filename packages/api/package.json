@@ -12,6 +12,7 @@
     "test:coverage": "jest --config jest.api.json --coverage",
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio",
+    "db:migrate": "node dist/migrate-runner.js",
     "db:seed": "node dist/seed-runner.js",
     "worker": "node dist/reconciliations/reconciliation.worker.main.js"
   },
