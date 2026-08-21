@@ -31,10 +31,13 @@ services:
   # table, so it's safe to re-run every `docker compose up` against a
   # Postgres volume that already has some/all of them applied) and seeds the
   # 15 AFIP tipos. Exits when done; api/worker wait for it to succeed.
+  # No `build:` here on purpose -- api's build produces conciliador-api-app:local
+  # and this service just reuses that tag. Every service having its own
+  # `build:` block for the SAME image tag causes `docker compose up --build`
+  # to build all three concurrently and race exporting to the same tag
+  # ("image ... already exists"), which is exactly what happened the first
+  # time this was tried. Only one service may own the build.
   migrate:
-    build:
-      context: .
-      dockerfile: packages/api/Dockerfile
     image: conciliador-api-app:local
     container_name: conciliador-migrate
     command: sh -c "node dist/migrate-runner.js && node dist/seed-runner.js || true"
@@ -74,10 +77,8 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # No `build:` here either -- same reason as migrate, above.
   worker:
-    build:
-      context: .
-      dockerfile: packages/api/Dockerfile
     image: conciliador-api-app:local
     container_name: conciliador-worker
     command: node dist/reconciliations/reconciliation.worker.main.js
