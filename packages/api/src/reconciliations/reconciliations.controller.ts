@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpException,
   HttpStatus,
+  Param,
   Post,
   UploadedFiles,
   UseInterceptors,
@@ -21,6 +23,7 @@ import {
   validateUploadFiles,
 } from './upload-validation';
 import { getReconciliationQueue } from './reconciliation.queue';
+import { mapJobToStatusResponse } from './job-status';
 
 /**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
@@ -100,5 +103,22 @@ export class ReconciliationsController {
       job_id: jobId,
       status_url: `/api/reconciliations/${jobId}/status`,
     };
+  }
+
+  /**
+   * T06 (RF-04): poll a job's status. `jobId` is the same id returned by
+   * POST /api/reconciliations (it's the literal BullMQ job id — see
+   * `{ jobId }` passed to `queue.add` above), so no separate lookup table
+   * is needed.
+   */
+  @Get(':jobId/status')
+  async status(@Param('jobId') jobId: string) {
+    const queue = getReconciliationQueue();
+    const job = await queue.getJob(jobId);
+    if (!job) {
+      throw new HttpException({ error: 'Reconciliation job not found' }, HttpStatus.NOT_FOUND);
+    }
+    const state = await job.getState();
+    return mapJobToStatusResponse(state, job);
   }
 }

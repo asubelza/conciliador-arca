@@ -158,4 +158,79 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'tenant_id is required and must be a UUID' });
   });
+
+  describe('T06: GET /api/reconciliations/:jobId/status', () => {
+    it('AC: returns 404 for an unknown job id', async () => {
+      const res = await request(app.getHttpServer()).get(
+        '/api/reconciliations/00000000-0000-0000-0000-000000000000/status',
+      );
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'Reconciliation job not found' });
+    });
+
+    it('AC: returns {status: "pending"} for a job the worker has not picked up yet', async () => {
+      const queue = getReconciliationQueue();
+      await queue.pause();
+      try {
+        const res = await request(app.getHttpServer())
+          .post('/api/reconciliations')
+          .field('tenant_id', tenantId)
+          .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
+          .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
+        expect(res.status).toBe(202);
+
+        const statusRes = await request(app.getHttpServer()).get(res.body.status_url);
+        expect(statusRes.status).toBe(200);
+        expect(statusRes.body).toEqual({ status: 'pending' });
+      } finally {
+        await queue.resume();
+      }
+    });
+
+    it('AC: returns {status: "completed", counts} once the job finishes', async () => {
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .attach('arca_file', Buffer.from('cuit\n30111111112\n30222222223'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
+      expect(uploadRes.status).toBe(202);
+      const jobId = uploadRes.body.job_id as string;
+
+      const deadline = Date.now() + 10000;
+      let statusBody: Record<string, unknown> = {};
+      while (Date.now() < deadline) {
+        const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/status`);
+        statusBody = res.body as Record<string, unknown>;
+        if (statusBody.status !== 'pending' && statusBody.status !== 'processing') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      expect(statusBody).toEqual({
+        status: 'completed',
+        counts: { arca_rows: 2, contabilidad_rows: 1 },
+      });
+    }, 15000);
+
+    it('AC: returns {status: "error", detail} when the job fails (corrupt file)', async () => {
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('not a real xlsx file'), 'contabilidad.xlsx');
+      expect(uploadRes.status).toBe(202);
+      const jobId = uploadRes.body.job_id as string;
+
+      const deadline = Date.now() + 10000;
+      let statusBody: Record<string, unknown> = {};
+      while (Date.now() < deadline) {
+        const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/status`);
+        statusBody = res.body as Record<string, unknown>;
+        if (statusBody.status !== 'pending' && statusBody.status !== 'processing') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      expect(statusBody.status).toBe('error');
+      expect(typeof statusBody.detail).toBe('string');
+    }, 15000);
+  });
 });
