@@ -18,7 +18,9 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   MAX_FILE_SIZE_BYTES,
+  ContabilidadSourceSystem,
   getAllowedExtension,
+  validateContabilidadSourceSystem,
   validateTenantId,
   validateUploadFiles,
 } from './upload-validation';
@@ -62,6 +64,7 @@ export class ReconciliationsController {
   async upload(
     @UploadedFiles() files: { arca_file?: Express.Multer.File[]; contabilidad_file?: Express.Multer.File[] },
     @Body('tenant_id') tenantId: unknown,
+    @Body('contabilidad_source_system') contabilidadSourceSystem: unknown,
   ) {
     const filesFailure = validateUploadFiles(files ?? {});
     if (filesFailure) {
@@ -75,6 +78,12 @@ export class ReconciliationsController {
       throw new HttpException(body, tenantFailure.status);
     }
 
+    const sourceSystemFailure = validateContabilidadSourceSystem(contabilidadSourceSystem);
+    if (sourceSystemFailure) {
+      const body = 'error' in sourceSystemFailure ? { error: sourceSystemFailure.error } : {};
+      throw new HttpException(body, sourceSystemFailure.status);
+    }
+
     const arcaFile = files.arca_file![0] as Express.Multer.File;
     const contabilidadFile = files.contabilidad_file![0] as Express.Multer.File;
 
@@ -85,6 +94,7 @@ export class ReconciliationsController {
       'stage-and-normalize',
       {
         tenantId: tenantId as string,
+        contabilidadSourceSystem: contabilidadSourceSystem as ContabilidadSourceSystem,
         arca: {
           filePath: arcaFile.path,
           originalName: arcaFile.originalname,

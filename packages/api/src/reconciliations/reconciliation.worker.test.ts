@@ -1,9 +1,9 @@
 /**
- * reconciliation.worker.test.ts — T05 (RF-03). End-to-end: real files on
- * disk -> processReconciliationJob -> real rows in vouchers_staging,
- * against the real PostgreSQL test database. Exercises the transactional
- * rollback guarantee (a corrupt contabilidad file must not leave the
- * already-staged arca rows behind).
+ * reconciliation.worker.test.ts — T05 (RF-03) + T10 (RF-09). End-to-end:
+ * real files on disk -> processReconciliationJob -> real rows in
+ * vouchers_staging AND reconciliation_results, against the real PostgreSQL
+ * test database. Exercises the transactional rollback guarantee (a corrupt
+ * contabilidad file must not leave the already-staged arca rows behind).
  */
 import { Pool } from 'pg';
 import { promises as fs } from 'fs';
@@ -38,18 +38,29 @@ describe('T05 RF-03: processReconciliationJob', () => {
     return filePath;
   }
 
-  it('stages both files and returns row counts; deletes temp files after', async () => {
+  it('stages both files, returns row + classification counts, deletes temp files after', async () => {
     const jobId = randomUUID();
     const arcaPath = await writeCsv('arca.csv', 5);
     const contabilidadPath = await writeCsv('contabilidad.csv', 3);
 
     const result = await processReconciliationJob(pool, jobId, {
       tenantId,
+      contabilidadSourceSystem: 'tango',
       arca: { filePath: arcaPath, originalName: 'arca.csv', extension: 'csv' },
       contabilidad: { filePath: contabilidadPath, originalName: 'contabilidad.csv', extension: 'csv' },
     });
 
-    expect(result).toEqual({ arca_rows: 5, contabilidad_rows: 3 });
+    // writeCsv's "cuit,numero" columns don't match any adapter's tipo
+    // column, so every row's tipo is unresolved -> all 8 land in 'errors'.
+    expect(result).toEqual({
+      arca_rows: 5,
+      contabilidad_rows: 3,
+      matched: 0,
+      'unmatched-arca': 0,
+      'unmatched-contabilidad': 0,
+      duplicates: 0,
+      errors: 8,
+    });
 
     const { rows } = await pool.query(
       'SELECT file_source, count(*)::int AS n FROM vouchers_staging WHERE tenant_id = $1 AND job_id = $2 GROUP BY file_source ORDER BY file_source',
@@ -59,6 +70,12 @@ describe('T05 RF-03: processReconciliationJob', () => {
       { file_source: 'arca', n: 5 },
       { file_source: 'contabilidad', n: 3 },
     ]);
+
+    const { rows: resultRows } = await pool.query(
+      'SELECT count(*)::int AS n FROM reconciliation_results WHERE tenant_id = $1 AND job_id = $2',
+      [tenantId, jobId],
+    );
+    expect(resultRows[0].n).toBe(8);
 
     await expect(fs.access(arcaPath)).rejects.toThrow();
     await expect(fs.access(contabilidadPath)).rejects.toThrow();
@@ -73,6 +90,7 @@ describe('T05 RF-03: processReconciliationJob', () => {
     await expect(
       processReconciliationJob(pool, jobId, {
         tenantId,
+        contabilidadSourceSystem: 'tango',
         arca: { filePath: arcaPath, originalName: 'arca-2.csv', extension: 'csv' },
         contabilidad: {
           filePath: corruptPath,
@@ -87,5 +105,11 @@ describe('T05 RF-03: processReconciliationJob', () => {
       [tenantId, jobId],
     );
     expect(rows).toHaveLength(0);
+
+    const { rows: resultRows } = await pool.query(
+      'SELECT * FROM reconciliation_results WHERE tenant_id = $1 AND job_id = $2',
+      [tenantId, jobId],
+    );
+    expect(resultRows).toHaveLength(0);
   });
 });

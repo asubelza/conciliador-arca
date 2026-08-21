@@ -7,12 +7,13 @@
  * extra id-mapping table.
  */
 import { Queue } from 'bullmq';
-import type { AllowedExtension } from './upload-validation';
+import type { AllowedExtension, ContabilidadSourceSystem } from './upload-validation';
 
 export const RECONCILIATION_QUEUE_NAME = 'reconciliations';
 
 export interface ReconciliationJobData {
   tenantId: string;
+  contabilidadSourceSystem: ContabilidadSourceSystem;
   arca: { filePath: string; originalName: string; extension: AllowedExtension };
   contabilidad: { filePath: string; originalName: string; extension: AllowedExtension };
 }
@@ -20,6 +21,11 @@ export interface ReconciliationJobData {
 export interface ReconciliationJobResult {
   arca_rows: number;
   contabilidad_rows: number;
+  matched: number;
+  'unmatched-arca': number;
+  'unmatched-contabilidad': number;
+  duplicates: number;
+  errors: number;
 }
 
 export function getRedisConnectionOptions() {

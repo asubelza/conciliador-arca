@@ -2,6 +2,7 @@ import {
   ALLOWED_EXTENSIONS,
   MAX_FILE_SIZE_BYTES,
   getAllowedExtension,
+  validateContabilidadSourceSystem,
   validateTenantId,
   validateUploadFiles,
 } from './upload-validation';
@@ -164,6 +165,26 @@ describe('T04: validateUploadFiles (RF-01, RF-02)', () => {
 
     it('rejects a non-string tenant_id', () => {
       expect(validateTenantId(123)?.code).toBe('INVALID_TENANT_ID');
+    });
+  });
+
+  describe('T10: validateContabilidadSourceSystem', () => {
+    it('accepts each known source system', () => {
+      for (const system of ['tango', 'bejerman', 'xubio', 'contabilium']) {
+        expect(validateContabilidadSourceSystem(system)).toBeNull();
+      }
+    });
+
+    it('rejects a missing value', () => {
+      expect(validateContabilidadSourceSystem(undefined)?.code).toBe('INVALID_SOURCE_SYSTEM');
+    });
+
+    it('rejects an unknown source system', () => {
+      expect(validateContabilidadSourceSystem('sap')?.code).toBe('INVALID_SOURCE_SYSTEM');
+    });
+
+    it('rejects "arca" (arca has a fixed adapter, not selectable here)', () => {
+      expect(validateContabilidadSourceSystem('arca')?.code).toBe('INVALID_SOURCE_SYSTEM');
     });
   });
 });

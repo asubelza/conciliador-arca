@@ -6,8 +6,6 @@
  * failedReason) so the state-mapping decision is unit-testable without a
  * live queue — reconciliations.controller.ts supplies the real BullMQ Job.
  */
-import type { ReconciliationJobResult } from './reconciliation.queue';
-
 export type ReconciliationStatus = 'pending' | 'processing' | 'completed' | 'error';
 
 export interface StatusResponse {
@@ -18,10 +16,12 @@ export interface StatusResponse {
 
 /**
  * The subset of a BullMQ Job this module needs — kept narrow (rather than
- * importing the real `Job` type) so unit tests can pass a plain object.
+ * importing the real `Job` type, or the full `ReconciliationJobResult`,
+ * which has grown fields beyond what RF-04's status response uses) so unit
+ * tests can pass a plain object.
  */
 export interface JobLike {
-  returnvalue?: ReconciliationJobResult | null;
+  returnvalue?: { arca_rows: number; contabilidad_rows: number } | null;
   failedReason?: string | null;
 }
 

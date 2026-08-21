@@ -60,8 +60,11 @@ model VoucherCanonical {
 model ReconciliationResult {
   id                 String   @id @default(uuid())
   tenantId           String   @map("tenant_id")
+  jobId              String?  @map("job_id")
+  compositeKey       String?  @map("composite_key")
   voucherCanonicalId String?  @map("voucher_canonical_id")
   arcaRow            Json?    @map("arca_row")
+  contabilidadRow    Json?    @map("contabilidad_row")
   tipoClasificacion  String   @map("tipo_clasificacion")
   ivaImpacto         Decimal? @map("iva_impacto") @db.Decimal(15, 2)
   createdAt          DateTime @default(now()) @map("created_at")

@@ -20,12 +20,16 @@ import { createTestTenant, deleteTestTenant } from '../test-support/pg-test-help
  * and an end-to-end test that runs a real BullMQ worker against the test
  * upload and asserts the rows actually landed in vouchers_staging.
  *
+ * T10 adds: contabilidad_source_system as a required field (selects the
+ * column adapter — see upload-validation.ts), and asserts the worker's
+ * classification results actually land in reconciliation_results.
+ *
  * Note on AC3 (413): the fileSize limit is enforced by multer itself while
  * streaming, and @nestjs/platform-express maps that rejection straight to
  * a 413 PayloadTooLargeException — this test exercises that built-in Nest
  * behavior end to end rather than any filter of ours (there isn't one).
  */
-describe('T04/T05: POST /api/reconciliations (integration)', () => {
+describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
   let tenantId: string;
@@ -52,10 +56,11 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     await app.close();
   });
 
-  it('AC1: returns 202 with job_id + status_url for two valid files + tenant_id', async () => {
+  it('AC1: returns 202 with job_id + status_url for two valid files + tenant_id + source system', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -69,6 +74,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001\n30222222223,003'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -99,10 +105,48 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     ]);
   }, 15000);
 
+  it('T10: the enqueued job classifies and persists reconciliation_results', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/reconciliations')
+      .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
+      .attach(
+        'arca_file',
+        Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
+        'arca.csv',
+      )
+      .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
+
+    expect(res.status).toBe(202);
+    const jobId = res.body.job_id as string;
+
+    const queue = getReconciliationQueue();
+    const job = await queue.getJob(jobId);
+    const deadline = Date.now() + 10000;
+    let state = await job!.getState();
+    while (state !== 'completed' && state !== 'failed' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      state = await job!.getState();
+    }
+    expect(state).toBe('completed');
+
+    const { rows } = await pool.query(
+      'SELECT tipo_clasificacion, count(*)::int AS n FROM reconciliation_results WHERE tenant_id = $1 AND job_id = $2 GROUP BY tipo_clasificacion ORDER BY tipo_clasificacion',
+      [tenantId, jobId],
+    );
+    // arca row 1 (CUIT 30111111112) matches the single contabilidad row;
+    // arca row 2 (CUIT 30222222223) has no contabilidad counterpart.
+    expect(rows).toEqual([
+      { tipo_clasificacion: 'matched', n: 1 },
+      { tipo_clasificacion: 'unmatched-arca', n: 1 },
+    ]);
+  }, 15000);
+
   it('AC2: returns 400 with the RF-01 error message when only one file is attached', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv');
 
     expect(res.status).toBe(400);
@@ -120,6 +164,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('%PDF-1.4'), 'export.pdf')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -132,6 +177,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', big, 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -141,6 +187,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
   it('T05: returns 400 when tenant_id is missing, even with two valid files', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -152,11 +199,35 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
       .field('tenant_id', 'not-a-uuid')
+      .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'tenant_id is required and must be a UUID' });
+  });
+
+  it('T10: returns 400 when contabilidad_source_system is missing', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/reconciliations')
+      .field('tenant_id', tenantId)
+      .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+      .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/contabilidad_source_system/);
+  });
+
+  it('T10: returns 400 when contabilidad_source_system is unknown', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/reconciliations')
+      .field('tenant_id', tenantId)
+      .field('contabilidad_source_system', 'sap')
+      .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+      .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/contabilidad_source_system/);
   });
 
   describe('T06: GET /api/reconciliations/:jobId/status', () => {
@@ -175,6 +246,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
         const res = await request(app.getHttpServer())
           .post('/api/reconciliations')
           .field('tenant_id', tenantId)
+          .field('contabilidad_source_system', 'tango')
           .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
           .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
         expect(res.status).toBe(202);
@@ -191,6 +263,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
       const uploadRes = await request(app.getHttpServer())
         .post('/api/reconciliations')
         .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
         .attach('arca_file', Buffer.from('cuit\n30111111112\n30222222223'), 'arca.csv')
         .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
       expect(uploadRes.status).toBe(202);
@@ -215,6 +288,7 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
       const uploadRes = await request(app.getHttpServer())
         .post('/api/reconciliations')
         .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
         .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
         .attach('contabilidad_file', Buffer.from('not a real xlsx file'), 'contabilidad.xlsx');
       expect(uploadRes.status).toBe(202);

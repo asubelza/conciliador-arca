@@ -27,11 +27,15 @@ export interface UploadFieldFiles {
   contabilidad_file?: UploadedFileLike[];
 }
 
+export const CONTABILIDAD_SOURCE_SYSTEMS = ['tango', 'bejerman', 'xubio', 'contabilium'] as const;
+export type ContabilidadSourceSystem = (typeof CONTABILIDAD_SOURCE_SYSTEMS)[number];
+
 export type ValidationFailure =
   | { code: 'MISSING_FILES'; status: 400; error: string }
   | { code: 'FILE_TOO_LARGE'; status: 413 }
   | { code: 'INVALID_EXTENSION'; status: 415; error: string }
-  | { code: 'INVALID_TENANT_ID'; status: 400; error: string };
+  | { code: 'INVALID_TENANT_ID'; status: 400; error: string }
+  | { code: 'INVALID_SOURCE_SYSTEM'; status: 400; error: string };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -107,6 +111,25 @@ export function validateTenantId(tenantId: unknown): ValidationFailure | null {
       code: 'INVALID_TENANT_ID',
       status: 400,
       error: 'tenant_id is required and must be a UUID',
+    };
+  }
+  return null;
+}
+
+/**
+ * T10: `contabilidad_source_system` selects which vendor column adapter
+ * (column-adapters.ts) to apply to the contabilidad file — RF-05 requires
+ * per-vendor mapping, and there's no reliable way to auto-detect the source
+ * system from the file alone (column names vary too much). ARCA's own
+ * adapter is fixed (the arca_file is always ARCA's own export format), so
+ * only the contabilidad side needs this field.
+ */
+export function validateContabilidadSourceSystem(value: unknown): ValidationFailure | null {
+  if (typeof value !== 'string' || !(CONTABILIDAD_SOURCE_SYSTEMS as readonly string[]).includes(value)) {
+    return {
+      code: 'INVALID_SOURCE_SYSTEM',
+      status: 400,
+      error: `contabilidad_source_system is required and must be one of: ${CONTABILIDAD_SOURCE_SYSTEMS.join(', ')}`,
     };
   }
   return null;
