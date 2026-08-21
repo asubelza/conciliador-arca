@@ -3,7 +3,8 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node", "jest"]
+    "types": ["node", "jest"],
+    "paths": {}
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist", "prisma"]

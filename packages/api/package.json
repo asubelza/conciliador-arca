@@ -12,7 +12,7 @@
     "test:coverage": "jest --config jest.api.json --coverage",
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio",
-    "db:seed": "prisma db seed"
+    "db:seed": "node dist/seed-runner.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.1",
@@ -30,6 +30,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@nestjs/cli": "^11.0.24",
     "@nestjs/testing": "^11.2.1",
     "@types/jest": "^29.5.14",
     "@types/multer": "^1.4.13",
