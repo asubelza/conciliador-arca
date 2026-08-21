@@ -7,10 +7,13 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
+  Res,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { diskStorage } from 'multer';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
@@ -26,6 +29,9 @@ import {
 } from './upload-validation';
 import { getReconciliationQueue } from './reconciliation.queue';
 import { mapJobToStatusResponse } from './job-status';
+import { getPgPool } from '../db/pg-pool';
+import { buildDiffReportRows, toCsv, toXlsxBuffer } from './report-generator';
+import type { PersistedResultRow } from './report-generator';
 
 /**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
@@ -130,5 +136,65 @@ export class ReconciliationsController {
     }
     const state = await job.getState();
     return mapJobToStatusResponse(state, job);
+  }
+
+  /**
+   * T11 (RF-10): download the diff report for a completed job.
+   *   404 - job doesn't exist
+   *   409 - job exists but hasn't finished processing yet (nothing to report)
+   *   400 - `format` isn't one of csv/xlsx
+   * `job.data.tenantId` (not a client-supplied query param) scopes the DB
+   * read, so a caller can't pull another tenant's results by guessing a
+   * job_id that belongs to a different tenant_id.
+   */
+  @Get(':jobId/report')
+  async report(@Param('jobId') jobId: string, @Query('format') format: unknown, @Res() res: Response) {
+    const queue = getReconciliationQueue();
+    const job = await queue.getJob(jobId);
+    if (!job) {
+      throw new HttpException({ error: 'Reconciliation job not found' }, HttpStatus.NOT_FOUND);
+    }
+
+    const state = await job.getState();
+    if (state !== 'completed') {
+      throw new HttpException(
+        { error: `Reconciliation job is not completed yet (status: ${state})` },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const resolvedFormat = format === undefined ? 'csv' : format;
+    if (resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx') {
+      throw new HttpException({ error: "format must be 'csv' or 'xlsx'" }, HttpStatus.BAD_REQUEST);
+    }
+
+    const pool = getPgPool();
+    const { rows } = await pool.query<PersistedResultRow>(
+      `SELECT tipo_clasificacion, composite_key, arca_row, contabilidad_row, iva_impacto
+         FROM reconciliation_results
+        WHERE tenant_id = $1 AND job_id = $2`,
+      [job.data.tenantId, jobId],
+    );
+
+    const reportRows = buildDiffReportRows(rows);
+
+    if (resolvedFormat === 'xlsx') {
+      const buffer = await toXlsxBuffer(reportRows);
+      res
+        .set({
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'Content-Disposition': `attachment; filename="reconciliation-${jobId}.xlsx"`,
+        })
+        .send(buffer);
+      return;
+    }
+
+    const csv = toCsv(reportRows);
+    res
+      .set({
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="reconciliation-${jobId}.csv"`,
+      })
+      .send(csv);
   }
 }

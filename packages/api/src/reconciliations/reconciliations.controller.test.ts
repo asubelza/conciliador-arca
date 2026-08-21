@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { Worker } from 'bullmq';
+import ExcelJS from 'exceljs';
 import { AppModule } from '../app.module';
 import { MAX_FILE_SIZE_BYTES } from './upload-validation';
 import { createReconciliationWorker } from './reconciliation.worker';
@@ -305,6 +306,118 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
       expect(statusBody.status).toBe('error');
       expect(typeof statusBody.detail).toBe('string');
+    }, 15000);
+  });
+
+  describe('T11: GET /api/reconciliations/:jobId/report', () => {
+    /** Uploads a matched+unmatched-arca pair (same fixture as the T10 test above) and polls to a terminal state. */
+    async function uploadAndWaitForCompletion(): Promise<string> {
+      const uploadRes = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .attach(
+          'arca_file',
+          Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
+          'arca.csv',
+        )
+        .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
+      expect(uploadRes.status).toBe(202);
+      const jobId = uploadRes.body.job_id as string;
+
+      const queue = getReconciliationQueue();
+      const job = await queue.getJob(jobId);
+      const deadline = Date.now() + 10000;
+      let state = await job!.getState();
+      while (state !== 'completed' && state !== 'failed' && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+        state = await job!.getState();
+      }
+      expect(state).toBe('completed');
+      return jobId;
+    }
+
+    it('AC: returns 404 for an unknown job id', async () => {
+      const res = await request(app.getHttpServer()).get(
+        '/api/reconciliations/00000000-0000-0000-0000-000000000000/report',
+      );
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'Reconciliation job not found' });
+    });
+
+    it('AC: returns 409 when the job has not finished processing yet', async () => {
+      const queue = getReconciliationQueue();
+      await queue.pause();
+      try {
+        const uploadRes = await request(app.getHttpServer())
+          .post('/api/reconciliations')
+          .field('tenant_id', tenantId)
+          .field('contabilidad_source_system', 'tango')
+          .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
+          .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
+        expect(uploadRes.status).toBe(202);
+        const jobId = uploadRes.body.job_id as string;
+
+        const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report`);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toMatch(/not completed yet/);
+      } finally {
+        await queue.resume();
+      }
+    });
+
+    it('AC: returns 400 for an unrecognized format query param', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=pdf`);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "format must be 'csv' or 'xlsx'" });
+    }, 15000);
+
+    it('AC: defaults to CSV, includes matched + unmatched-arca rows, sets download headers', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/^text\/csv/);
+      expect(res.headers['content-disposition']).toBe(
+        `attachment; filename="reconciliation-${jobId}.csv"`,
+      );
+
+      const lines = res.text.trim().split('\n');
+      expect(lines[0]).toBe('classification,composite_key,arca_importe,contabilidad_importe,delta,iva_amount,cae,fecha_emision');
+      expect(lines).toHaveLength(3); // header + matched + unmatched-arca
+      expect(lines.some((l: string) => l.startsWith('matched,'))).toBe(true);
+      expect(lines.some((l: string) => l.startsWith('unmatched-arca,'))).toBe(true);
+    }, 15000);
+
+    it('AC: format=xlsx returns a valid workbook with the 4 named sheets', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer())
+        .get(`/api/reconciliations/${jobId}/report?format=xlsx`)
+        .buffer(true)
+        .parse((response, callback) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => callback(null, Buffer.concat(chunks)));
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe(
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      expect(res.headers['content-disposition']).toBe(
+        `attachment; filename="reconciliation-${jobId}.xlsx"`,
+      );
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.body as unknown as ExcelJS.Buffer);
+      expect(workbook.worksheets.map((s) => s.name)).toEqual([
+        'Matched',
+        'Unmatched ARCA',
+        'Unmatched Contabilidad',
+        'Errors',
+      ]);
+      expect(workbook.getWorksheet('Matched')!.rowCount).toBe(2); // header + 1 matched row
     }, 15000);
   });
 });
