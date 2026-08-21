@@ -25,13 +25,34 @@
 - [x] Pre-T04 fix — `000_bootstrap_extensions_and_roles.sql` (pgcrypto + `app_role`), found during PR-1 review (see `progress/PR-1.md`, risk #5).
 - [x] T04 — `POST /api/reconciliations`: RF-01 (exactly two files, `arca_file` + `contabilidad_file` multipart fields) and RF-02 (50MB limit, `.csv/.xlsx/.xls` whitelist). Returns 202 + `job_id` + `status_url` on success.
 
-## Remaining in PR-2 / PR-3
+## Update — 2026-08-21: T05–T09 completed (real PostgreSQL/Redis, real device sync)
 
-- [ ] T05 — Streaming multipart → COPY staging + BullMQ enqueue (the `job_id` T04 returns is currently a placeholder `randomUUID()`, not backed by a real job)
-- [ ] T06 — GET status poll endpoint
-- [ ] T07 — afip_tipo_map lookup + column-variant adapters
-- [ ] T08 — ComprobanteCanonical normalizer
-- [ ] T09–T13 — matching engine, classification, reporting, audit, frontend
+A prior session (2026-08-18) claimed T05–T13 complete, "todo el MVP terminado," 264/264 tests, frontend included, "todo sincronizado a tu máquina." That was false: the work existed only in that session's ephemeral cloud container, never reached GitHub or the user's machine (the device bridge was broken at the time), and was discarded when the session ended. This was discovered on 2026-08-21 by directly checking the user's machine (`git log` on `feature/mvp-carga-comprobantes-pr-2` stopped at T04), `git ls-remote origin` (only `pr-1` and `master` exist upstream), and this file / `openspec/tasks/mvp-carga-comprobantes.yaml` (both still showed T05+ unchecked). See `claude/estado_dev_y_revision_pr1.md` (Claude Project doc) for the full incident note.
+
+T05–T09 below were then rebuilt from scratch in a fresh session, this time with two changes to the process: (1) real PostgreSQL 16 + Redis running in the cloud workspace, so every claim is checked against actual staged rows / actual query results, not structural assertions on migration SQL text; (2) every task's code was synced to the user's machine via the device bridge (`SendUserFile` + `device_commit_files`) and committed there with `git`, with the commit and `git log`/`git show --stat` verified on the device itself, before being marked done — no task is marked complete on the strength of a claim alone.
+
+| Task | Test File(s) | Layer | Evidence |
+|------|-------------|-------|----------|
+| T05 | `file-row-stream.test.ts`, `staging-writer.test.ts`, `reconciliation.worker.test.ts`, `reconciliations.controller.test.ts` | Unit + real-Postgres integration | Streaming CSV (csv-parse) + streaming XLSX (exceljs `WorkbookReader`) parsers; `COPY FROM STDIN` into `vouchers_staging`; BullMQ job enqueued with the real `job_id`. Worker wraps staging in one transaction (BEGIN/COMMIT/ROLLBACK) — `reconciliation.worker.test.ts` proves a corrupt contabilidad file rolls back the already-staged arca rows too, verified by querying `vouchers_staging` after the throw. |
+| T06 | `job-status.test.ts`, controller integration | Unit + integration | `GET :jobId/status` maps BullMQ's 8 states down to `pending\|processing\|completed\|error`; integration test polls a real enqueued job to `completed` and asserts the returned `counts`. |
+| T07 | `afip-tipo-lookup.test.ts`, `column-adapters.test.ts` | Unit | Numeric AFIP tipo codes (1/2/3/6/7/8/11/12/13/19/20/21) accepted from any source; per-vendor text aliases for tango/bejerman/xubio/contabilium; Bejerman's combined `"0001-00001234"` punto_venta/numero split. |
+| T08 | `comprobante-normalizer.test.ts` | Unit | CUIT digit-strip, Argentine comma-decimal parsing, dd/mm/yyyy + Excel-serial date parsing, NC/ND negative sign per tipo. |
+| T09 | `reconciliation-engine.test.ts` | Unit (perf-asserting) | Same-side dedupe (first occurrence kept); `Map` built on the smaller side, larger side probed once each — test asserts exactly 1000 probes for 1000+950 synthetic vouchers and <500ms wall time, not just a passing match count. |
+
+**Migration bug found and fixed in this pass:** `002_init_afip_tipo_map.sql` created `idx_afip_tipo` as a plain (non-unique) index; migration 004's `tipo REFERENCES afip_tipo_map(tipo)` FK cannot be created without a unique constraint/index on the referenced column. This was never caught by any prior session because none of them had real PostgreSQL to run the migrations against — fixed to `CREATE UNIQUE INDEX`.
+
+**Test count at end of T05–T09:** 130/130 passing (`npx jest --config jest.api.json`, run 3x `--runInBand` + 2x parallel to check for flakiness — all green). `tsc --noEmit` clean.
+
+**Commits (branch `feature/mvp-carga-comprobantes-pr-2`, verified present via `git log`/`git show --stat` run directly on the user's machine through the device bridge):**
+- `2d2fef1` — T05
+- `9e6a0f0` — T06
+- `0e974b3` — T07
+- `87e7689` — T08
+- `1e0cfa3` — T09 (PR-2's final commit; `feature/mvp-carga-comprobantes-pr-3` branches from here — see `progress/PR-3.md` for T10–T13)
+
+## Remaining
+
+None — PR-2 (T04–T09) is complete. See `progress/PR-3.md` for T10–T13.
 
 ## Deviations from Design (and why)
 
@@ -56,4 +77,4 @@
 
 ## Status
 
-Bootstrap fix + T04 — 71/71 tests passing, `tsc --noEmit` clean. **Ready for review.** T05 (streaming ingestion + BullMQ) is next.
+**PR-2 complete (T04–T09) — 130/130 tests passing, `tsc --noEmit` clean, verified synced + committed on the user's machine.** See `progress/PR-3.md` for T10–T13 (PR-3).

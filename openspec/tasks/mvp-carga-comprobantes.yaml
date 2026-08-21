@@ -25,18 +25,18 @@ Chain strategy: feature-branch-chain
 ## Phase 2: Ingestion + Normalization (PR-2 — base: PR-1)
 
 - [x] T04: POST `/api/reconciliations` — validate exactly 2 files, size < 50 MB, extension whitelist (.csv/.xlsx/.xls); return 400/413/415 (M, api, PR-2)
-- [ ] T05: Streaming multipart parser → `COPY FROM STDIN` into `vouchers_staging`; enqueue BullMQ job; return `job_id` + status URL (M, api, PR-2)
-- [ ] T06: GET `/api/reconciliations/:jobId/status` — return `{ status: 'pending' | 'processing' | 'completed' | 'error', counts? }` (S, api, PR-2)
-- [ ] T07: `afip_tipo_map` lookup service + column-variant adapters for ARCA, Tango, Bejerman, Xubio, Contabilium (S, api, PR-2)
-- [ ] T08: `ComprobanteCanonical` normalizer — CUIT strip (11-digit), comma-decimal → numeric, date parse (dd/mm/yyyy + Excel serial), NC/ND negative sign (S, api, PR-2)
+- [x] T05: Streaming multipart parser → `COPY FROM STDIN` into `vouchers_staging`; enqueue BullMQ job; return `job_id` + status URL (M, api, PR-2)
+- [x] T06: GET `/api/reconciliations/:jobId/status` — return `{ status: 'pending' | 'processing' | 'completed' | 'error', counts? }` (S, api, PR-2)
+- [x] T07: `afip_tipo_map` lookup service + column-variant adapters for ARCA, Tango, Bejerman, Xubio, Contabilium (S, api, PR-2)
+- [x] T08: `ComprobanteCanonical` normalizer — CUIT strip (11-digit), comma-decimal → numeric, date parse (dd/mm/yyyy + Excel serial), NC/ND negative sign (S, api, PR-2)
 
 ## Phase 3: Matching + Reporting + Frontend (PR-3 — base: PR-2)
 
-- [ ] T09: Reconciliation engine — same-side dedupe on composite key, tenant-scoped `Map` exact-match probe O(n+m) (M, api, PR-3)
-- [ ] T10: 5-category classification (`matched` / `unmatched-arca` / `unmatched-contabilidad` / `duplicates` / `errors`); sort unmatched by `iva_amount` DESC (S, api, PR-3)
-- [ ] T11: GET `/api/reconciliations/:jobId/report?format=csv|xlsx` — CSV diff (matched + deltas + both unmatched + errors) or Excel with 4 sheets (M, api, PR-3)
-- [ ] T12: Append-only `audit_trail` logging (upload/normalize/match/export/user_mark); user marking `revisado`/`explicado`; persist to `feedback_loop` (S, api, PR-3)
-- [ ] T13: Frontend upload form + progress indicator + diff report viewer (Next.js 14 + Tailwind + RTL) (S, frontend, PR-3)
+- [x] T09: Reconciliation engine — same-side dedupe on composite key, tenant-scoped `Map` exact-match probe O(n+m) (M, api, PR-3)
+- [x] T10: 5-category classification (`matched` / `unmatched-arca` / `unmatched-contabilidad` / `duplicates` / `errors`); sort unmatched by `iva_amount` DESC (S, api, PR-3)
+- [x] T11: GET `/api/reconciliations/:jobId/report?format=csv|xlsx` — CSV diff (matched + deltas + both unmatched + errors) or Excel with 4 sheets (M, api, PR-3)
+- [x] T12: Append-only `audit_trail` logging (upload/normalize/match/export/user_mark); user marking `revisado`/`explicado`; persist to `feedback_loop` (S, api, PR-3)
+- [x] T13: Frontend upload form + progress indicator + diff report viewer (Next.js 14 + Tailwind + RTL) (S, frontend, PR-3)
 
 ## TDD Focus Notes
 
