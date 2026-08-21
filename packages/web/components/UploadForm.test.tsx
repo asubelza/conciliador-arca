@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { UploadForm } from './UploadForm';
 
@@ -48,7 +48,13 @@ describe('T13: UploadForm', () => {
     await userEvent.upload(screen.getByLabelText(/archivo arca/i), arcaFile);
     await userEvent.upload(screen.getByLabelText(/archivo contabilidad/i), contabilidadFile);
 
-    await userEvent.click(screen.getByRole('button', { name: /subir y conciliar/i }));
+    // handleSubmit is async (fetch → res.json(), each a microtask tick beyond
+    // what userEvent.click's own act-wrapping flushes), so its state updates
+    // (setSubmitting(false) in the finally block, after onUploaded) land
+    // outside that window unless the whole chain is wrapped in one `act`.
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /subir y conciliar/i }));
+    });
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith('job-123'));
     expect(fetchMock).toHaveBeenCalledWith(
@@ -71,7 +77,9 @@ describe('T13: UploadForm', () => {
     const contabilidadFile = new File(['a'], 'contabilidad.csv', { type: 'text/csv' });
     await userEvent.upload(screen.getByLabelText(/archivo arca/i), arcaFile);
     await userEvent.upload(screen.getByLabelText(/archivo contabilidad/i), contabilidadFile);
-    await userEvent.click(screen.getByRole('button', { name: /subir y conciliar/i }));
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /subir y conciliar/i }));
+    });
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/contabilidad_source_system/);
     expect(onUploaded).not.toHaveBeenCalled();

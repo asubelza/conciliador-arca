@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ReportViewer } from './ReportViewer';
 
@@ -84,7 +84,12 @@ describe('T13: ReportViewer', () => {
 
     render(<ReportViewer jobId="job-1" />);
     const explicadoButton = await screen.findByRole('button', { name: /marcar como explicado/i });
-    await userEvent.click(explicadoButton);
+    // See UploadForm.test.tsx for why the click on an async-submit handler
+    // needs its own act() — the POST → res.json() chain settles a tick or
+    // two after userEvent.click's own act-wrapping window closes.
+    await act(async () => {
+      await userEvent.click(explicadoButton);
+    });
 
     await waitFor(() => expect(screen.getByText('explicado')).toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -123,7 +128,9 @@ describe('T13: ReportViewer', () => {
 
     render(<ReportViewer jobId="job-1" />);
     const revisadoButton = await screen.findByRole('button', { name: /marcar como revisado/i });
-    await userEvent.click(revisadoButton);
+    await act(async () => {
+      await userEvent.click(revisadoButton);
+    });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('composite_key is required');
   });
