@@ -374,7 +374,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const jobId = await uploadAndWaitForCompletion();
       const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=pdf`);
       expect(res.status).toBe(400);
-      expect(res.body).toEqual({ error: "format must be 'csv' or 'xlsx'" });
+      expect(res.body).toEqual({ error: "format must be 'csv', 'xlsx', or 'json'" });
     }, 15000);
 
     it('AC: defaults to CSV, includes matched + unmatched-arca rows, sets download headers', async () => {
@@ -392,6 +392,20 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       expect(lines).toHaveLength(3); // header + matched + unmatched-arca
       expect(lines.some((l: string) => l.startsWith('matched,'))).toBe(true);
       expect(lines.some((l: string) => l.startsWith('unmatched-arca,'))).toBe(true);
+    }, 15000);
+
+    it('T13: format=json returns { rows } as structured data, no download header', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=json`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/^application\/json/);
+      expect(res.headers['content-disposition']).toBeUndefined();
+      expect(res.body.rows).toHaveLength(2);
+      expect(res.body.rows.map((r: { classification: string }) => r.classification).sort()).toEqual([
+        'matched',
+        'unmatched-arca',
+      ]);
     }, 15000);
 
     it('AC: format=xlsx returns a valid workbook with the 4 named sheets', async () => {

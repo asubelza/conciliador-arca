@@ -145,18 +145,26 @@ export class ReconciliationsController {
    * T11 (RF-10): download the diff report for a completed job.
    *   404 - job doesn't exist
    *   409 - job exists but hasn't finished processing yet (nothing to report)
-   *   400 - `format` isn't one of csv/xlsx
+   *   400 - `format` isn't one of csv/xlsx/json
    * `job.data.tenantId` (not a client-supplied query param) scopes the DB
    * read, so a caller can't pull another tenant's results by guessing a
    * job_id that belongs to a different tenant_id.
+   *
+   * T13 adds `format=json`: RF-10 only specifies csv/xlsx (on-demand
+   * *download*), but the frontend's diff table viewer needs the same rows
+   * as structured data to render, not a file to save — rather than stand up
+   * a second endpoint for what's the same query + buildDiffReportRows call,
+   * `format=json` returns `{ rows }` as a normal JSON body (no
+   * Content-Disposition — this response is for the page to render, not to
+   * save as a file).
    */
   @Get(':jobId/report')
   async report(@Param('jobId') jobId: string, @Query('format') format: unknown, @Res() res: Response) {
     const job = await this.getCompletedJobOrThrow(jobId);
 
     const resolvedFormat = format === undefined ? 'csv' : format;
-    if (resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx') {
-      throw new HttpException({ error: "format must be 'csv' or 'xlsx'" }, HttpStatus.BAD_REQUEST);
+    if (resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx' && resolvedFormat !== 'json') {
+      throw new HttpException({ error: "format must be 'csv', 'xlsx', or 'json'" }, HttpStatus.BAD_REQUEST);
     }
 
     const pool = getPgPool();
@@ -179,6 +187,11 @@ export class ReconciliationsController {
       entityId: jobId,
       details: { format: resolvedFormat, rows: reportRows.length },
     });
+
+    if (resolvedFormat === 'json') {
+      res.json({ rows: reportRows });
+      return;
+    }
 
     if (resolvedFormat === 'xlsx') {
       const buffer = await toXlsxBuffer(reportRows);
