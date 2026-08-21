@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: conciliador-pg
+    environment:
+      POSTGRES_USER: conciliador
+      POSTGRES_PASSWORD: conciliador
+      POSTGRES_DB: conciliador_arca
+    ports:
+      - "5432:5432"
+    volumes:
+      - conciliador-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U conciliador -d conciliador_arca"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: conciliador-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  conciliador-pg-data:
