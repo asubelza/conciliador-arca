@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   HttpCode,
   HttpException,
@@ -8,26 +9,29 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
 import { randomUUID } from 'crypto';
-import { MAX_FILE_SIZE_BYTES, UploadFieldFiles, validateUploadFiles } from './upload-validation';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  MAX_FILE_SIZE_BYTES,
+  getAllowedExtension,
+  validateTenantId,
+  validateUploadFiles,
+} from './upload-validation';
+import { getReconciliationQueue } from './reconciliation.queue';
 
 /**
- * T04 (RF-01/RF-02): validates the two-file upload contract and returns
- * 202/400/413/415 per voucher-ingestion.spec.md.
+ * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
+ * streams both files to a temp dir on disk (multer diskStorage — never
+ * buffers the whole file in process memory), and enqueues a BullMQ job that
+ * stages the rows via COPY FROM STDIN (see reconciliation.worker.ts).
  *
- * The `fileSize` limit passed to FileFieldsInterceptor is enforced by multer
- * while streaming (no whole file is buffered); @nestjs/platform-express
- * already translates that rejection into a 413 PayloadTooLargeException
- * (and any other multer parsing error into a 400 BadRequestException)
- * before it reaches this handler — no custom exception filter needed here.
- * `validateUploadFiles` covers the two checks Nest/multer can't: the
- * RF-01 "both files required" 400 and the RF-02 extension whitelist 415.
- *
- * T05 scope (not yet implemented): actually streaming rows into
- * vouchers_staging via COPY FROM STDIN and enqueuing the BullMQ job. Until
- * then this handler returns a real job_id/status_url shape so the frontend
- * contract is stable, but no staging or queuing happens yet — see
- * openspec/tasks/mvp-carga-comprobantes.yaml T05.
+ * The `job_id` returned here is the real BullMQ job id (T04 used to return
+ * a disconnected `randomUUID()` placeholder — see reconciliations.controller
+ * git history / openspec/progress/PR-2.md "Deviations" #3). T06 adds the
+ * GET status poll endpoint that resolves this same id.
  */
 @Controller('api/reconciliations')
 export class ReconciliationsController {
@@ -38,18 +42,60 @@ export class ReconciliationsController {
         { name: 'arca_file', maxCount: 1 },
         { name: 'contabilidad_file', maxCount: 1 },
       ],
-      { limits: { fileSize: MAX_FILE_SIZE_BYTES } },
+      {
+        limits: { fileSize: MAX_FILE_SIZE_BYTES },
+        storage: diskStorage({
+          destination: (_req, _file, cb) => {
+            const dir = path.join(os.tmpdir(), 'conciliador-uploads');
+            fs.mkdirSync(dir, { recursive: true });
+            cb(null, dir);
+          },
+          filename: (_req, file, cb) => cb(null, `${randomUUID()}-${file.originalname}`),
+        }),
+      },
     ),
   )
   @HttpCode(HttpStatus.ACCEPTED)
-  upload(@UploadedFiles() files: UploadFieldFiles) {
-    const failure = validateUploadFiles(files ?? {});
-    if (failure) {
-      const body = 'error' in failure ? { error: failure.error } : {};
-      throw new HttpException(body, failure.status);
+  async upload(
+    @UploadedFiles() files: { arca_file?: Express.Multer.File[]; contabilidad_file?: Express.Multer.File[] },
+    @Body('tenant_id') tenantId: unknown,
+  ) {
+    const filesFailure = validateUploadFiles(files ?? {});
+    if (filesFailure) {
+      const body = 'error' in filesFailure ? { error: filesFailure.error } : {};
+      throw new HttpException(body, filesFailure.status);
     }
 
+    const tenantFailure = validateTenantId(tenantId);
+    if (tenantFailure) {
+      const body = 'error' in tenantFailure ? { error: tenantFailure.error } : {};
+      throw new HttpException(body, tenantFailure.status);
+    }
+
+    const arcaFile = files.arca_file![0] as Express.Multer.File;
+    const contabilidadFile = files.contabilidad_file![0] as Express.Multer.File;
+
+    const queue = getReconciliationQueue();
     const jobId = randomUUID();
+
+    await queue.add(
+      'stage-and-normalize',
+      {
+        tenantId: tenantId as string,
+        arca: {
+          filePath: arcaFile.path,
+          originalName: arcaFile.originalname,
+          extension: getAllowedExtension(arcaFile.originalname),
+        },
+        contabilidad: {
+          filePath: contabilidadFile.path,
+          originalName: contabilidadFile.originalname,
+          extension: getAllowedExtension(contabilidadFile.originalname),
+        },
+      },
+      { jobId },
+    );
+
     return {
       job_id: jobId,
       status_url: `/api/reconciliations/${jobId}/status`,

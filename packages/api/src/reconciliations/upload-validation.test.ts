@@ -1,6 +1,8 @@
 import {
   ALLOWED_EXTENSIONS,
   MAX_FILE_SIZE_BYTES,
+  getAllowedExtension,
+  validateTenantId,
   validateUploadFiles,
 } from './upload-validation';
 
@@ -131,6 +133,37 @@ describe('T04: validateUploadFiles (RF-01, RF-02)', () => {
         contabilidad_file: [file('contabilidad.csv', 1024)],
       });
       expect(result?.code).toBe('FILE_TOO_LARGE');
+    });
+  });
+
+  describe('T05: getAllowedExtension', () => {
+    it('lowercases and strips the leading dot', () => {
+      expect(getAllowedExtension('arca.CSV')).toBe('csv');
+      expect(getAllowedExtension('contabilidad.Xlsx')).toBe('xlsx');
+    });
+  });
+
+  describe('T05: validateTenantId', () => {
+    it('accepts a well-formed UUID', () => {
+      expect(validateTenantId('123e4567-e89b-12d3-a456-426614174000')).toBeNull();
+    });
+
+    it('rejects a missing tenant_id', () => {
+      expect(validateTenantId(undefined)).toEqual({
+        code: 'INVALID_TENANT_ID',
+        status: 400,
+        error: 'tenant_id is required and must be a UUID',
+      });
+    });
+
+    it('rejects a non-UUID tenant_id', () => {
+      const result = validateTenantId('estudio-contable-1');
+      expect(result?.code).toBe('INVALID_TENANT_ID');
+      expect(result?.status).toBe(400);
+    });
+
+    it('rejects a non-string tenant_id', () => {
+      expect(validateTenantId(123)?.code).toBe('INVALID_TENANT_ID');
     });
   });
 });

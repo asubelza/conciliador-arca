@@ -30,9 +30,12 @@ export interface UploadFieldFiles {
 export type ValidationFailure =
   | { code: 'MISSING_FILES'; status: 400; error: string }
   | { code: 'FILE_TOO_LARGE'; status: 413 }
-  | { code: 'INVALID_EXTENSION'; status: 415; error: string };
+  | { code: 'INVALID_EXTENSION'; status: 415; error: string }
+  | { code: 'INVALID_TENANT_ID'; status: 400; error: string };
 
-function getExtension(filename: string): string {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function getExtension(filename: string): string {
   const dotIndex = filename.lastIndexOf('.');
   if (dotIndex === -1 || dotIndex === filename.length - 1) return '';
   return filename.slice(dotIndex + 1).toLowerCase();
@@ -40,6 +43,11 @@ function getExtension(filename: string): string {
 
 function isAllowedExtension(filename: string): boolean {
   return (ALLOWED_EXTENSIONS as readonly string[]).includes(getExtension(filename));
+}
+
+/** Narrowing helper for T05+: call only after validateUploadFiles() passed. */
+export function getAllowedExtension(filename: string): AllowedExtension {
+  return getExtension(filename) as AllowedExtension;
 }
 
 /**
@@ -78,5 +86,28 @@ export function validateUploadFiles(files: UploadFieldFiles): ValidationFailure 
     };
   }
 
+  return null;
+}
+
+/**
+ * T05: `tenant_id` is a required multipart text field (not part of
+ * RF-01/RF-02's file contract, but required for staging — every
+ * `vouchers_staging` row is tenant-scoped). Checked separately, and only
+ * after `validateUploadFiles` passes, so the existing RF-01/RF-02 400/413/415
+ * precedence for the file-only scenarios is unaffected.
+ *
+ * There is no login layer yet (documented gap, see
+ * openspec/progress/PR-2.md and estado_dev doc) — same as the rest of the
+ * project, `tenant_id` is trusted client input for the MVP, validated only
+ * for well-formedness here.
+ */
+export function validateTenantId(tenantId: unknown): ValidationFailure | null {
+  if (typeof tenantId !== 'string' || !UUID_RE.test(tenantId)) {
+    return {
+      code: 'INVALID_TENANT_ID',
+      status: 400,
+      error: 'tenant_id is required and must be a UUID',
+    };
+  }
   return null;
 }
