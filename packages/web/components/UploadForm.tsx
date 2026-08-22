@@ -8,6 +8,8 @@ import {
 } from '@/lib/api';
 
 export interface UploadFormProps {
+  tenantId: string;
+  periodoId: string;
   onUploaded: (jobId: string) => void;
 }
 
@@ -21,14 +23,17 @@ const SOURCE_SYSTEM_LABELS: Partial<Record<ContabilidadSourceSystem, string>> = 
 };
 
 /**
- * T13: the two-file upload form (RF-01/RF-02/RF-03's client side). Mirrors
- * the API's own validation order (files first, then tenant_id, then source
- * system — see upload-validation.ts) so the error the user sees before
- * submitting matches the error they'd get from the API if this check were
- * skipped.
+ * T13: the two-file upload form (RF-01/RF-02/RF-03's client side).
+ *
+ * T30 (RF-13, conciliacion-periodica): `tenant_id` and `periodo_id` are now
+ * props, not fields this form collects itself — PeriodoSelector (rendered
+ * one step earlier in app/page.tsx) is where the accountant picks/creates
+ * the período, so every upload from here on is already scoped to an open
+ * período before this form ever mounts. This is also what fixes the 400
+ * this form used to return: the API has required `periodo_id` since PR-4
+ * (T19), but nothing on this screen sent one until now.
  */
-export function UploadForm({ onUploaded }: UploadFormProps) {
-  const [tenantId, setTenantId] = useState('');
+export function UploadForm({ tenantId, periodoId, onUploaded }: UploadFormProps) {
   const [contabilidadSourceSystem, setContabilidadSourceSystem] = useState<ContabilidadSourceSystem>('tango');
   const [arcaFile, setArcaFile] = useState<File | null>(null);
   const [contabilidadFile, setContabilidadFile] = useState<File | null>(null);
@@ -43,15 +48,12 @@ export function UploadForm({ onUploaded }: UploadFormProps) {
       setError('Both ARCA and contabilidad files are required');
       return;
     }
-    if (!tenantId.trim()) {
-      setError('tenant_id is required and must be a UUID');
-      return;
-    }
 
     setSubmitting(true);
     try {
       const res = await uploadReconciliation({
         tenantId,
+        periodoId,
         contabilidadSourceSystem,
         arcaFile,
         contabilidadFile,
@@ -66,20 +68,6 @@ export function UploadForm({ onUploaded }: UploadFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-xl">
-      <div className="flex flex-col gap-1">
-        <label htmlFor="tenant-id" className="text-sm font-medium">
-          Tenant ID (UUID)
-        </label>
-        <input
-          id="tenant-id"
-          type="text"
-          value={tenantId}
-          onChange={(e) => setTenantId(e.target.value)}
-          className="border rounded px-3 py-2"
-          placeholder="00000000-0000-0000-0000-000000000000"
-        />
-      </div>
-
       <div className="flex flex-col gap-1">
         <label htmlFor="source-system" className="text-sm font-medium">
           Sistema contable

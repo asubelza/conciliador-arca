@@ -3,7 +3,7 @@
 **Branch:** `feature/mvp-carga-comprobantes-pr-3` (same as PR-4/PR-5, not yet split onto its own branch)
 **Context:** continues directly from PR-5 (Phase 2: stock histórico + matching de 3 pasos). This doc covers T27–T32, all of PR-6/Phase 3.
 
-## Status: backend (T27–T29) complete; frontend (T30–T32) in progress
+## Status: complete (T27–T32, backend + frontend)
 
 ## Tasks completed (backend)
 
@@ -28,8 +28,30 @@
 - `packages/api`: **309/309 passing** (`npx jest --config jest.config.js` from repo root, real Postgres 16 + Redis 7 — 23 new tests since PR-5's 286: 7 for `cerrarPeriodo`, 5 for `getPeriodoReport`, 5 new controller integration tests, 3 new `schema.test.ts` structural checks, plus the `Queryable` type-widening change verified as a no-op against all of PR-5's existing `periodo-matching-engine.test.ts` cases). `nest build` and root `tsc --noEmit` both clean.
 - No regressions: every PR-2/PR-3/PR-4/PR-5 test still passes unchanged.
 
+## Tasks completed (frontend)
+
+| Task | What | Evidence |
+|------|------|----------|
+| T30 | `PeriodoSelector.tsx` (new): tenant lookup, lists existing períodos, creates a new one — this is what actually fixes the 400 `UploadForm` has been returning since PR-4 (nothing upstream of it ever collected a `periodo_id` until now). `UploadForm.tsx` no longer collects `tenant_id` itself — it now takes `tenantId`/`periodoId` as props from the período already selected upstream, so every upload it submits is pre-scoped to an open período. `app/page.tsx` keeps the selected período in state across multiple uploads (no full page reload needed between them) and offers "Cerrar Conciliación del Mes" (RF-20) from inside `PeriodoReportViewer.tsx`, with a `window.confirm()` guard before calling it | `PeriodoSelector.test.tsx` (4 tests), rewritten `UploadForm.test.tsx` (3 tests), a full Playwright browser run against the real API+worker (see below) |
+| T31 | `PeriodoReportViewer.tsx` (new): the 3-section report (Conciliados OK / Discrepancias y Alertas / Pendientes en ARCA), live while `abierto` or frozen once `cerrado` — mirrors `periodo-report.ts`'s `live` flag in its own header ("Vista en vivo" vs. "Snapshot congelado"). `antiguedad_meses` is a dedicated column shown only in Pendientes en ARCA; `con_divergencia` rows carry a visible `divergencia_ars` amount, distinguishing an accepted divergence from an exact match (RF-23) | `PeriodoReportViewer.test.tsx` (3 tests) + the Playwright run |
+| T32 | `TenantConfigPanel.tsx` (new): a minimal GET/PUT `tolerancia_redondeo_ars` editor, reachable from `PeriodoSelector` via a "Configurar tolerancia" toggle once a tenant is looked up | `TenantConfigPanel.test.tsx` (3 tests) |
+
+## Bugs caught by a real browser run (not just component tests)
+
+Component tests (jest + Testing Library, mocked `fetch`) all passed on the first try for every new component — but they test each component in isolation, so they couldn't catch two real bugs in how `app/page.tsx` wired them *together*. Both were only found by actually running the full stack — real Postgres, real Redis, the real NestJS API, the real BullMQ worker, and the real Next.js dev server — and driving a real Chromium browser through it end to end with Playwright (tenant lookup → create período → upload two real CSV files → wait for the worker to actually process them → read the live período report → close the período with the confirm dialog → reload and confirm the closed período shows its frozen report with no upload form). That run is what this phase's task list calls "cargas múltiples..." and "reporte..." actually working, not just typechecking:
+
+1. **`StatusPoller`'s `onCompleted` fired and the parent swapped straight back to the upload form in the same render** — so the user never actually saw *any* confirmation an upload had finished; the whole "processing" state flashed and vanished. Fixed by adding an explicit `'completed'` step between `'processing'` and being able to upload again, with its own "Carga procesada." message and a "Subir otro archivo" button the user has to click.
+2. **The per-job `ReportViewer` was mounted immediately when `'processing'` started**, so it fetched `GET /api/reconciliations/:jobId/report` while the job was still running and got a permanent 409 (that endpoint has no retry — it's meant to be requested once a job is known to be done). Fixed by moving `ReportViewer` out of the `'processing'` step and into the new `'completed'` step, where the job is guaranteed to have actually finished.
+
+Both are documented here rather than left implicit, because they're exactly the kind of bug that "the code compiles and the mocked tests pass" doesn't catch — the reason this phase's verification included a real end-to-end browser run at all.
+
+## Test Summary (frontend)
+
+- `packages/web`: **20/20 passing** (`npx jest --config jest.web.config.js`) — 3 new PeriodoSelector tests, 3 new TenantConfigPanel tests, 3 new PeriodoReportViewer tests, UploadForm's 4 tests rewritten for its new `tenantId`/`periodoId` props (no more in-form tenant_id field). `npx next build` compiles and type-checks cleanly.
+- A full Playwright run (real Postgres 16 + Redis 7 + a live NestJS API + BullMQ worker + Next.js dev server, real Chromium, real multipart file upload) exercised the complete happy path end to end and passed after the two fixes above.
+
 ## Deliberately not yet done
 
-- Frontend (T30–T32): período selection/creation in the upload form (this is what fixes the 400 the upload form has been returning since PR-4), the "Cerrar Conciliación del Mes" button, the new 3-section report viewer, and the tenant tolerance config UI. In progress — see the rest of this doc once T30–T32 land, or check `openspec/tasks/conciliacion-periodica.yaml` for current status.
-- CSV/XLSX for `GET /api/periodos/:id/report` (see design decision #2 above).
+- CSV/XLSX for `GET /api/periodos/:id/report` (see design decision #2 above) — JSON only, matching what the frontend actually consumes.
 - The pre-existing `app_role` grants gap (flagged again in PR-3/PR-4/PR-5's progress docs) — `periodo_resultados` follows the same pattern as every other table: RLS + a `REVOKE` for defense in depth, but no explicit `GRANT` yet, so it's invisible in practice because every connection in this environment is the superuser.
+- No automated end-to-end test captures the Playwright run above — it was a manual verification pass for this phase, not added as a CI-run test (the repo has no Playwright/e2e harness set up yet; adding one is a bigger decision than this phase's scope).

@@ -65,12 +65,14 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
 
 export async function uploadReconciliation(params: {
   tenantId: string;
+  periodoId: string;
   contabilidadSourceSystem: ContabilidadSourceSystem;
   arcaFile: File;
   contabilidadFile: File;
 }): Promise<UploadResponse> {
   const form = new FormData();
   form.append('tenant_id', params.tenantId);
+  form.append('periodo_id', params.periodoId);
   form.append('contabilidad_source_system', params.contabilidadSourceSystem);
   form.append('arca_file', params.arcaFile);
   form.append('contabilidad_file', params.contabilidadFile);
@@ -115,6 +117,131 @@ export async function createMark(
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, `Mark failed (${res.status})`));
+  }
+  return res.json();
+}
+
+// --- conciliacion-periodica (T30-T32): períodos, cierre, reporte de 3
+// secciones, y tolerancia por tenant. See packages/api/src/periodos/* and
+// packages/api/src/tenants/* for the endpoints these wrap. ---
+
+export interface Periodo {
+  id: string;
+  tenant_id: string;
+  mes: string;
+  estado: 'abierto' | 'cerrado';
+  tolerancia_ars: string | null;
+  cerrado_at: string | null;
+  cerrado_por: string | null;
+  created_at?: string;
+}
+
+export async function listPeriodos(tenantId: string): Promise<Periodo[]> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos?tenant_id=${encodeURIComponent(tenantId)}`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Períodos fetch failed (${res.status})`));
+  }
+  const data = await res.json();
+  return data.periodos;
+}
+
+/** `mes` accepts 'YYYY-MM' or 'YYYY-MM-DD' — the API normalizes to the 1st of the month. */
+export async function createPeriodo(tenantId: string, mes: string): Promise<Periodo> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: tenantId, mes }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Período creation failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export interface PeriodoCierreResponse {
+  periodo: Periodo;
+  counts: Record<string, number>;
+}
+
+/** RF-20: "Cerrar Conciliación del Mes" — one-way, rejected with 409 if already cerrado. */
+export async function cerrarPeriodo(periodoId: string, cerradoPor?: string): Promise<PeriodoCierreResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/cerrar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cerradoPor ? { cerrado_por: cerradoPor } : {}),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Cierre failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export interface PeriodoVoucherRow {
+  id: string;
+  cuit_emisor: string;
+  tipo_cbte: number;
+  punto_venta: number;
+  numero: number;
+  importe_total: number | null;
+  iva: number | null;
+  fecha: string | null;
+  file_source: 'arca' | 'contabilidad';
+  estado: 'pendiente' | 'conciliado';
+  periodo_alta_id: string;
+}
+
+export interface PeriodoReportRow {
+  classification: 'conciliado_ok' | 'con_divergencia' | 'posible_duplicado_en_sistema' | 'no_existe_en_arca' | 'pendiente_en_arca';
+  composite_key: string;
+  sistema: PeriodoVoucherRow | null;
+  arca: PeriodoVoucherRow | null;
+  divergencia_ars: number | null;
+  antiguedad_meses: number | null;
+}
+
+export interface PeriodoReportSections {
+  conciliados_ok: PeriodoReportRow[];
+  discrepancias_y_alertas: PeriodoReportRow[];
+  pendientes_en_arca: PeriodoReportRow[];
+}
+
+export interface PeriodoReport {
+  periodo: Periodo;
+  /** true while the período is abierto (live recompute); false once cerrado (frozen snapshot). */
+  live: boolean;
+  sections: PeriodoReportSections;
+}
+
+/** RF-22/RF-23: the 3-section período report — live while abierto, frozen once cerrado. */
+export async function getPeriodoReport(periodoId: string): Promise<PeriodoReport> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/report`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Reporte de período failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export interface TenantConfig {
+  id: string;
+  tolerancia_redondeo_ars: string;
+}
+
+export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/config`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Config fetch failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function updateTenantConfig(tenantId: string, toleranciaRedondeoArs: number): Promise<TenantConfig> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tolerancia_redondeo_ars: toleranciaRedondeoArs }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Config update failed (${res.status})`));
   }
   return res.json();
 }

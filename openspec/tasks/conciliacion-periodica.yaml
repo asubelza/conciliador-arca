@@ -38,9 +38,9 @@ Chained PRs recommended: Yes
 - [x] T27: `POST /api/periodos/:id/cerrar` — persistir estados finales, rollover implícito de pendientes, rechazo de doble cierre (RF-20) (M, api, PR-6) — periodo-cierre.ts
 - [x] T28: Snapshot de tolerancia al cerrar + inmutabilidad del resultado congelado (RF-21) (S, api+db, PR-6) — 016_init_periodo_resultados.sql
 - [x] T29: `GET /api/periodos/:id/report` — reporte de 3 secciones (RF-22/RF-23) (M, api, PR-6) — periodo-report.ts
-- [ ] T30: Frontend: alta/selección de período, cargas múltiples dentro de un período abierto, botón "Cerrar Conciliación del Mes" con confirmación (M, frontend, PR-6)
-- [ ] T31: Frontend: nuevo visor de reporte de 3 secciones, con antigüedad visible en Pendientes en ARCA (M, frontend, PR-6)
-- [ ] T32: Frontend: configuración simple de tolerancia por tenant (S, frontend, PR-6)
+- [x] T30: Frontend: alta/selección de período, cargas múltiples dentro de un período abierto, botón "Cerrar Conciliación del Mes" con confirmación (M, frontend, PR-6) — PeriodoSelector.tsx, UploadForm.tsx, PeriodoReportViewer.tsx
+- [x] T31: Frontend: nuevo visor de reporte de 3 secciones, con antigüedad visible en Pendientes en ARCA (M, frontend, PR-6) — PeriodoReportViewer.tsx
+- [x] T32: Frontend: configuración simple de tolerancia por tenant (S, frontend, PR-6) — TenantConfigPanel.tsx
 
 ## Verification Discipline (unchanged from PR-1/2/3)
 
