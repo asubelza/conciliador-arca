@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 import { AppModule } from '../app.module';
 import {
   authHeaderFor,
@@ -10,6 +11,41 @@ import {
   deleteTestTenant,
   deleteTestUser,
 } from '../test-support/pg-test-helpers';
+
+/**
+ * RF-04/RF-13/RF-09 — same fixture shape as
+ * periodo-matching-engine.test.ts's own insertVoucher: fixtures are
+ * inserted straight into vouchers_canonical via SQL, independent of the
+ * upsert module's own (separately-tested) semantics.
+ */
+async function insertVoucher(
+  pool: Pool,
+  tenantId: string,
+  periodoAltaId: string,
+  overrides: { cuitEmisor?: string; tipoCbte?: number; puntoVenta?: number; numero?: number; fileSource: 'arca' | 'contabilidad' } = {
+    fileSource: 'arca',
+  },
+): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO vouchers_canonical (
+       tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+       file_source, periodo_alta_id, fecha
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id`,
+    [
+      tenantId,
+      overrides.cuitEmisor ?? '30111111112',
+      overrides.tipoCbte ?? 1,
+      overrides.puntoVenta ?? 1,
+      overrides.numero ?? Math.floor(Math.random() * 1_000_000),
+      1000,
+      overrides.fileSource,
+      periodoAltaId,
+      '2026-01-15',
+    ],
+  );
+  return rows[0].id;
+}
 
 /**
  * T18 — integration coverage for the actual HTTP wiring of
@@ -235,6 +271,7 @@ describe('T18: /api/periodos (integration)', () => {
         conciliados_ok: [],
         discrepancias_y_alertas: [],
         pendientes_en_arca: [],
+        posibles_coincidencias: [],
       });
 
       const cerrar = await request(app.getHttpServer())
@@ -366,6 +403,220 @@ describe('T18: /api/periodos (integration)', () => {
     });
   });
 
+  /**
+   * RF-04/RF-13 — integration coverage for the actual HTTP wiring of
+   * POST /api/periodos/:id/coincidencias. The similarity-detection logic
+   * itself (findSimilarityCandidate, fetchFuzzyConfirmations) is covered
+   * exhaustively in periodo-matching-engine.test.ts; this proves the
+   * controller's validation/auth/state-guard chain and the upsert into
+   * fuzzy_match_confirmations.
+   */
+  describe('POST /api/periodos/:id/coincidencias', () => {
+    it('confirms a similarity pairing: 200, persists status=confirmado, logs a confirm_similarity audit event', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-01-01' });
+      const periodoId = created.body.id;
+      const sistemaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad' });
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: sistemaId, arca_voucher_id: arcaId, accion: 'confirmar' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('confirmado');
+      expect(res.body.sistema_voucher_id).toBe(sistemaId);
+      expect(res.body.arca_voucher_id).toBe(arcaId);
+
+      const { rows } = await pool.query(
+        'SELECT status FROM fuzzy_match_confirmations WHERE sistema_voucher_id = $1 AND arca_voucher_id = $2',
+        [sistemaId, arcaId],
+      );
+      expect(rows).toEqual([{ status: 'confirmado' }]);
+
+      const audit = await pool.query(
+        "SELECT action, entity, entity_id, details FROM audit_trail WHERE tenant_id = $1 AND action = 'confirm_similarity' ORDER BY created_at DESC LIMIT 1",
+        [tenantId],
+      );
+      expect(audit.rows[0]).toMatchObject({
+        entity: 'vouchers_canonical',
+        entity_id: sistemaId,
+        details: { arca_voucher_id: arcaId, status: 'confirmado' },
+      });
+    });
+
+    it('discards a similarity pairing: 200, persists status=descartado', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-02-01' });
+      const periodoId = created.body.id;
+      const sistemaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad' });
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: sistemaId, arca_voucher_id: arcaId, accion: 'descartar' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('descartado');
+    });
+
+    it('re-confirming/discarding the same pair updates the existing row instead of erroring (ON CONFLICT upsert)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-03-01' });
+      const periodoId = created.body.id;
+      const sistemaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad' });
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+
+      const first = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: sistemaId, arca_voucher_id: arcaId, accion: 'confirmar' });
+      expect(first.status).toBe(200);
+
+      const second = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: sistemaId, arca_voucher_id: arcaId, accion: 'descartar' });
+      expect(second.status).toBe(200);
+      expect(second.body.status).toBe('descartado');
+
+      const { rows } = await pool.query(
+        'SELECT count(*)::int AS n FROM fuzzy_match_confirmations WHERE sistema_voucher_id = $1 AND arca_voucher_id = $2',
+        [sistemaId, arcaId],
+      );
+      expect(rows[0].n).toBe(1);
+    });
+
+    it('returns 400 for a malformed body (bad accion)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-04-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: randomUUID(), arca_voucher_id: randomUUID(), accion: 'aceptar' });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for an unknown período id', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/periodos/00000000-0000-0000-0000-000000000000/coincidencias')
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: randomUUID(), arca_voucher_id: randomUUID(), accion: 'confirmar' });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 when the voucher ids do not reference existing vouchers for this tenant', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-05-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: randomUUID(), arca_voucher_id: randomUUID(), accion: 'confirmar' });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 409 when the período is already cerrado', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-06-01' });
+      const periodoId = created.body.id;
+      const sistemaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad' });
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+
+      const cerrar = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/cerrar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(cerrar.status).toBe(200);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/coincidencias`)
+        .set('Authorization', adminAuth)
+        .send({ sistema_voucher_id: sistemaId, arca_voucher_id: arcaId, accion: 'confirmar' });
+      expect(res.status).toBe(409);
+    });
+  });
+
+  /**
+   * RF-09 — integration coverage for the actual HTTP wiring of
+   * POST /api/periodos/:id/marks. feedback_loop's own persistence and
+   * periodo-report.ts's attachFeedbackAndReprioritize consumption of it are
+   * covered elsewhere; this proves the controller correctly sources the
+   * authenticated user id rather than trusting the body.
+   */
+  describe('POST /api/periodos/:id/marks', () => {
+    it('creates a mark using the AUTHENTICATED user id, ignoring any body-supplied user_id', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-07-01' });
+      const periodoId = created.body.id;
+
+      const { id: realUserId } = await createTestUser(pool, { role: 'colaborador' });
+      const spoofedUserId = randomUUID();
+      try {
+        const res = await request(app.getHttpServer())
+          .post(`/api/periodos/${periodoId}/marks`)
+          .set('Authorization', authHeaderFor('colaborador', { sub: realUserId }))
+          .send({
+            composite_key: '30111111112|1|1|100',
+            classification: 'revisado',
+            note: 'ya lo revisé con el cliente',
+            user_id: spoofedUserId,
+          });
+
+        expect(res.status).toBe(201);
+        expect(res.body.classification).toBe('revisado');
+        expect(res.body.user_id).toBe(realUserId);
+        expect(res.body.user_id).not.toBe(spoofedUserId);
+
+        const { rows } = await pool.query(
+          'SELECT user_id FROM feedback_loop WHERE tenant_id = $1 AND composite_key = $2',
+          [tenantId, '30111111112|1|1|100'],
+        );
+        expect(rows[0].user_id).toBe(realUserId);
+      } finally {
+        await deleteTestUser(pool, realUserId);
+      }
+    });
+
+    it('returns 400 for a malformed body', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2028-08-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/marks`)
+        .set('Authorization', adminAuth)
+        .send({ classification: 'revisado' });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for an unknown período id', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/periodos/00000000-0000-0000-0000-000000000000/marks')
+        .set('Authorization', adminAuth)
+        .send({ composite_key: '30111111112|1|1|100', classification: 'revisado' });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('auth (T38, autenticacion-roles)', () => {
     it('POST /api/periodos with no Authorization header returns 401', async () => {
       const res = await request(app.getHttpServer())
@@ -429,6 +680,62 @@ describe('T18: /api/periodos (integration)', () => {
       const res = await request(app.getHttpServer())
         .get(`/api/periodos/${created.body.id}`)
         .set('Authorization', authHeaderFor('cliente'));
+      expect(res.status).toBe(403);
+    });
+
+    it('POST /api/periodos/:id/coincidencias with no Authorization header returns 401', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/periodos/00000000-0000-0000-0000-000000000000/coincidencias')
+        .send({ sistema_voucher_id: randomUUID(), arca_voucher_id: randomUUID(), accion: 'confirmar' });
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /api/periodos/:id/coincidencias as cliente returns 403 (admin/colaborador-only)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2027-06-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/coincidencias`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({ sistema_voucher_id: randomUUID(), arca_voucher_id: randomUUID(), accion: 'confirmar' });
+      expect(res.status).toBe(403);
+    });
+
+    it('POST /api/periodos/:id/coincidencias as a cliente WITHOUT access to the tenant returns 403, not 400/404', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2027-07-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/coincidencias`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({ sistema_voucher_id: randomUUID(), arca_voucher_id: randomUUID(), accion: 'confirmar' });
+      // role check (cliente is not admin/colaborador) fires before the
+      // tenant-access check reached in the coincidencias-only test above —
+      // same 403, asserted here for completeness of the auth matrix.
+      expect(res.status).toBe(403);
+    });
+
+    it('POST /api/periodos/:id/marks with no Authorization header returns 401', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/periodos/00000000-0000-0000-0000-000000000000/marks')
+        .send({ composite_key: '30111111112|1|1|100', classification: 'revisado' });
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /api/periodos/:id/marks as cliente returns 403 (admin/colaborador-only)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2027-08-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/marks`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({ composite_key: '30111111112|1|1|100', classification: 'revisado' });
       expect(res.status).toBe(403);
     });
   });

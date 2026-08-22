@@ -50,7 +50,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         .get(`/api/tenants/${tenantId}/config`)
         .set('Authorization', adminAuth);
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ id: tenantId, tolerancia_redondeo_ars: '0.99' });
+      expect(res.body).toEqual({ id: tenantId, tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 });
     });
 
     it('returns 404 for an unknown tenant', async () => {
@@ -75,20 +75,21 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       const res = await request(app.getHttpServer())
         .put(`/api/tenants/${tenantId}/config`)
         .set('Authorization', adminAuth)
-        .send({ tolerancia_redondeo_ars: 2.5 });
+        .send({ tolerancia_redondeo_ars: 2.5, tolerancia_dias_fecha: 10 });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ id: tenantId, tolerancia_redondeo_ars: '2.50' });
+      expect(res.body).toEqual({ id: tenantId, tolerancia_redondeo_ars: '2.50', tolerancia_dias_fecha: 10 });
 
       const getRes = await request(app.getHttpServer())
         .get(`/api/tenants/${tenantId}/config`)
         .set('Authorization', adminAuth);
       expect(getRes.body.tolerancia_redondeo_ars).toBe('2.50');
+      expect(getRes.body.tolerancia_dias_fecha).toBe(10);
 
       // put it back so other tests in this file see the documented default
       await request(app.getHttpServer())
         .put(`/api/tenants/${tenantId}/config`)
         .set('Authorization', adminAuth)
-        .send({ tolerancia_redondeo_ars: 0.99 });
+        .send({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: 5 });
     });
 
     it('returns 400 for a negative tolerance and does not change the stored value', async () => {
@@ -99,7 +100,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       const res = await request(app.getHttpServer())
         .put(`/api/tenants/${tenantId}/config`)
         .set('Authorization', adminAuth)
-        .send({ tolerancia_redondeo_ars: -5 });
+        .send({ tolerancia_redondeo_ars: -5, tolerancia_dias_fecha: 5 });
       expect(res.status).toBe(400);
 
       const after = await request(app.getHttpServer())
@@ -108,11 +109,28 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(after.body.tolerancia_redondeo_ars).toBe(before.body.tolerancia_redondeo_ars);
     });
 
+    it('returns 400 for an invalid tolerancia_dias_fecha and does not change the stored value', async () => {
+      const before = await request(app.getHttpServer())
+        .get(`/api/tenants/${tenantId}/config`)
+        .set('Authorization', adminAuth);
+
+      const res = await request(app.getHttpServer())
+        .put(`/api/tenants/${tenantId}/config`)
+        .set('Authorization', adminAuth)
+        .send({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: -1 });
+      expect(res.status).toBe(400);
+
+      const after = await request(app.getHttpServer())
+        .get(`/api/tenants/${tenantId}/config`)
+        .set('Authorization', adminAuth);
+      expect(after.body.tolerancia_dias_fecha).toBe(before.body.tolerancia_dias_fecha);
+    });
+
     it('returns 404 for an unknown tenant', async () => {
       const res = await request(app.getHttpServer())
         .put('/api/tenants/00000000-0000-0000-0000-000000000000/config')
         .set('Authorization', adminAuth)
-        .send({ tolerancia_redondeo_ars: 1 });
+        .send({ tolerancia_redondeo_ars: 1, tolerancia_dias_fecha: 5 });
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: 'tenant not found' });
     });
@@ -127,7 +145,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     it('PUT with no Authorization header returns 401', async () => {
       const res = await request(app.getHttpServer())
         .put(`/api/tenants/${tenantId}/config`)
-        .send({ tolerancia_redondeo_ars: 1 });
+        .send({ tolerancia_redondeo_ars: 1, tolerancia_dias_fecha: 5 });
       expect(res.status).toBe(401);
     });
 
@@ -135,7 +153,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       const res = await request(app.getHttpServer())
         .put(`/api/tenants/${tenantId}/config`)
         .set('Authorization', authHeaderFor('colaborador'))
-        .send({ tolerancia_redondeo_ars: 1 });
+        .send({ tolerancia_redondeo_ars: 1, tolerancia_dias_fecha: 5 });
       expect(res.status).toBe(403);
     });
 

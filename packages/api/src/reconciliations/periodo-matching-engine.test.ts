@@ -2,6 +2,20 @@ import { Pool } from 'pg';
 import { matchPeriodo } from './periodo-matching-engine';
 import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
 
+async function insertConfirmation(
+  pool: Pool,
+  tenantId: string,
+  sistemaVoucherId: string,
+  arcaVoucherId: string,
+  status: 'confirmado' | 'descartado',
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO fuzzy_match_confirmations (tenant_id, sistema_voucher_id, arca_voucher_id, status)
+     VALUES ($1, $2, $3, $4)`,
+    [tenantId, sistemaVoucherId, arcaVoucherId, status],
+  );
+}
+
 /**
  * T23–T26 — RF-16 through RF-19
  * (openspec/specs/conciliacion-periodica/matching-periodico.spec.md).
@@ -65,6 +79,7 @@ describe('T23–T26: matchPeriodo (RF-16, RF-17, RF-18, RF-19)', () => {
   });
 
   afterEach(async () => {
+    await pool.query('DELETE FROM fuzzy_match_confirmations WHERE tenant_id = $1', [tenantId]);
     await pool.query('DELETE FROM vouchers_canonical WHERE tenant_id = $1', [tenantId]);
     await pool.query('DELETE FROM periodos WHERE tenant_id = $1', [tenantId]);
   });
@@ -244,5 +259,277 @@ describe('T23–T26: matchPeriodo (RF-16, RF-17, RF-18, RF-19)', () => {
     } finally {
       await deleteTestTenant(pool, otherTenantId);
     }
+  });
+});
+
+/**
+ * RF-04/RF-13 (matching por similitud, autenticacion-roles follow-up):
+ * the fallback that runs only once the exact composite key has found
+ * nothing anywhere for a sistema row.
+ */
+describe('RF-04/RF-13: matchPeriodo similarity fallback', () => {
+  let pool: Pool;
+  let tenantId: string;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    tenantId = await createTestTenant(pool, 'periodo-matching-engine.similarity.test');
+  });
+
+  afterAll(async () => {
+    await deleteTestTenant(pool, tenantId);
+    await pool.end();
+  });
+
+  afterEach(async () => {
+    await pool.query('DELETE FROM fuzzy_match_confirmations WHERE tenant_id = $1', [tenantId]);
+    await pool.query('DELETE FROM vouchers_canonical WHERE tenant_id = $1', [tenantId]);
+    await pool.query('DELETE FROM periodos WHERE tenant_id = $1', [tenantId]);
+  });
+
+  it('a single-digit typo in numero, same fecha/importe, is posible_coincidencia with a reason', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 1235,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 1234,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.posible_coincidencia).toBe(1);
+    expect(summary.counts.no_existe_en_arca).toBe(0);
+    const result = summary.results.find((r) => r.classification === 'posible_coincidencia');
+    expect(result?.arca?.numero).toBe(1235);
+    expect(result?.similarity_reason).toContain('1 dígito');
+  });
+
+  it('a 2-digit numero difference (not a typo) does NOT match via the typo step — only the separate fecha/importe step can still catch it', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    // Same fecha/importe as the sistema row, so IF the typo step were (wrongly)
+    // as lenient as the fecha/importe step, this would still match — the
+    // real assertion below is on `similarity_reason`, proving it did NOT
+    // come from the typo path (which would also require an exact fecha
+    // match, satisfied here, and would report "1 dígito").
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 1299, // Hamming distance 2 from 1234 (positions 2 and 3 differ) — not a single-digit typo
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 1234,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    const result = summary.results.find((r) => r.classification === 'posible_coincidencia');
+    // It DOES still match — via the separate, intentionally looser
+    // fecha/importe step (numero is free there) — but the reason must say so,
+    // never claim a "1 dígito" typo it isn't.
+    expect(result?.similarity_reason).not.toContain('1 dígito');
+    expect(result?.similarity_reason).toContain('día');
+  });
+
+  it('a 2-digit numero difference with fecha ALSO outside tolerance matches neither step — genuinely no candidate', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 1299,
+      fecha: '2026-01-20', // 10 days from the sistema row's fecha, tolerance is 5
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 1234,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.posible_coincidencia).toBe(0);
+    expect(summary.counts.no_existe_en_arca).toBe(1);
+  });
+
+  it('fecha within tolerance + importe within tolerance, different numero, is posible_coincidencia', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 500,
+      puntoVenta: 3,
+      fecha: '2026-01-12',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 501,
+      puntoVenta: 4,
+      fecha: '2026-01-10',
+      importeTotal: 1000.5,
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.posible_coincidencia).toBe(1);
+    const result = summary.results.find((r) => r.classification === 'posible_coincidencia');
+    expect(result?.similarity_reason).toContain('día');
+  });
+
+  it('fecha exactly at the tolerance boundary matches; one day beyond does not', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 900,
+      puntoVenta: 9,
+      fecha: '2026-01-15',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 901,
+      puntoVenta: 8,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+
+    const atBoundary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(atBoundary.counts.posible_coincidencia).toBe(1);
+
+    const beyondBoundary = await matchPeriodo(pool, tenantId, p1, 0.99, 4);
+    expect(beyondBoundary.counts.posible_coincidencia).toBe(0);
+    expect(beyondBoundary.counts.no_existe_en_arca).toBe(1);
+  });
+
+  it('a fuzzy match never crosses tipo_cbte, even with identical fecha/importe/numero', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      tipoCbte: 3, // Nota de Crédito A
+      numero: 100,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      tipoCbte: 1, // Factura A
+      numero: 100,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.posible_coincidencia).toBe(0);
+    expect(summary.counts.no_existe_en_arca).toBe(1);
+  });
+
+  it('a confirmed pairing is treated exactly like an exact match — consumes the ARCA row, no longer pendiente', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    const arcaId = await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 1235,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    const sistemaId = await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 1234,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    await insertConfirmation(pool, tenantId, sistemaId, arcaId, 'confirmado');
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.posible_coincidencia).toBe(0);
+    expect(summary.counts.pendiente_en_arca).toBe(0);
+    expect(summary.counts.conciliado_ok).toBe(1);
+    const match = summary.results.find((r) => r.classification === 'conciliado_ok');
+    expect(match?.matched_via).toBe('similitud_confirmada');
+    expect(match?.arca?.id).toBe(arcaId);
+  });
+
+  it('a descartado pairing is never suggested again for that exact sistema/arca pair', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    const arcaId = await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 1235,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    const sistemaId = await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 1234,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+    await insertConfirmation(pool, tenantId, sistemaId, arcaId, 'descartado');
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.posible_coincidencia).toBe(0);
+    expect(summary.counts.no_existe_en_arca).toBe(1);
+    // The ARCA row itself is untouched — still shows up as pendiente, same
+    // as if no candidate had ever been suggested.
+    expect(summary.counts.pendiente_en_arca).toBe(1);
+  });
+
+  it('an already-consumed ARCA row (matched exactly by someone else) is never offered as a fuzzy candidate too', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    // Exact match pair.
+    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1, numero: 1234, fecha: '2026-01-10', importeTotal: 1000 });
+    await insertVoucher(pool, tenantId, { fileSource: 'contabilidad', periodoAltaId: p1, numero: 1234, fecha: '2026-01-10', importeTotal: 1000 });
+    // A second sistema row that would fuzzy-candidate onto the SAME arca
+    // voucher above (numero typo) if it weren't already consumed.
+    await insertVoucher(pool, tenantId, { fileSource: 'contabilidad', periodoAltaId: p1, numero: 1235, puntoVenta: 1, fecha: '2026-01-10', importeTotal: 1000 });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99, 5);
+    expect(summary.counts.conciliado_ok).toBe(1);
+    expect(summary.counts.posible_coincidencia).toBe(0);
+    expect(summary.counts.no_existe_en_arca).toBe(1);
+  });
+
+  it('default toleranciaDiasFecha (omitted) never suggests a fecha/importe-only candidate — backward compatible with existing callers', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      numero: 500,
+      puntoVenta: 3,
+      fecha: '2026-01-11',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, {
+      fileSource: 'contabilidad',
+      periodoAltaId: p1,
+      numero: 501,
+      puntoVenta: 4,
+      fecha: '2026-01-10',
+      importeTotal: 1000,
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99); // no 5th arg
+    expect(summary.counts.posible_coincidencia).toBe(0);
+    expect(summary.counts.no_existe_en_arca).toBe(1);
   });
 });

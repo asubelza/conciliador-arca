@@ -61,8 +61,8 @@ async function insertResultadosSnapshot(
     await client.query(
       `INSERT INTO periodo_resultados (
          tenant_id, periodo_id, classification, composite_key,
-         sistema_row, arca_row, delta, antiguedad_meses
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         sistema_row, arca_row, delta, antiguedad_meses, similarity_reason
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         tenantId,
         periodoId,
@@ -72,6 +72,7 @@ async function insertResultadosSnapshot(
         r.arca ? JSON.stringify(r.arca) : null,
         r.delta ?? null,
         r.antiguedad_meses ?? null,
+        r.similarity_reason ?? null,
       ],
     );
   }
@@ -110,13 +111,14 @@ export async function cerrarPeriodo(
       return { code: 'ALREADY_CERRADO', status: 409, error: 'período is already cerrado' };
     }
 
-    const { rows: tenantRows } = await client.query<{ tolerancia_redondeo_ars: string }>(
-      'SELECT tolerancia_redondeo_ars FROM tenants WHERE id = $1',
+    const { rows: tenantRows } = await client.query<{ tolerancia_redondeo_ars: string; tolerancia_dias_fecha: number }>(
+      'SELECT tolerancia_redondeo_ars, tolerancia_dias_fecha FROM tenants WHERE id = $1',
       [periodo.tenant_id],
     );
     const toleranciaArs = Number(tenantRows[0]?.tolerancia_redondeo_ars ?? 0.99);
+    const toleranciaDiasFecha = tenantRows[0]?.tolerancia_dias_fecha ?? 5;
 
-    const { results, counts } = await matchPeriodo(client, periodo.tenant_id, periodoId, toleranciaArs);
+    const { results, counts } = await matchPeriodo(client, periodo.tenant_id, periodoId, toleranciaArs, toleranciaDiasFecha);
 
     // RF-20(2): every conciliado_ok / con_divergencia match's vouchers_canonical
     // row(s) — sistema side and/or arca side — become estado = 'conciliado',

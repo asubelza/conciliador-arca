@@ -31,8 +31,8 @@ describe('T20: validateTenantIdParam', () => {
 
 describe('T20: validateUpdateTenantConfigBody (RF-18)', () => {
   it('accepts a valid non-negative number', () => {
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99 })).toBeNull();
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0 })).toBeNull();
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: 5 })).toBeNull();
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0, tolerancia_dias_fecha: 0 })).toBeNull();
   });
 
   it('rejects a missing value', () => {
@@ -40,23 +40,58 @@ describe('T20: validateUpdateTenantConfigBody (RF-18)', () => {
   });
 
   it('rejects a negative value', () => {
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: -1 })?.code).toBe('INVALID_TOLERANCIA');
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: -1, tolerancia_dias_fecha: 5 })?.code).toBe(
+      'INVALID_TOLERANCIA',
+    );
   });
 
   it('rejects a non-numeric value', () => {
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: '0.99' })?.code).toBe(
-      'INVALID_TOLERANCIA',
-    );
+    expect(
+      validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 })?.code,
+    ).toBe('INVALID_TOLERANCIA');
   });
 
   it('rejects NaN/Infinity', () => {
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: NaN })?.code).toBe('INVALID_TOLERANCIA');
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: Infinity })?.code).toBe(
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: NaN, tolerancia_dias_fecha: 5 })?.code).toBe(
       'INVALID_TOLERANCIA',
     );
+    expect(
+      validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: Infinity, tolerancia_dias_fecha: 5 })?.code,
+    ).toBe('INVALID_TOLERANCIA');
   });
 
   it('rejects an absurdly large value (guards the NUMERIC(10,2) column range)', () => {
-    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 1e15 })?.code).toBe('INVALID_TOLERANCIA');
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 1e15, tolerancia_dias_fecha: 5 })?.code).toBe(
+      'INVALID_TOLERANCIA',
+    );
+  });
+});
+
+describe('T20 follow-up (RF-13): validateUpdateTenantConfigBody tolerancia_dias_fecha', () => {
+  it('rejects a missing tolerancia_dias_fecha, even when tolerancia_redondeo_ars is valid', () => {
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99 })?.code).toBe('INVALID_TOLERANCIA_DIAS');
+  });
+
+  it('rejects a negative value', () => {
+    expect(
+      validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: -1 })?.code,
+    ).toBe('INVALID_TOLERANCIA_DIAS');
+  });
+
+  it('rejects a non-integer value (days are whole numbers)', () => {
+    expect(
+      validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: 2.5 })?.code,
+    ).toBe('INVALID_TOLERANCIA_DIAS');
+  });
+
+  it('rejects a value beyond the 365-day cap', () => {
+    expect(
+      validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: 366 })?.code,
+    ).toBe('INVALID_TOLERANCIA_DIAS');
+  });
+
+  it('accepts the boundary values 0 and 365', () => {
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: 0 })).toBeNull();
+    expect(validateUpdateTenantConfigBody({ tolerancia_redondeo_ars: 0.99, tolerancia_dias_fecha: 365 })).toBeNull();
   });
 });

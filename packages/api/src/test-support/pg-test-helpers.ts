@@ -84,6 +84,16 @@ export async function deleteTestUser(pool: Pool, userId: string): Promise<void> 
 
 export async function deleteTestTenant(pool: Pool, tenantId: string): Promise<void> {
   await pool.query('DELETE FROM vouchers_staging WHERE tenant_id = $1', [tenantId]);
+  // RF-04/RF-13: fuzzy_match_confirmations.sistema_voucher_id/arca_voucher_id
+  // REFERENCE vouchers_canonical(id) with no ON DELETE CASCADE
+  // (020_init_fuzzy_match_confirmations.sql) — must go before
+  // vouchers_canonical, or any test that confirmed/discarded a coincidencia
+  // for this tenant leaves this cleanup failing on a FK violation.
+  await pool.query('DELETE FROM fuzzy_match_confirmations WHERE tenant_id = $1', [tenantId]);
+  // RF-09: feedback_loop.tenant_id has no FK constraint (see
+  // 010_init_feedback_loop.sql's doc comment), so this isn't required for
+  // FK correctness — cleaned up anyway for test isolation.
+  await pool.query('DELETE FROM feedback_loop WHERE tenant_id = $1', [tenantId]);
   await pool.query('DELETE FROM vouchers_canonical WHERE tenant_id = $1', [tenantId]);
   await pool.query('DELETE FROM reconciliation_results WHERE tenant_id = $1', [tenantId]);
   await pool.query('DELETE FROM audit_trail WHERE tenant_id = $1', [tenantId]);

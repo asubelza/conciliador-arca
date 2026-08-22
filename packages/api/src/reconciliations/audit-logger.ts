@@ -20,6 +20,8 @@ import type { Pool, PoolClient } from 'pg';
  */
 // T27 (RF-20, conciliacion-periodica) adds 'close' — logged once per
 // período when POST /api/periodos/:id/cerrar succeeds (periodo-cierre.ts).
+// RF-04/RF-13 adds 'confirm_similarity'/'discard_similarity' — logged once
+// per POST /api/periodos/:id/coincidencias decision (periodos.controller.ts).
 export type AuditAction =
   | 'upload'
   | 'staging'
@@ -28,7 +30,9 @@ export type AuditAction =
   | 'export'
   | 'user_mark'
   | 'feedback_read'
-  | 'close';
+  | 'close'
+  | 'confirm_similarity'
+  | 'discard_similarity';
 
 export interface AuditEvent {
   tenantId: string;

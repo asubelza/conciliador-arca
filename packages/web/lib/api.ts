@@ -294,19 +294,40 @@ export interface PeriodoVoucherRow {
   periodo_alta_id: string;
 }
 
+export type PeriodoClassification =
+  | 'conciliado_ok'
+  | 'con_divergencia'
+  | 'posible_duplicado_en_sistema'
+  | 'no_existe_en_arca'
+  | 'pendiente_en_arca'
+  | 'posible_coincidencia';
+
+/** RF-09: the most recent prior feedback_loop mark for a row's composite_key, from any período — or null if the contador never marked it before. */
+export interface PeriodoReportFeedback {
+  classification: string;
+  note: string | null;
+  created_at: string;
+}
+
 export interface PeriodoReportRow {
-  classification: 'conciliado_ok' | 'con_divergencia' | 'posible_duplicado_en_sistema' | 'no_existe_en_arca' | 'pendiente_en_arca';
+  classification: PeriodoClassification;
   composite_key: string;
   sistema: PeriodoVoucherRow | null;
   arca: PeriodoVoucherRow | null;
   divergencia_ars: number | null;
   antiguedad_meses: number | null;
+  /** RF-04: only set for 'posible_coincidencia' — why these two rows were suggested as a match. */
+  similarity_reason: string | null;
+  /** RF-09: shown, never hidden (RNF-07) — used only to sort a reviewed row later within its section. */
+  feedback_previo: PeriodoReportFeedback | null;
 }
 
 export interface PeriodoReportSections {
   conciliados_ok: PeriodoReportRow[];
   discrepancias_y_alertas: PeriodoReportRow[];
   pendientes_en_arca: PeriodoReportRow[];
+  /** RF-04: similarity candidates awaiting the contador's confirmar/descartar decision. */
+  posibles_coincidencias: PeriodoReportRow[];
 }
 
 export interface PeriodoReport {
@@ -326,6 +347,60 @@ export async function getPeriodoReport(periodoId: string): Promise<PeriodoReport
   return res.json();
 }
 
+export type CoincidenciaAccion = 'confirmar' | 'descartar';
+
+export interface CoincidenciaResponse {
+  tenant_id: string;
+  sistema_voucher_id: string;
+  arca_voucher_id: string;
+  status: 'confirmado' | 'descartado';
+  created_by: string | null;
+  created_at: string;
+}
+
+/** RF-04/RF-13: contador confirma o descarta una sugerencia de 'posible_coincidencia'. A 'confirmado' pairing is treated like an exact match on the NEXT report read (see periodo-matching-engine.ts). */
+export async function confirmarCoincidencia(
+  periodoId: string,
+  sistemaVoucherId: string,
+  arcaVoucherId: string,
+  accion: CoincidenciaAccion,
+): Promise<CoincidenciaResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/coincidencias`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ sistema_voucher_id: sistemaVoucherId, arca_voucher_id: arcaVoucherId, accion }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Coincidencia failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/**
+ * RF-09: período-scoped mark (`revisado`/`explicado`), feeding
+ * attachFeedbackAndReprioritize on the API side. The authenticated user id
+ * is applied server-side from the bearer token — no user_id in this
+ * request body (see periodos.controller.ts's `mark` handler doc).
+ */
+export async function createPeriodoMark(
+  periodoId: string,
+  compositeKey: string,
+  classification: UserMarkClassification,
+  note?: string,
+): Promise<MarkResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/marks`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ composite_key: compositeKey, classification, note: note ?? null }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Mark failed (${res.status})`));
+  }
+  return res.json();
+}
+
 function periodoReportUrl(periodoId: string, format: 'csv' | 'xlsx'): string {
   return `${API_BASE_URL}/api/periodos/${periodoId}/report?format=${format}`;
 }
@@ -338,6 +413,8 @@ export async function downloadPeriodoReport(periodoId: string, mes: string, form
 export interface TenantConfig {
   id: string;
   tolerancia_redondeo_ars: string;
+  /** RF-13 follow-up: date tolerance for the fecha/importe similarity fallback (RF-04), same per-tenant-config pattern as tolerancia_redondeo_ars. */
+  tolerancia_dias_fecha: number;
 }
 
 export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
@@ -349,11 +426,19 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   return res.json();
 }
 
-export async function updateTenantConfig(tenantId: string, toleranciaRedondeoArs: number): Promise<TenantConfig> {
+/** The API requires both fields on every PUT (see tenants-validation.ts) — tolerancia_dias_fecha is not optional here either. */
+export async function updateTenantConfig(
+  tenantId: string,
+  toleranciaRedondeoArs: number,
+  toleranciaDiasFecha: number,
+): Promise<TenantConfig> {
   const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/config`, {
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ tolerancia_redondeo_ars: toleranciaRedondeoArs }),
+    body: JSON.stringify({
+      tolerancia_redondeo_ars: toleranciaRedondeoArs,
+      tolerancia_dias_fecha: toleranciaDiasFecha,
+    }),
   });
   if (!res.ok) {
     handleUnauthorized(res);

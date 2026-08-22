@@ -10,12 +10,16 @@ export interface TenantConfigPanelProps {
 /**
  * T32 (RF-18, conciliacion-periodica): a simple per-tenant tolerance
  * config editor — GET/PUT /api/tenants/:id/config
- * (tenants.tolerancia_redondeo_ars, default $0.99, T20). Deliberately
- * minimal (one field, no history/audit view) — RF-18 only asks for the
- * value to be configurable, not for a management UI around it.
+ * (tenants.tolerancia_redondeo_ars, default $0.99, T20).
+ *
+ * RF-13 follow-up: a second field, tolerancia_dias_fecha (default 5 días),
+ * added alongside it — same per-tenant-config pattern, and the API
+ * requires both fields on every PUT (tenants-validation.ts), so this form
+ * always submits them together even though they're edited independently.
  */
 export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
   const [value, setValue] = useState<string>('');
+  const [diasFecha, setDiasFecha] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +31,7 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
     try {
       const config = await getTenantConfig(tenantId);
       setValue(config.tolerancia_redondeo_ars);
+      setDiasFecha(String(config.tolerancia_dias_fecha));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo cargar la configuración');
     } finally {
@@ -47,10 +52,16 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
       setError('tolerancia_redondeo_ars must be a non-negative number');
       return;
     }
+    const parsedDias = Number(diasFecha);
+    if (!Number.isInteger(parsedDias) || parsedDias < 0 || parsedDias > 365) {
+      setError('tolerancia_dias_fecha must be a whole number of days between 0 and 365');
+      return;
+    }
     setSaving(true);
     try {
-      const config = await updateTenantConfig(tenantId, parsed);
+      const config = await updateTenantConfig(tenantId, parsed, parsedDias);
       setValue(config.tolerancia_redondeo_ars);
+      setDiasFecha(String(config.tolerancia_dias_fecha));
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo guardar la configuración');
@@ -64,17 +75,17 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
   }
 
   return (
-    // noValidate: the input's min="0" is a UI hint, not the source of truth
-    // — handleSubmit's own check is what actually surfaces the error
+    // noValidate: the inputs' min/max are UI hints, not the source of truth
+    // — handleSubmit's own checks are what actually surface the error
     // message below. Without this, the browser's native HTML5 constraint
     // validation silently blocks the submit event for an out-of-range
     // value before handleSubmit ever runs, so this form's own error UI
     // (and audit trail) would never fire for that case.
-    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-2 border rounded p-3 mt-2">
-      <label htmlFor="tolerancia" className="text-sm font-medium">
-        Tolerancia de redondeo (ARS)
-      </label>
-      <div className="flex gap-2">
+    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3 border rounded p-3 mt-2">
+      <div className="flex flex-col gap-2">
+        <label htmlFor="tolerancia" className="text-sm font-medium">
+          Tolerancia de redondeo (ARS)
+        </label>
         <input
           id="tolerancia"
           type="number"
@@ -85,8 +96,28 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
             setValue(e.target.value);
             setSaved(false);
           }}
-          className="border rounded px-3 py-2 flex-1"
+          className="border rounded px-3 py-2"
         />
+      </div>
+      <div className="flex flex-col gap-2">
+        <label htmlFor="tolerancia-dias" className="text-sm font-medium">
+          Tolerancia de fecha (días) — para coincidencias por similitud
+        </label>
+        <input
+          id="tolerancia-dias"
+          type="number"
+          step="1"
+          min="0"
+          max="365"
+          value={diasFecha}
+          onChange={(e) => {
+            setDiasFecha(e.target.value);
+            setSaved(false);
+          }}
+          className="border rounded px-3 py-2"
+        />
+      </div>
+      <div>
         <button type="submit" disabled={saving} className="bg-blue-600 text-white rounded px-4 py-2 disabled:opacity-50">
           {saving ? 'Guardando…' : 'Guardar'}
         </button>

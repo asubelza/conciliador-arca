@@ -31,19 +31,24 @@ function voucherRow(overrides: Partial<VoucherCanonicalRow> = {}): VoucherCanoni
 }
 
 function emptySections(): PeriodoReportSections {
-  return { conciliados_ok: [], discrepancias_y_alertas: [], pendientes_en_arca: [] };
+  return { conciliados_ok: [], discrepancias_y_alertas: [], pendientes_en_arca: [], posibles_coincidencias: [] };
+}
+
+/** Fills in the two RF-04/RF-09 fields with their "nothing to report" defaults, so each test literal only needs to state what it's actually testing. */
+function reportRow(overrides: Omit<PeriodoReportRow, 'similarity_reason' | 'feedback_previo'>): PeriodoReportRow {
+  return { similarity_reason: null, feedback_previo: null, ...overrides };
 }
 
 describe('periodo-report-exporter: buildPeriodoExportSections', () => {
   it('flattens sistema/arca rows into export rows, preferring arca for the comprobante identity fields', () => {
-    const row: PeriodoReportRow = {
+    const row: PeriodoReportRow = reportRow({
       classification: 'conciliado_ok',
       composite_key: '30111111112|1|1|100',
       sistema: voucherRow({ file_source: 'contabilidad', importe_total: 995 }),
       arca: voucherRow({ file_source: 'arca', importe_total: 1000 }),
       divergencia_ars: null,
       antiguedad_meses: null,
-    };
+    });
     const sections = emptySections();
     sections.conciliados_ok.push(row);
 
@@ -64,9 +69,9 @@ describe('periodo-report-exporter: buildPeriodoExportSections', () => {
   it('sorts each section by importe descending (higher-impact rows first)', () => {
     const sections = emptySections();
     sections.pendientes_en_arca.push(
-      { classification: 'pendiente_en_arca', composite_key: 'k1', sistema: null, arca: voucherRow({ importe_total: 100 }), divergencia_ars: null, antiguedad_meses: 1 },
-      { classification: 'pendiente_en_arca', composite_key: 'k2', sistema: null, arca: voucherRow({ importe_total: 5000 }), divergencia_ars: null, antiguedad_meses: 2 },
-      { classification: 'pendiente_en_arca', composite_key: 'k3', sistema: null, arca: voucherRow({ importe_total: 900 }), divergencia_ars: null, antiguedad_meses: 3 },
+      reportRow({ classification: 'pendiente_en_arca', composite_key: 'k1', sistema: null, arca: voucherRow({ importe_total: 100 }), divergencia_ars: null, antiguedad_meses: 1 }),
+      reportRow({ classification: 'pendiente_en_arca', composite_key: 'k2', sistema: null, arca: voucherRow({ importe_total: 5000 }), divergencia_ars: null, antiguedad_meses: 2 }),
+      reportRow({ classification: 'pendiente_en_arca', composite_key: 'k3', sistema: null, arca: voucherRow({ importe_total: 900 }), divergencia_ars: null, antiguedad_meses: 3 }),
     );
 
     const exported = buildPeriodoExportSections(sections);
@@ -75,14 +80,14 @@ describe('periodo-report-exporter: buildPeriodoExportSections', () => {
 
   it('a sistema-only row (no_existe_en_arca) has null importe_arca, and identity fields come from sistema', () => {
     const sections = emptySections();
-    sections.discrepancias_y_alertas.push({
+    sections.discrepancias_y_alertas.push(reportRow({
       classification: 'no_existe_en_arca',
       composite_key: 'k1',
       sistema: voucherRow({ file_source: 'contabilidad', cuit_emisor: '30222222223', importe_total: 300 }),
       arca: null,
       divergencia_ars: null,
       antiguedad_meses: null,
-    });
+    }));
 
     const exported = buildPeriodoExportSections(sections);
     expect(exported.discrepancias_y_alertas[0]).toMatchObject({
@@ -97,17 +102,18 @@ describe('periodo-report-exporter: toPeriodoReportCsv', () => {
   it('renders a "seccion" column and money fields with 2 decimals', () => {
     const sections = buildPeriodoExportSections({
       conciliados_ok: [
-        {
+        reportRow({
           classification: 'conciliado_ok',
           composite_key: 'k1',
           sistema: voucherRow({ file_source: 'contabilidad', importe_total: 999.5 }),
           arca: voucherRow({ file_source: 'arca', importe_total: 1000 }),
           divergencia_ars: null,
           antiguedad_meses: null,
-        },
+        }),
       ],
       discrepancias_y_alertas: [],
       pendientes_en_arca: [],
+      posibles_coincidencias: [],
     });
 
     const csv = toPeriodoReportCsv(sections);
@@ -130,26 +136,27 @@ describe('periodo-report-exporter: toPeriodoReportXlsxBuffer', () => {
   it('produces a valid workbook with one styled sheet per section, correct title and header row', async () => {
     const sections = buildPeriodoExportSections({
       conciliados_ok: [
-        {
+        reportRow({
           classification: 'conciliado_ok',
           composite_key: 'k1',
           sistema: voucherRow({ file_source: 'contabilidad' }),
           arca: voucherRow({ file_source: 'arca' }),
           divergencia_ars: null,
           antiguedad_meses: null,
-        },
+        }),
       ],
       discrepancias_y_alertas: [],
       pendientes_en_arca: [
-        {
+        reportRow({
           classification: 'pendiente_en_arca',
           composite_key: 'k2',
           sistema: null,
           arca: voucherRow({ numero: 200, importe_total: 500 }),
           divergencia_ars: null,
           antiguedad_meses: 3,
-        },
+        }),
       ],
+      posibles_coincidencias: [],
     });
 
     const buffer = await toPeriodoReportXlsxBuffer(
@@ -161,7 +168,7 @@ describe('periodo-report-exporter: toPeriodoReportXlsxBuffer', () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
     const sheetNames = workbook.worksheets.map((s) => s.name);
-    expect(sheetNames).toEqual(['Conciliados OK', 'Discrepancias y Alertas', 'Pendientes en ARCA']);
+    expect(sheetNames).toEqual(['Conciliados OK', 'Discrepancias y Alertas', 'Pendientes en ARCA', 'Posible Coincidencia']);
 
     const okSheet = workbook.getWorksheet('Conciliados OK')!;
     expect(okSheet.getCell('A1').value).toBe('Conciliación de Período — 2026-01-01 — Conciliados OK');
@@ -184,15 +191,16 @@ describe('periodo-report-exporter: toPeriodoReportXlsxBuffer', () => {
       conciliados_ok: [],
       discrepancias_y_alertas: [],
       pendientes_en_arca: [
-        {
+        reportRow({
           classification: 'pendiente_en_arca',
           composite_key: 'k1',
           sistema: null,
           arca: voucherRow({ fecha: '2026-03-05' }),
           divergencia_ars: null,
           antiguedad_meses: 1,
-        },
+        }),
       ],
+      posibles_coincidencias: [],
     });
 
     const buffer = await toPeriodoReportXlsxBuffer(

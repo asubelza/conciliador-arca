@@ -38,6 +38,8 @@ export interface PeriodoExportSections {
   conciliados_ok: PeriodoExportRow[];
   discrepancias_y_alertas: PeriodoExportRow[];
   pendientes_en_arca: PeriodoExportRow[];
+  /** RF-04: unconfirmed similarity candidates — their own sheet/section, same as the live report. */
+  posibles_coincidencias: PeriodoExportRow[];
 }
 
 /** Same labels the frontend uses (PeriodoReportViewer.tsx's CLASSIFICATION_LABELS) — kept in sync deliberately, so the on-screen report and the exported file never disagree on wording. */
@@ -47,6 +49,7 @@ export const CLASSIFICATION_LABELS: Record<PeriodoReportRow['classification'], s
   posible_duplicado_en_sistema: 'Posible duplicado en sistema',
   no_existe_en_arca: 'No existe en ARCA',
   pendiente_en_arca: 'Pendiente en ARCA',
+  posible_coincidencia: 'Posible coincidencia',
 };
 
 function toExportRow(row: PeriodoReportRow): PeriodoExportRow {
@@ -77,6 +80,7 @@ export function buildPeriodoExportSections(sections: PeriodoReportSections): Per
     conciliados_ok: sections.conciliados_ok.map(toExportRow).sort(byImporteDesc),
     discrepancias_y_alertas: sections.discrepancias_y_alertas.map(toExportRow).sort(byImporteDesc),
     pendientes_en_arca: sections.pendientes_en_arca.map(toExportRow).sort(byImporteDesc),
+    posibles_coincidencias: sections.posibles_coincidencias.map(toExportRow).sort(byImporteDesc),
   };
 }
 
@@ -107,6 +111,7 @@ const SECTION_LABELS: { key: keyof PeriodoExportSections; label: string }[] = [
   { key: 'conciliados_ok', label: 'Conciliados OK' },
   { key: 'discrepancias_y_alertas', label: 'Discrepancias y Alertas' },
   { key: 'pendientes_en_arca', label: 'Pendientes en ARCA' },
+  { key: 'posibles_coincidencias', label: 'Posible Coincidencia' },
 ];
 
 export function toPeriodoReportCsv(sections: PeriodoExportSections): string {
@@ -142,6 +147,7 @@ const SECTION_STYLE: Record<keyof PeriodoExportSections, { title: string; header
   conciliados_ok: { title: 'Conciliados OK', headerFill: 'FF2E7D32', headerFont: 'FFFFFFFF' },
   discrepancias_y_alertas: { title: 'Discrepancias y Alertas', headerFill: 'FFB45309', headerFont: 'FFFFFFFF' },
   pendientes_en_arca: { title: 'Pendientes en ARCA', headerFill: 'FF334155', headerFont: 'FFFFFFFF' },
+  posibles_coincidencias: { title: 'Posible Coincidencia', headerFill: 'FF6D28D9', headerFont: 'FFFFFFFF' },
 };
 
 function fecha_dd_mm_yyyy(iso: string | null): string {

@@ -25,6 +25,8 @@ const openReportBody = {
         arca: { id: 'a1', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 100, importe_total: 1000, iva: null, fecha: null, file_source: 'arca', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
         divergencia_ars: null,
         antiguedad_meses: null,
+        similarity_reason: null,
+        feedback_previo: null,
       },
     ],
     discrepancias_y_alertas: [],
@@ -36,9 +38,47 @@ const openReportBody = {
         arca: { id: 'a2', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 200, importe_total: 300, iva: null, fecha: null, file_source: 'arca', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
         divergencia_ars: null,
         antiguedad_meses: 3,
+        similarity_reason: null,
+        feedback_previo: null,
       },
     ],
+    posibles_coincidencias: [],
   },
+};
+
+const pendienteRowWithFeedback = {
+  classification: 'pendiente_en_arca',
+  composite_key: '30111111112|1|1|400',
+  sistema: null,
+  arca: { id: 'a4', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 400, importe_total: 700, iva: null, fecha: null, file_source: 'arca', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
+  divergencia_ars: null,
+  antiguedad_meses: 5,
+  similarity_reason: null,
+  feedback_previo: { classification: 'revisado', note: null, created_at: '2026-03-01T00:00:00Z' },
+};
+
+const reportWithFeedback = {
+  ...openReportBody,
+  sections: {
+    ...openReportBody.sections,
+    pendientes_en_arca: [...openReportBody.sections.pendientes_en_arca, pendienteRowWithFeedback],
+  },
+};
+
+const coincidenciaRow = {
+  classification: 'posible_coincidencia',
+  composite_key: '30111111112|1|1|300',
+  sistema: { id: 's3', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 301, importe_total: 500, iva: null, fecha: '2026-04-10', file_source: 'contabilidad', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
+  arca: { id: 'a3', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 300, importe_total: 500, iva: null, fecha: '2026-04-10', file_source: 'arca', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
+  divergencia_ars: null,
+  antiguedad_meses: null,
+  similarity_reason: 'numero difiere en 1 dígito (posible error de tipeo)',
+  feedback_previo: null,
+};
+
+const reportWithCoincidencia = {
+  ...openReportBody,
+  sections: { ...openReportBody.sections, posibles_coincidencias: [coincidenciaRow] },
 };
 
 /**
@@ -159,6 +199,136 @@ describe('T31: PeriodoReportViewer', () => {
       await screen.findByText(/conciliados ok \(1\)/i);
 
       expect(screen.queryByRole('button', { name: /cerrar conciliaci[oó]n del mes/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('RF-04: Posible Coincidencia section', () => {
+    it('renders the section with the similarity reason and lets the contador confirm a pairing', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => reportWithCoincidencia })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ ...coincidenciaRow, status: 'confirmado' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      expect(await screen.findByText(/posible coincidencia \(1\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/numero difiere en 1 dígito/i)).toBeInTheDocument();
+
+      const confirmarButton = screen.getByRole('button', { name: /^confirmar$/i });
+      await act(async () => {
+        await userEvent.click(confirmarButton);
+      });
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining(`/api/periodos/${PERIODO_ID}/coincidencias`),
+        expect.objectContaining({ method: 'POST' }),
+      );
+      const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+      expect(body).toEqual({ sistema_voucher_id: 's3', arca_voucher_id: 'a3', accion: 'confirmar' });
+      // Confirming reloads the report — a 3rd fetch happens.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    });
+
+    it('lets the contador descartar a pairing', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => reportWithCoincidencia })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ ...coincidenciaRow, status: 'descartado' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const descartarButton = await screen.findByRole('button', { name: /^descartar$/i });
+      await act(async () => {
+        await userEvent.click(descartarButton);
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+      expect(body).toEqual({ sistema_voucher_id: 's3', arca_voucher_id: 'a3', accion: 'descartar' });
+    });
+
+    it('cliente sees the section but no Confirmar/Descartar/mark buttons (read-only, RF-14)', async () => {
+      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithCoincidencia }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      expect(await screen.findByText(/posible coincidencia \(1\)/i)).toBeInTheDocument();
+
+      expect(screen.queryByRole('button', { name: /^confirmar$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^descartar$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^revisado$/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('RF-09: feedback previo + marks', () => {
+    it('shows the prior feedback note under a row that already has one, without hiding the row', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithFeedback }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      expect(await screen.findByText(/pendientes en arca \(2\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/revisado antes/i)).toBeInTheDocument();
+    });
+
+    it('creates a "revisado" mark for a pendiente_en_arca row', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ id: 'm1', tenant_id: 't1', user_id: 'u1', composite_key: '30111111112|1|1|200', classification: 'revisado', note: null, created_at: '2026-04-01T00:00:00Z' }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const revisadoButton = await screen.findByRole('button', { name: /^revisado$/i });
+      await act(async () => {
+        await userEvent.click(revisadoButton);
+      });
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining(`/api/periodos/${PERIODO_ID}/marks`),
+        expect.objectContaining({ method: 'POST' }),
+      );
+      const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+      expect(body).toEqual({ composite_key: '30111111112|1|1|200', classification: 'revisado', note: null });
+    });
+
+    it('creates an "explicado" mark with a note from a window.prompt', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ id: 'm2', tenant_id: 't1', user_id: 'u1', composite_key: '30111111112|1|1|200', classification: 'explicado', note: 'diferencia de cambio', created_at: '2026-04-01T00:00:00Z' }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      jest.spyOn(window, 'prompt').mockReturnValue('diferencia de cambio');
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const explicadoButton = await screen.findByRole('button', { name: /^explicado$/i });
+      await act(async () => {
+        await userEvent.click(explicadoButton);
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+      expect(body).toEqual({ composite_key: '30111111112|1|1|200', classification: 'explicado', note: 'diferencia de cambio' });
+    });
+
+    it('aborts the "explicado" mark when the prompt is cancelled', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      jest.spyOn(window, 'prompt').mockReturnValue(null);
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const explicadoButton = await screen.findByRole('button', { name: /^explicado$/i });
+      await userEvent.click(explicadoButton);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial load — no POST fired
     });
   });
 });

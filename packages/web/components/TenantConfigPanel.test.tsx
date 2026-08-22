@@ -9,28 +9,38 @@ describe('T32: TenantConfigPanel', () => {
     jest.restoreAllMocks();
   });
 
-  it('loads and displays the current tolerance', async () => {
+  it('loads and displays the current tolerance (redondeo + días de fecha)', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99' }),
+      json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 }),
     }) as unknown as typeof fetch;
 
     render(<TenantConfigPanel tenantId={TENANT_ID} />);
 
     expect(await screen.findByDisplayValue('0.99')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('5')).toBeInTheDocument();
   });
 
-  it('saves an updated tolerance via PUT', async () => {
+  it('saves an updated tolerance via PUT, sending both fields together', async () => {
     const fetchMock = jest
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '2.50' }) });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '2.50', tolerancia_dias_fecha: 10 }),
+      });
     global.fetch = fetchMock as unknown as typeof fetch;
 
     render(<TenantConfigPanel tenantId={TENANT_ID} />);
     const input = await screen.findByDisplayValue('0.99');
     await userEvent.clear(input);
     await userEvent.type(input, '2.50');
+    const diasInput = screen.getByDisplayValue('5');
+    await userEvent.clear(diasInput);
+    await userEvent.type(diasInput, '10');
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /guardar/i }));
     });
@@ -42,12 +52,13 @@ describe('T32: TenantConfigPanel', () => {
     );
     const body = JSON.parse(fetchMock.mock.calls[1][1].body as string);
     expect(body.tolerancia_redondeo_ars).toBe(2.5);
+    expect(body.tolerancia_dias_fecha).toBe(10);
   });
 
   it('shows an error for a negative tolerance instead of saving', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99' }),
+      json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 }),
     }) as unknown as typeof fetch;
 
     render(<TenantConfigPanel tenantId={TENANT_ID} />);
@@ -62,5 +73,21 @@ describe('T32: TenantConfigPanel', () => {
     });
 
     expect(await screen.findByRole('alert')).toHaveTextContent('non-negative');
+  });
+
+  it('shows an error for an out-of-range tolerancia_dias_fecha instead of saving', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: TENANT_ID, tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 }),
+    }) as unknown as typeof fetch;
+
+    render(<TenantConfigPanel tenantId={TENANT_ID} />);
+    const diasInput = await screen.findByDisplayValue('5');
+    fireEvent.change(diasInput, { target: { value: '400' } });
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /guardar/i }));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('between 0 and 365');
   });
 });

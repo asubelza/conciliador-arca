@@ -15,6 +15,7 @@ import { assertRole } from '../auth/role-check';
 export interface TenantConfigRow {
   id: string;
   tolerancia_redondeo_ars: string;
+  tolerancia_dias_fecha: number;
 }
 
 /**
@@ -42,7 +43,7 @@ export class TenantsController {
     }
 
     const { rows } = await pool.query<TenantConfigRow>(
-      'SELECT id, tolerancia_redondeo_ars FROM tenants WHERE id = $1',
+      'SELECT id, tolerancia_redondeo_ars, tolerancia_dias_fecha FROM tenants WHERE id = $1',
       [id],
     );
     if (rows.length === 0) {
@@ -74,12 +75,15 @@ export class TenantsController {
       throw new HttpException({ error: authFailure.error }, authFailure.status);
     }
 
-    const { tolerancia_redondeo_ars: tolerancia } = body as { tolerancia_redondeo_ars: number };
+    const { tolerancia_redondeo_ars: tolerancia, tolerancia_dias_fecha: toleranciaDias } = body as {
+      tolerancia_redondeo_ars: number;
+      tolerancia_dias_fecha: number;
+    };
     const { rows } = await pool.query<TenantConfigRow>(
-      `UPDATE tenants SET tolerancia_redondeo_ars = $1, updated_at = now()
-       WHERE id = $2
-       RETURNING id, tolerancia_redondeo_ars`,
-      [tolerancia, id],
+      `UPDATE tenants SET tolerancia_redondeo_ars = $1, tolerancia_dias_fecha = $2, updated_at = now()
+       WHERE id = $3
+       RETURNING id, tolerancia_redondeo_ars, tolerancia_dias_fecha`,
+      [tolerancia, toleranciaDias, id],
     );
     if (rows.length === 0) {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);

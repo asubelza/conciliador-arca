@@ -17,6 +17,9 @@ import {
 import { cerrarPeriodo } from './periodo-cierre';
 import { getPeriodoReport } from './periodo-report';
 import { buildPeriodoExportSections, toPeriodoReportCsv, toPeriodoReportXlsxBuffer } from './periodo-report-exporter';
+import { validateCoincidenciaRequest } from './coincidencia-validation';
+import { validateMarkRequest } from '../reconciliations/marks-validation';
+import { insertFeedbackMark } from '../reconciliations/feedback-writer';
 import { logAuditEvent } from '../reconciliations/audit-logger';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
@@ -298,5 +301,169 @@ export class PeriodosController {
         'Content-Disposition': `attachment; filename="periodo-${result.periodo.mes}-${id}.csv"`,
       })
       .send(csv);
+  }
+
+  /**
+   * RF-04/RF-13: contador confirma o descarta una sugerencia de coincidencia
+   * por similitud (periodo-matching-engine.ts's `posible_coincidencia`
+   * classification, from the AskUserQuestion design answers: "Nueva
+   * categoría 'Posible coincidencia'... el contador confirma o descarta con
+   * un click"). This endpoint only persists the decision into
+   * `fuzzy_match_confirmations`; a 'confirmado' pairing is then picked up
+   * automatically by matchPeriodo's fetchFuzzyConfirmations on the NEXT
+   * report read and treated exactly like an exact composite-key match — see
+   * periodo-matching-engine.ts's module doc. Restricted to an abierto
+   * período: once cerrado, the report is a frozen snapshot
+   * (periodo-report.ts / periodo-cierre.ts) that a later confirmation can no
+   * longer change, so accepting one against a cerrado período would
+   * silently do nothing visible — rejected outright instead (409, same
+   * status the cerrar-twice case uses for "this período's state won't allow
+   * that").
+   */
+  @Post(':id/coincidencias')
+  @HttpCode(HttpStatus.OK)
+  async coincidencia(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validateCoincidenciaRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const { rows: periodoRows } = await pool.query<{ tenant_id: string; estado: 'abierto' | 'cerrado' }>(
+      'SELECT tenant_id, estado FROM periodos WHERE id = $1',
+      [id],
+    );
+    if (periodoRows.length === 0) {
+      throw new HttpException({ error: 'período not found' }, HttpStatus.NOT_FOUND);
+    }
+    const { tenant_id: tenantId, estado } = periodoRows[0];
+
+    const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    if (estado === 'cerrado') {
+      throw new HttpException(
+        { error: 'período is closed — coincidencia confirmations only apply to an abierto período' },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const { sistema_voucher_id, arca_voucher_id, accion } = validation.value;
+
+    // Both vouchers must exist and belong to THIS tenant — the pair should
+    // always come straight from this tenant's own report, so an unknown or
+    // cross-tenant id here is a client bug, surfaced as 404 rather than left
+    // to fail opaquely on the FK constraint below.
+    const { rows: voucherRows } = await pool.query<{ id: string }>(
+      'SELECT id FROM vouchers_canonical WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+      [tenantId, [sistema_voucher_id, arca_voucher_id]],
+    );
+    if (voucherRows.length !== 2) {
+      throw new HttpException(
+        { error: 'sistema_voucher_id / arca_voucher_id must both reference existing vouchers for this tenant' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const status = accion === 'confirmar' ? 'confirmado' : 'descartado';
+
+    const { rows } = await pool.query<{
+      tenant_id: string;
+      sistema_voucher_id: string;
+      arca_voucher_id: string;
+      status: string;
+      created_by: string | null;
+      created_at: string;
+    }>(
+      `INSERT INTO fuzzy_match_confirmations (tenant_id, sistema_voucher_id, arca_voucher_id, status, created_by)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (sistema_voucher_id, arca_voucher_id)
+       DO UPDATE SET status = EXCLUDED.status, created_by = EXCLUDED.created_by, created_at = now()
+       RETURNING tenant_id, sistema_voucher_id, arca_voucher_id, status, created_by, created_at`,
+      [tenantId, sistema_voucher_id, arca_voucher_id, status, req.user!.id],
+    );
+
+    await logAuditEvent(pool, {
+      tenantId,
+      userId: req.user!.id,
+      action: status === 'confirmado' ? 'confirm_similarity' : 'discard_similarity',
+      entity: 'vouchers_canonical',
+      entityId: sistema_voucher_id,
+      details: { arca_voucher_id, status },
+    });
+
+    return rows[0];
+  }
+
+  /**
+   * RF-09: período-scoped mark (`revisado`/`explicado`), feeding
+   * periodo-report.ts's `attachFeedbackAndReprioritize` (from the
+   * AskUserQuestion design answer: "Mostrar la nota anterior + bajar
+   * prioridad, nunca ocultar"). Reuses marks-validation.ts/feedback-writer.ts
+   * from the per-job endpoint (T12, `POST /api/reconciliations/:jobId/marks`)
+   * — same `feedback_loop` table, same classifications — with two
+   * deliberate differences: (1) scoped by período id rather than job id, so
+   * a mark can be made straight from the período report UI even for a
+   * comprobante that was never part of a single upload job's own result set
+   * (e.g. carried over from a prior período as pendiente_en_arca); and (2)
+   * the user id comes from the authenticated JWT (`req.user!.id`), never a
+   * body-supplied `user_id` — the older job-scoped endpoint predates auth
+   * and still trusts the body for that field (see marks-validation.ts's own
+   * doc comment); this one is written correctly from the start rather than
+   * copying that pre-auth gap forward.
+   */
+  @Post(':id/marks')
+  @HttpCode(HttpStatus.CREATED)
+  async mark(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validateMarkRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const tenantId = await resolvePeriodoTenantId(pool, id as string);
+    if (tenantId === undefined) {
+      throw new HttpException({ error: 'período not found' }, HttpStatus.NOT_FOUND);
+    }
+
+    const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const mark = await insertFeedbackMark(pool, tenantId, { ...validation.value, user_id: req.user!.id });
+
+    await logAuditEvent(pool, {
+      tenantId,
+      userId: req.user!.id,
+      action: 'user_mark',
+      entity: 'feedback_loop',
+      entityId: mark.id,
+      details: { composite_key: validation.value.composite_key, classification: validation.value.classification },
+    });
+
+    return mark;
   }
 }
