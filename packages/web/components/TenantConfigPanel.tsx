@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { getTenantConfig, updateTenantConfig } from '@/lib/api';
+import { CheckIcon, SpinnerIcon } from './icons';
 
 export interface TenantConfigPanelProps {
   tenantId: string;
@@ -71,7 +72,12 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
   }
 
   if (loading) {
-    return <p className="text-sm text-gray-600">Cargando configuración…</p>;
+    return (
+      <p className="mt-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <SpinnerIcon size={16} />
+        Cargando configuración…
+      </p>
+    );
   }
 
   return (
@@ -81,9 +87,13 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
     // validation silently blocks the submit event for an out-of-range
     // value before handleSubmit ever runs, so this form's own error UI
     // (and audit trail) would never fire for that case.
-    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3 border rounded p-3 mt-2">
-      <div className="flex flex-col gap-2">
-        <label htmlFor="tolerancia" className="text-sm font-medium">
+    <form
+      onSubmit={handleSubmit}
+      noValidate
+      className="mt-2 flex flex-col gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/60"
+    >
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="tolerancia" className="text-sm font-medium text-slate-700 dark:text-slate-300">
           Tolerancia de redondeo (ARS)
         </label>
         <input
@@ -96,11 +106,11 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
             setValue(e.target.value);
             setSaved(false);
           }}
-          className="border rounded px-3 py-2"
+          className="focus-ring w-full max-w-[12rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
         />
       </div>
-      <div className="flex flex-col gap-2">
-        <label htmlFor="tolerancia-dias" className="text-sm font-medium">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="tolerancia-dias" className="text-sm font-medium text-slate-700 dark:text-slate-300">
           Tolerancia de fecha (días) — para coincidencias por similitud
         </label>
         <input
@@ -114,20 +124,30 @@ export function TenantConfigPanel({ tenantId }: TenantConfigPanelProps) {
             setDiasFecha(e.target.value);
             setSaved(false);
           }}
-          className="border rounded px-3 py-2"
+          className="focus-ring w-full max-w-[12rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
         />
       </div>
       <div>
-        <button type="submit" disabled={saving} className="bg-blue-600 text-white rounded px-4 py-2 disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={saving}
+          className="focus-ring inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {saving && <SpinnerIcon size={16} />}
           {saving ? 'Guardando…' : 'Guardar'}
         </button>
       </div>
       {error && (
-        <p role="alert" className="text-red-600 text-sm">
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
           {error}
         </p>
       )}
-      {saved && !error && <p className="text-green-700 text-sm">Guardado.</p>}
+      {saved && !error && (
+        <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+          <CheckIcon size={16} />
+          Guardado.
+        </p>
+      )}
     </form>
   );
 }

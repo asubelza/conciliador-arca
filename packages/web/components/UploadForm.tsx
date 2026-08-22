@@ -6,6 +6,7 @@ import {
   uploadReconciliation,
   type ContabilidadSourceSystem,
 } from '@/lib/api';
+import { SpinnerIcon, UploadIcon } from './icons';
 
 export interface UploadFormProps {
   tenantId: string;
@@ -67,16 +68,19 @@ export function UploadForm({ tenantId, periodoId, onUploaded }: UploadFormProps)
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-xl">
-      <div className="flex flex-col gap-1">
-        <label htmlFor="source-system" className="text-sm font-medium">
+    <form
+      onSubmit={handleSubmit}
+      className="flex max-w-xl flex-col gap-5 rounded-xl border border-slate-200 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900"
+    >
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="source-system" className="text-sm font-medium text-slate-700 dark:text-slate-300">
           Sistema contable
         </label>
         <select
           id="source-system"
           value={contabilidadSourceSystem}
           onChange={(e) => setContabilidadSourceSystem(e.target.value as ContabilidadSourceSystem)}
-          className="border rounded px-3 py-2"
+          className="focus-ring rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
         >
           {CONTABILIDAD_SOURCE_SYSTEMS.map((system) => (
             <option key={system} value={system}>
@@ -86,32 +90,40 @@ export function UploadForm({ tenantId, periodoId, onUploaded }: UploadFormProps)
         </select>
       </div>
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="arca-file" className="text-sm font-medium">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="arca-file" className="text-sm font-medium text-slate-700 dark:text-slate-300">
           Archivo ARCA
         </label>
-        <input
-          id="arca-file"
-          type="file"
-          accept=".csv,.xlsx,.xls"
-          onChange={(e) => setArcaFile(e.target.files?.[0] ?? null)}
-        />
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/60">
+          <UploadIcon size={16} className="shrink-0 text-slate-400" />
+          <input
+            id="arca-file"
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={(e) => setArcaFile(e.target.files?.[0] ?? null)}
+            className="focus-ring w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-indigo-500 dark:text-slate-300"
+          />
+        </div>
       </div>
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="contabilidad-file" className="text-sm font-medium">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="contabilidad-file" className="text-sm font-medium text-slate-700 dark:text-slate-300">
           Archivo Contabilidad
         </label>
-        <input
-          id="contabilidad-file"
-          type="file"
-          accept=".csv,.xlsx,.xls"
-          onChange={(e) => setContabilidadFile(e.target.files?.[0] ?? null)}
-        />
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/60">
+          <UploadIcon size={16} className="shrink-0 text-slate-400" />
+          <input
+            id="contabilidad-file"
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            onChange={(e) => setContabilidadFile(e.target.files?.[0] ?? null)}
+            className="focus-ring w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-indigo-500 dark:text-slate-300"
+          />
+        </div>
       </div>
 
       {error && (
-        <p role="alert" className="text-red-600 text-sm">
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
           {error}
         </p>
       )}
@@ -119,8 +131,9 @@ export function UploadForm({ tenantId, periodoId, onUploaded }: UploadFormProps)
       <button
         type="submit"
         disabled={submitting}
-        className="bg-blue-600 text-white rounded px-4 py-2 disabled:opacity-50"
+        className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white shadow-card hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
       >
+        {submitting && <SpinnerIcon size={16} />}
         {submitting ? 'Subiendo…' : 'Subir y conciliar'}
       </button>
     </form>

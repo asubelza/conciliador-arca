@@ -1,3 +1,26 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    font-family: theme('fontFamily.sans');
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  /* Transición suave de color al alternar el tema, sin animar layout */
+  * {
+    @apply transition-colors duration-150;
+  }
+}
+
+@layer components {
+  /* Foco visible consistente para elementos interactivos, en ambos temas */
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-950;
+  }
+}

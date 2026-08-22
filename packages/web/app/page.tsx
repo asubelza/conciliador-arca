@@ -7,8 +7,16 @@ import { StatusPoller } from '@/components/StatusPoller';
 import { ReportViewer } from '@/components/ReportViewer';
 import { PeriodoReportViewer } from '@/components/PeriodoReportViewer';
 import { LoginForm } from '@/components/LoginForm';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
-import type { Periodo } from '@/lib/api';
+import type { Periodo, SessionUser } from '@/lib/api';
+
+const ROLE_BADGE_CLASSES: Record<SessionUser['role'], string> = {
+  admin: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300',
+  colaborador: 'bg-sky-50 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300',
+  cliente: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
+};
 
 type UploadStep = 'upload' | 'processing' | 'completed';
 
@@ -70,90 +78,137 @@ export default function Home() {
   }
 
   return (
-    <main className="max-w-3xl mx-auto p-8 flex flex-col gap-8">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Conciliador Inteligente de Comprobantes</h1>
-          <p className="text-sm text-gray-600">Subí el archivo de ARCA y el de tu sistema contable para conciliar.</p>
-        </div>
-        <div className="text-right">
-          <p className="text-sm text-gray-700">{user.display_name ?? user.email}</p>
-          <p className="text-xs text-gray-500">{user.role}</p>
-          <button type="button" onClick={() => clearSession()} className="text-xs underline text-gray-600">
-            Cerrar sesión
-          </button>
-        </div>
-      </div>
-
-      {!periodo && <PeriodoSelector onSelected={handlePeriodoSelected} />}
-
-      {periodo && tenantId && (
-        <div className="flex flex-col gap-6">
-          <div className="flex items-center justify-between border-b pb-3">
-            <div>
-              <p className="text-sm font-medium">
-                Período {periodo.mes} — <span className={periodo.estado === 'abierto' ? 'text-green-700' : 'text-gray-500'}>{periodo.estado}</span>
-              </p>
-              <p className="text-xs text-gray-600">Tenant {tenantId}</p>
-            </div>
-            <div className="flex gap-3">
-              {periodo.estado === 'abierto' && (
-                <button type="button" onClick={() => setShowPeriodoReport((v) => !v)} className="text-sm underline text-blue-600">
-                  {showPeriodoReport ? 'Ocultar reporte del período' : 'Ver reporte del período'}
-                </button>
-              )}
-              <button type="button" onClick={handleChangePeriodo} className="text-sm underline text-gray-600">
-                Cambiar período
-              </button>
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80">
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-3 sm:px-8">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white">
+              <BuildingIcon size={20} />
+            </span>
+            <div className="hidden sm:block">
+              <h1 className="text-sm font-semibold leading-tight text-slate-900 dark:text-slate-50">
+                Conciliador Inteligente de Comprobantes
+              </h1>
+              <p className="text-xs leading-tight text-slate-500 dark:text-slate-400">ARCA vs. sistema contable</p>
             </div>
           </div>
 
-          {periodo.estado === 'abierto' && !showPeriodoReport && (
-            <>
-              {/* T39 (Fase 3): cliente is read-only (RF-14) — POST
-                  /api/reconciliations is admin/colaborador-only server-side
-                  (assertRole in reconciliations.controller.ts), so a
-                  cliente never sees a form that would only 403 anyway. */}
-              {uploadStep === 'upload' && user.role === 'cliente' && (
-                <p className="text-sm text-gray-600">
-                  Tu usuario es de solo lectura — no podés subir comprobantes para este período.
-                </p>
-              )}
-
-              {uploadStep === 'upload' && user.role !== 'cliente' && (
-                <UploadForm
-                  tenantId={tenantId}
-                  periodoId={periodo.id}
-                  onUploaded={(id) => {
-                    setJobId(id);
-                    setUploadStep('processing');
-                  }}
-                />
-              )}
-
-              {uploadStep === 'processing' && jobId && (
-                <StatusPoller jobId={jobId} onCompleted={() => setUploadStep('completed')} />
-              )}
-
-              {uploadStep === 'completed' && jobId && (
-                <div className="flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
-                    <p className="text-green-700 text-sm">Carga procesada.</p>
-                    <button type="button" onClick={handleUploadAnother} className="bg-blue-600 text-white rounded px-4 py-2 text-sm">
-                      Subir otro archivo
-                    </button>
-                  </div>
-                  <ReportViewer jobId={jobId} />
-                </div>
-              )}
-            </>
-          )}
-
-          {(showPeriodoReport || periodo.estado === 'cerrado') && (
-            <PeriodoReportViewer periodoId={periodo.id} onClosed={(closed) => setPeriodo(closed)} />
-          )}
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <p className="max-w-[10rem] truncate text-sm font-medium text-slate-700 dark:text-slate-200 sm:max-w-none">
+                {user.display_name ?? user.email}
+              </p>
+              <span
+                className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${ROLE_BADGE_CLASSES[user.role]}`}
+              >
+                {user.role}
+              </span>
+            </div>
+            <ThemeToggle />
+            <button
+              type="button"
+              onClick={() => clearSession()}
+              className="focus-ring inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+              <LogoutIcon size={16} />
+              <span className="hidden sm:inline">Cerrar sesión</span>
+            </button>
+          </div>
         </div>
-      )}
-    </main>
+      </header>
+
+      <main className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8 sm:px-8">
+        {!periodo && <PeriodoSelector onSelected={handlePeriodoSelected} />}
+
+        {periodo && tenantId && (
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                  Período {periodo.mes} —{' '}
+                  <span
+                    className={
+                      periodo.estado === 'abierto'
+                        ? 'font-semibold text-emerald-600 dark:text-emerald-400'
+                        : 'font-semibold text-slate-500 dark:text-slate-400'
+                    }
+                  >
+                    {periodo.estado}
+                  </span>
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Tenant {tenantId}</p>
+              </div>
+              <div className="flex gap-4">
+                {periodo.estado === 'abierto' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPeriodoReport((v) => !v)}
+                    className="focus-ring rounded text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                  >
+                    {showPeriodoReport ? 'Ocultar reporte del período' : 'Ver reporte del período'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleChangePeriodo}
+                  className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                >
+                  Cambiar período
+                </button>
+              </div>
+            </div>
+
+            {periodo.estado === 'abierto' && !showPeriodoReport && (
+              <>
+                {/* T39 (Fase 3): cliente is read-only (RF-14) — POST
+                    /api/reconciliations is admin/colaborador-only server-side
+                    (assertRole in reconciliations.controller.ts), so a
+                    cliente never sees a form that would only 403 anyway. */}
+                {uploadStep === 'upload' && user.role === 'cliente' && (
+                  <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-card dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                    Tu usuario es de solo lectura — no podés subir comprobantes para este período.
+                  </p>
+                )}
+
+                {uploadStep === 'upload' && user.role !== 'cliente' && (
+                  <UploadForm
+                    tenantId={tenantId}
+                    periodoId={periodo.id}
+                    onUploaded={(id) => {
+                      setJobId(id);
+                      setUploadStep('processing');
+                    }}
+                  />
+                )}
+
+                {uploadStep === 'processing' && jobId && (
+                  <StatusPoller jobId={jobId} onCompleted={() => setUploadStep('completed')} />
+                )}
+
+                {uploadStep === 'completed' && jobId && (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-card dark:border-emerald-900 dark:bg-emerald-950/30">
+                      <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Carga procesada.</p>
+                      <button
+                        type="button"
+                        onClick={handleUploadAnother}
+                        className="focus-ring rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-card hover:bg-indigo-500"
+                      >
+                        Subir otro archivo
+                      </button>
+                    </div>
+                    <ReportViewer jobId={jobId} />
+                  </div>
+                )}
+              </>
+            )}
+
+            {(showPeriodoReport || periodo.estado === 'cerrado') && (
+              <PeriodoReportViewer periodoId={periodo.id} onClosed={(closed) => setPeriodo(closed)} />
+            )}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }

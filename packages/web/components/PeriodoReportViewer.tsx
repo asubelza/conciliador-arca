@@ -12,6 +12,7 @@ import {
   type PeriodoReportRow,
 } from '@/lib/api';
 import { useAuth } from '@/lib/session';
+import { CheckIcon, SpinnerIcon, XIcon } from './icons';
 
 export interface PeriodoReportViewerProps {
   periodoId: string;
@@ -48,6 +49,33 @@ const CLASSIFICATION_LABELS: Record<PeriodoReportRow['classification'], string> 
   pendiente_en_arca: 'Pendiente en ARCA',
   posible_coincidencia: 'Posible coincidencia',
 };
+
+/**
+ * Acento de color por sección — puramente visual, no cambia ningún texto
+ * renderizado. `posibles_coincidencias` usa violeta a propósito: coincide
+ * con el acento FF6D28D9 que periodo-report-exporter.ts ya usa para esa
+ * misma sección en el XLSX, para que pantalla y export se vean consistentes.
+ */
+const SECTION_ACCENT: Record<keyof PeriodoReport['sections'], { dot: string; header: string }> = {
+  conciliados_ok: { dot: 'bg-emerald-500', header: 'text-emerald-700 dark:text-emerald-400' },
+  discrepancias_y_alertas: { dot: 'bg-amber-500', header: 'text-amber-700 dark:text-amber-400' },
+  pendientes_en_arca: { dot: 'bg-slate-400', header: 'text-slate-700 dark:text-slate-300' },
+  posibles_coincidencias: { dot: 'bg-violet-500', header: 'text-violet-700 dark:text-violet-400' },
+};
+
+/** Color de la etiqueta de clasificación — solo estético. */
+function classificationBadgeClass(classification: PeriodoReportRow['classification']): string {
+  if (classification === 'conciliado_ok') {
+    return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400';
+  }
+  if (classification === 'posible_coincidencia') {
+    return 'bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-400';
+  }
+  if (classification === 'con_divergencia' || classification === 'posible_duplicado_en_sistema') {
+    return 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400';
+  }
+  return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+}
 
 function importeOf(row: PeriodoReportRow): number | null {
   return row.arca?.importe_total ?? row.sistema?.importe_total ?? null;
@@ -177,31 +205,53 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
 
   if (error) {
     return (
-      <p role="alert" className="text-red-600 text-sm">
+      <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
         {error}
       </p>
     );
   }
 
   if (!report) {
-    return <p className="text-sm text-gray-600">Cargando reporte…</p>;
+    return (
+      <p className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <SpinnerIcon size={16} />
+        Cargando reporte…
+      </p>
+    );
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold">
-            Reporte de {report.periodo.mes} — {report.periodo.estado}
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+            Reporte de {report.periodo.mes} —{' '}
+            <span
+              className={
+                report.periodo.estado === 'abierto'
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-slate-500 dark:text-slate-400'
+              }
+            >
+              {report.periodo.estado}
+            </span>
           </h2>
-          <p className="text-xs text-gray-600">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
             {report.live ? 'Vista en vivo (el período sigue abierto).' : 'Snapshot congelado al momento del cierre.'}
           </p>
-          <div className="flex gap-3 mt-1">
-            <button type="button" onClick={() => handleDownload('csv')} className="text-blue-600 underline text-sm">
+          <div className="mt-2 flex gap-3">
+            <button
+              type="button"
+              onClick={() => handleDownload('csv')}
+              className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
               Descargar CSV
             </button>
-            <button type="button" onClick={() => handleDownload('xlsx')} className="text-blue-600 underline text-sm">
+            <button
+              type="button"
+              onClick={() => handleDownload('xlsx')}
+              className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
               Descargar Excel
             </button>
           </div>
@@ -214,27 +264,28 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
             type="button"
             onClick={handleCerrar}
             disabled={closing}
-            className="bg-red-600 text-white rounded px-4 py-2 disabled:opacity-50"
+            className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white shadow-card hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
+            {closing && <SpinnerIcon size={16} />}
             {closing ? 'Cerrando…' : 'Cerrar Conciliación del Mes'}
           </button>
         )}
       </div>
 
       {downloadError && (
-        <p role="alert" className="text-red-600 text-sm">
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
           {downloadError}
         </p>
       )}
 
       {closeError && (
-        <p role="alert" className="text-red-600 text-sm">
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
           {closeError}
         </p>
       )}
 
       {rowActionError && (
-        <p role="alert" className="text-red-600 text-sm">
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
           {rowActionError}
         </p>
       )}
@@ -245,99 +296,130 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
         const showAntiguedad = key === 'pendientes_en_arca';
         const showMotivo = key === 'posibles_coincidencias';
         const markable = canAct && MARKABLE_SECTIONS.has(key);
+        const accent = SECTION_ACCENT[key];
         return (
-          <div key={key} className="flex flex-col gap-2">
-            <h3 className="text-sm font-semibold">
+          <div
+            key={key}
+            className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900"
+          >
+            <h3 className={`flex items-center gap-2 text-sm font-semibold ${accent.header}`}>
+              <span className={`inline-block h-2 w-2 rounded-full ${accent.dot}`} />
               {title} ({rows.length})
             </h3>
             {rows.length === 0 ? (
-              <p className="text-sm text-gray-600">Sin filas.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Sin filas.</p>
             ) : (
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="text-left border-b">
-                    <th className="py-1 pr-3">Comprobante</th>
-                    <th className="py-1 pr-3">Clasificación</th>
-                    <th className="py-1 pr-3">Importe</th>
-                    {showDivergencia && <th className="py-1 pr-3">Divergencia</th>}
-                    {showAntiguedad && <th className="py-1 pr-3">Antigüedad (meses)</th>}
-                    {showMotivo && <th className="py-1 pr-3">Motivo</th>}
-                    {markable && <th className="py-1 pr-3">Acciones</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => {
-                    const rowKey = row.composite_key + row.classification;
-                    return (
-                      <tr key={rowKey} className="border-b align-top">
-                        <td className="py-1 pr-3">
-                          {compositeKeyLabel(row)}
-                          {row.feedback_previo && (
-                            <div className="text-xs text-gray-500 italic mt-0.5">{feedbackLabel(row.feedback_previo)}</div>
-                          )}
-                        </td>
-                        <td className="py-1 pr-3">{CLASSIFICATION_LABELS[row.classification]}</td>
-                        <td className="py-1 pr-3">{importeOf(row) ?? '—'}</td>
-                        {showDivergencia && (
-                          <td className="py-1 pr-3">
-                            {row.divergencia_ars !== null ? (
-                              <span className="text-amber-700">${row.divergencia_ars.toFixed(2)}</span>
-                            ) : (
-                              '—'
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <th className="px-3 py-2 font-medium">Comprobante</th>
+                      <th className="px-3 py-2 font-medium">Clasificación</th>
+                      <th className="px-3 py-2 font-medium">Importe</th>
+                      {showDivergencia && <th className="px-3 py-2 font-medium">Divergencia</th>}
+                      {showAntiguedad && <th className="px-3 py-2 font-medium">Antigüedad (meses)</th>}
+                      {showMotivo && <th className="px-3 py-2 font-medium">Motivo</th>}
+                      {markable && <th className="px-3 py-2 font-medium">Acciones</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => {
+                      const rowKey = row.composite_key + row.classification;
+                      return (
+                        <tr key={rowKey} className="border-b border-slate-100 align-top last:border-0 dark:border-slate-800/60">
+                          <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
+                            {compositeKeyLabel(row)}
+                            {row.feedback_previo && (
+                              <div className="mt-0.5 text-xs italic text-slate-500 dark:text-slate-400">
+                                {feedbackLabel(row.feedback_previo)}
+                              </div>
                             )}
                           </td>
-                        )}
-                        {showAntiguedad && <td className="py-1 pr-3">{row.antiguedad_meses ?? '—'}</td>}
-                        {showMotivo && <td className="py-1 pr-3 text-gray-700">{row.similarity_reason ?? '—'}</td>}
-                        {markable && (
-                          <td className="py-1 pr-3">
-                            <div className="flex flex-col gap-1 items-start">
-                              {key === 'posibles_coincidencias' && row.sistema && row.arca && (
-                                <div className="flex gap-2">
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${classificationBadgeClass(row.classification)}`}
+                            >
+                              {CLASSIFICATION_LABELS[row.classification]}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{importeOf(row) ?? '—'}</td>
+                          {showDivergencia && (
+                            <td className="px-3 py-2">
+                              {row.divergencia_ars !== null ? (
+                                <span className="font-medium text-amber-700 dark:text-amber-400">
+                                  ${row.divergencia_ars.toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
+                          )}
+                          {showAntiguedad && (
+                            <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{row.antiguedad_meses ?? '—'}</td>
+                          )}
+                          {showMotivo && (
+                            <td className="px-3 py-2 text-slate-600 dark:text-slate-400">{row.similarity_reason ?? '—'}</td>
+                          )}
+                          {markable && (
+                            <td className="px-3 py-2">
+                              <div className="flex flex-col items-start gap-1.5">
+                                {key === 'posibles_coincidencias' && row.sistema && row.arca && (
+                                  <div className="flex gap-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCoincidencia(row, 'confirmar')}
+                                      disabled={pendingActionKey === `${row.composite_key}:confirmar`}
+                                      className="focus-ring inline-flex items-center gap-1 rounded text-xs font-medium text-emerald-600 hover:text-emerald-500 disabled:opacity-50 dark:text-emerald-400"
+                                    >
+                                      {pendingActionKey === `${row.composite_key}:confirmar` ? (
+                                        <SpinnerIcon size={12} />
+                                      ) : (
+                                        <CheckIcon size={12} />
+                                      )}
+                                      Confirmar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCoincidencia(row, 'descartar')}
+                                      disabled={pendingActionKey === `${row.composite_key}:descartar`}
+                                      className="focus-ring inline-flex items-center gap-1 rounded text-xs font-medium text-red-600 hover:text-red-500 disabled:opacity-50 dark:text-red-400"
+                                    >
+                                      {pendingActionKey === `${row.composite_key}:descartar` ? (
+                                        <SpinnerIcon size={12} />
+                                      ) : (
+                                        <XIcon size={12} />
+                                      )}
+                                      Descartar
+                                    </button>
+                                  </div>
+                                )}
+                                <div className="flex gap-3">
                                   <button
                                     type="button"
-                                    onClick={() => handleCoincidencia(row, 'confirmar')}
-                                    disabled={pendingActionKey === `${row.composite_key}:confirmar`}
-                                    className="text-green-700 underline text-xs disabled:opacity-50"
+                                    onClick={() => handleMark(row, 'revisado')}
+                                    disabled={pendingActionKey === `${row.composite_key}:revisado`}
+                                    className="focus-ring rounded text-xs font-medium text-indigo-600 hover:text-indigo-500 disabled:opacity-50 dark:text-indigo-400"
                                   >
-                                    Confirmar
+                                    Revisado
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => handleCoincidencia(row, 'descartar')}
-                                    disabled={pendingActionKey === `${row.composite_key}:descartar`}
-                                    className="text-red-700 underline text-xs disabled:opacity-50"
+                                    onClick={() => handleMark(row, 'explicado')}
+                                    disabled={pendingActionKey === `${row.composite_key}:explicado`}
+                                    className="focus-ring rounded text-xs font-medium text-indigo-600 hover:text-indigo-500 disabled:opacity-50 dark:text-indigo-400"
                                   >
-                                    Descartar
+                                    Explicado
                                   </button>
                                 </div>
-                              )}
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleMark(row, 'revisado')}
-                                  disabled={pendingActionKey === `${row.composite_key}:revisado`}
-                                  className="text-blue-600 underline text-xs disabled:opacity-50"
-                                >
-                                  Revisado
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleMark(row, 'explicado')}
-                                  disabled={pendingActionKey === `${row.composite_key}:explicado`}
-                                  className="text-blue-600 underline text-xs disabled:opacity-50"
-                                >
-                                  Explicado
-                                </button>
                               </div>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         );

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getStatus, type StatusResponse } from '@/lib/api';
+import { CheckIcon, SpinnerIcon, WarningIcon } from './icons';
 
 export interface StatusPollerProps {
   jobId: string;
@@ -56,7 +57,11 @@ export function StatusPoller({ jobId, onCompleted, pollIntervalMs = 1500 }: Stat
 
   if (error) {
     return (
-      <p role="alert" className="text-red-600 text-sm">
+      <p
+        role="alert"
+        className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 shadow-card dark:border-red-900 dark:bg-red-950/40 dark:text-red-400"
+      >
+        <WarningIcon size={16} className="shrink-0" />
         {error}
       </p>
     );
@@ -64,7 +69,11 @@ export function StatusPoller({ jobId, onCompleted, pollIntervalMs = 1500 }: Stat
 
   if (status.status === 'error') {
     return (
-      <p role="alert" className="text-red-600 text-sm">
+      <p
+        role="alert"
+        className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 shadow-card dark:border-red-900 dark:bg-red-950/40 dark:text-red-400"
+      >
+        <WarningIcon size={16} className="shrink-0" />
         {status.detail ?? 'La reconciliación falló'}
       </p>
     );
@@ -72,7 +81,8 @@ export function StatusPoller({ jobId, onCompleted, pollIntervalMs = 1500 }: Stat
 
   if (status.status === 'completed') {
     return (
-      <p className="text-green-700 text-sm">
+      <p className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-700 shadow-card dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-400">
+        <CheckIcon size={16} className="shrink-0" />
         Reconciliación completa
         {status.counts ? ` (ARCA: ${status.counts.arca_rows}, Contabilidad: ${status.counts.contabilidad_rows})` : ''}.
       </p>
@@ -80,7 +90,11 @@ export function StatusPoller({ jobId, onCompleted, pollIntervalMs = 1500 }: Stat
   }
 
   return (
-    <p aria-live="polite" className="text-sm text-gray-600">
+    <p
+      aria-live="polite"
+      className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-card dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
+    >
+      <SpinnerIcon size={16} className="shrink-0 text-indigo-500" />
       {status.status === 'processing' ? 'Procesando…' : 'En cola…'}
     </p>
   );
