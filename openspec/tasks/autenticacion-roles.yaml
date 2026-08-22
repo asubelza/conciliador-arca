@@ -21,7 +21,7 @@
 
 ## Fase 4: Alta manual de usuarios
 
-- [ ] T43: Crear las cuentas del estudio (admin/colaborador) una vez verificado todo (S, manual — no requiere código nuevo, usa T35's mecanismo de alta directa a la tabla `users`)
+- [x] T43: Crear la cuenta admin (`admin@admin.com`) por INSERT directo a `users` (bcryptjs cost 12, hash generado con el mismo paquete que usa `auth.service.ts`) y verificar login real de punta a punta contra la máquina del cliente. No es código — el resto de las cuentas las va a dar de alta el cliente mismo con el mismo mecanismo. Encontró y arregló 2 bugs de infraestructura reales que nada de lo anterior había expuesto porque solo se había probado contra el Postgres/Redis del sandbox de la nube, nunca contra el Docker real del cliente — commit `d22639d`: (1) el servicio `migrate` de `docker-compose.yml` enmascaraba sus propios fallos (`A && B || true` tapaba un fallo de `A`, no solo de `B`), así que las migraciones 012-018 nunca se habían aplicado de verdad en la base real del cliente desde que arrancó `conciliacion-periodica`; (2) al `api` le faltaba `JWT_SECRET` en el compose, nunca agregado cuando la Fase 1 introdujo ese requisito. Detalle completo: `openspec/progress/autenticacion-fase4-y-bugs-infra.md`.
 
 ## Disciplina de verificación (sin cambios respecto al resto del proyecto)
 
