@@ -268,6 +268,52 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     });
   });
 
+  describe('017: app_role least-privilege grants (closes the gap flagged since 011)', () => {
+    const files = fs.existsSync(MIGRATIONS_DIR)
+      ? fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+      : [];
+
+    it('defines migration 017', () => {
+      expect(files.some((f) => /017_grant_app_role_remaining_tables/.test(f))).toBe(true);
+    });
+
+    // Real behavior (both the grants working and everything else still
+    // being denied) is proven against live PostgreSQL in
+    // app-role-grants.test.ts, exactly like 011's own GRANTs for
+    // audit_trail/feedback_loop have no structural regex check here either
+    // — this block only guards against someone silently deleting or
+    // truncating the migration text, not against a live privilege
+    // regression (SQLite here can't run GRANT/REVOKE for real; see this
+    // file's module doc).
+    it('grants app_role SELECT+UPDATE on tenants (no INSERT/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*update\s+on\s+tenants\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT on vouchers_staging (no UPDATE/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s+on\s+vouchers_staging\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on vouchers_canonical (no DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+vouchers_canonical\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT on reconciliation_results (no UPDATE/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s+on\s+reconciliation_results\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on periodos (no DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+periodos\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT on periodo_resultados (016 already REVOKEs UPDATE/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s+on\s+periodo_resultados\s+to\s+app_role/);
+    });
+
+    it('never grants app_role anything on afip_tipo_map (the app never queries it at request time)', () => {
+      expect(sqlLc).not.toMatch(/grant\s+[a-z,\s]+\s+on\s+afip_tipo_map\s+to\s+app_role/);
+    });
+  });
+
   describe('Prisma schema', () => {
     it('declares a postgresql datasource', () => {
       expect(schema).toMatch(/datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"postgresql"/);
