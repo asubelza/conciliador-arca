@@ -53,4 +53,16 @@ describe('T07 RF-06: lookupAfipTipo', () => {
     expect(lookupAfipTipo('tango', '')).toBeUndefined();
     expect(lookupAfipTipo('tango', '   ')).toBeUndefined();
   });
+
+  it('Libro de IVA Compras: "FCP A" resolves to Factura A (real sample data)', () => {
+    expect(lookupAfipTipo('libro_iva_compras', 'FCP A')).toBe(1);
+  });
+
+  it('Libro de IVA Compras: "CCP C" resolves to NC C, not Factura C (real sample data: CCP rows are always negative)', () => {
+    expect(lookupAfipTipo('libro_iva_compras', 'CCP C')).toBe(13);
+  });
+
+  it('Libro de IVA Compras: is case-insensitive, matching how the adapter builds the composite key', () => {
+    expect(lookupAfipTipo('libro_iva_compras', 'fcp a')).toBe(1);
+  });
 });

@@ -77,4 +77,42 @@ describe('T05 RF-03: streamRowsFromFile', () => {
 
     await expect(collect(streamRowsFromFile(filePath, 'xlsx'))).rejects.toBeTruthy();
   });
+
+  it('sourceSystem "libro_iva_compras" bypasses the generic header-row XLSX reader for a single-column printed-report export (real-world gap, 2026-08-21)', async () => {
+    const filePath = path.join(tmpDir, 'libro-iva-compras.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Original');
+    // Real shape: company-info/header lines, then real data lines, then a
+    // trailing Total row — all in a single column, no real headers at all.
+    sheet.addRow(['         GRUPO ARIES SALUD SA']);
+    sheet.addRow([
+      '         Fecha       Comprobante                       Fecha       Sujeto                                CUIT           Con.   Referencia  Impuestos      Total          Neto             Exento          Neto            21%         10.5%          27%      Per. IIBB       Per. IVA                      Otros',
+    ]);
+    sheet.addRow([
+      '         01/04/2026   0001-FCP-A-0001-00000320         11/12/2025  30, GAV SALUD S.A.               30-71590222-9      RI    -0001-0000021692      15.125.000,00              0,00              0,00  12.500.000,002.625.000,00        0,00          0,00             0,00            0,00                     0,00',
+    ]);
+    sheet.addRow([
+      '         Total                                                                                                                                    242.479.278,08    194.624.087,01               0,00    39.453.079,498.230.023,45  10.920,00     42.792,73        35.592,70     82.625,34                   157,36',
+    ]);
+    await workbook.xlsx.writeFile(filePath);
+
+    const rows = await collect(streamRowsFromFile(filePath, 'xlsx', 'libro_iva_compras'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].CUIT).toBe('30-71590222-9');
+    expect(rows[0].__prefix).toBe('FCP');
+    expect(rows[0]['Neto gravado']).toBe('12.500.000,00');
+    expect(rows[0]['21%']).toBe('2.625.000,00');
+  });
+
+  it('a different sourceSystem still uses the generic header-row XLSX reader unchanged', async () => {
+    const filePath = path.join(tmpDir, 'tango.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Sheet1');
+    sheet.addRow(['CUIT', 'Tipo']);
+    sheet.addRow(['30111111112', 'Factura A']);
+    await workbook.xlsx.writeFile(filePath);
+
+    const rows = await collect(streamRowsFromFile(filePath, 'xlsx', 'tango'));
+    expect(rows).toEqual([{ CUIT: '30111111112', Tipo: 'Factura A' }]);
+  });
 });

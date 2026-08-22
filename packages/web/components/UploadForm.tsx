@@ -12,6 +12,15 @@ export interface UploadFormProps {
 }
 
 /**
+ * Display labels for the dropdown. Falls back to the raw key for any
+ * system not listed here (kept minimal — everything else was already just
+ * showing its raw lowercase key before this map existed).
+ */
+const SOURCE_SYSTEM_LABELS: Partial<Record<ContabilidadSourceSystem, string>> = {
+  libro_iva_compras: 'Libro de IVA Compras (reporte impreso)',
+};
+
+/**
  * T13: the two-file upload form (RF-01/RF-02/RF-03's client side). Mirrors
  * the API's own validation order (files first, then tenant_id, then source
  * system — see upload-validation.ts) so the error the user sees before
@@ -83,7 +92,7 @@ export function UploadForm({ onUploaded }: UploadFormProps) {
         >
           {CONTABILIDAD_SOURCE_SYSTEMS.map((system) => (
             <option key={system} value={system}>
-              {system}
+              {SOURCE_SYSTEM_LABELS[system] ?? system}
             </option>
           ))}
         </select>

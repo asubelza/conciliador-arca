@@ -170,7 +170,7 @@ describe('T04: validateUploadFiles (RF-01, RF-02)', () => {
 
   describe('T10: validateContabilidadSourceSystem', () => {
     it('accepts each known source system', () => {
-      for (const system of ['tango', 'bejerman', 'xubio', 'contabilium']) {
+      for (const system of ['tango', 'bejerman', 'xubio', 'contabilium', 'libro_iva_compras']) {
         expect(validateContabilidadSourceSystem(system)).toBeNull();
       }
     });

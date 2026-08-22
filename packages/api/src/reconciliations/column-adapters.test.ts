@@ -50,4 +50,36 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
     expect(adapted.tipo_cbte).toBeUndefined();
     expect(adapted.importe_total_raw).toBeUndefined();
   });
+
+  it('Libro de IVA Compras: resolves tipo from __prefix + __letra, uses the second date, and reads Impuestos Total (real sample shape)', () => {
+    const row = {
+      CUIT: '30-71590222-9',
+      'Fecha Cpbte': '11/12/2025',
+      Fecha: '01/04/2026',
+      __prefix: 'FCP',
+      __letra: 'A',
+      __punto_venta: '1',
+      __numero: '320',
+      'Impuestos Total': '15.125.000,00',
+    };
+    const adapted = adaptRow('libro_iva_compras', row);
+    expect(adapted.cuit_emisor_raw).toBe('30-71590222-9');
+    expect(adapted.tipo_cbte).toBe(1); // FCP + A -> Factura A
+    expect(adapted.punto_venta_raw).toBe('1');
+    expect(adapted.numero_raw).toBe('320');
+    // The comprobante's own date (Fecha Cpbte), not the accounting/booking date (Fecha).
+    expect(adapted.fecha_emision_raw).toBe('11/12/2025');
+    expect(adapted.importe_total_raw).toBe('15.125.000,00');
+  });
+
+  it('Libro de IVA Compras: a "CCP" prefix resolves to the Nota de Crédito tipo, not Factura', () => {
+    const row = { __prefix: 'CCP', __letra: 'C' };
+    const adapted = adaptRow('libro_iva_compras', row);
+    expect(adapted.tipo_cbte).toBe(13); // CCP + C -> NC C, not 11 (Factura C)
+  });
+
+  it('Libro de IVA Compras: tipo_cbte is undefined when there is no comprobante prefix/letra (e.g. a bank-debit row)', () => {
+    const adapted = adaptRow('libro_iva_compras', { CUIT: '30-99903208-3' });
+    expect(adapted.tipo_cbte).toBeUndefined();
+  });
 });

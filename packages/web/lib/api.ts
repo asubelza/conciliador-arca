@@ -9,7 +9,13 @@
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
 
-export const CONTABILIDAD_SOURCE_SYSTEMS = ['tango', 'bejerman', 'xubio', 'contabilium'] as const;
+export const CONTABILIDAD_SOURCE_SYSTEMS = [
+  'tango',
+  'bejerman',
+  'xubio',
+  'contabilium',
+  'libro_iva_compras',
+] as const;
 export type ContabilidadSourceSystem = (typeof CONTABILIDAD_SOURCE_SYSTEMS)[number];
 
 export interface UploadResponse {

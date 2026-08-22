@@ -24,7 +24,7 @@
 import { lookupAfipTipo } from './afip-tipo-lookup';
 import type { RawRow } from './file-row-stream';
 
-export type SourceSystem = 'arca' | 'tango' | 'bejerman' | 'xubio' | 'contabilium';
+export type SourceSystem = 'arca' | 'tango' | 'bejerman' | 'xubio' | 'contabilium' | 'libro_iva_compras';
 
 export interface AdaptedRow {
   cuit_emisor_raw: string | undefined;
@@ -127,12 +127,49 @@ function adaptContabilium(row: RawRow): AdaptedRow {
   };
 }
 
+/**
+ * "libro_iva_compras" — real sample-driven adapter added 2026-08-21 (see
+ * libro-iva-compras-parser.ts's module doc for the full story). Unlike the
+ * other adapters, its RawRow isn't a vendor's own column names — it's
+ * produced by libro-iva-compras-parser.ts from a fixed-width printed
+ * report, which already splits the "Comprobante" field into
+ * `__letra`/`__punto_venta`/`__numero` (same "split the combined field
+ * here, not in the parser" division of labor as Bejerman's
+ * splitPuntoVentaNumero above). `fecha_emision_raw` uses the SECOND date
+ * on the line ("Fecha Cpbte", the comprobante's own date) rather than the
+ * first ("Fecha", confirmed to be the accounting/registration date — real
+ * sample row: Fecha=01/04/2026 but Fecha Cpbte=11/12/2025, a much older
+ * invoice entered late) since ARCA's own "Fecha de Emisión" is the
+ * comprobante's issue date, not when it was booked.
+ *
+ * `tipo_cbte` is resolved from `__prefix` + `__letra` together (e.g.
+ * "FCP A", "CCP C"), not letra alone — confirmed from real data that the
+ * prefix distinguishes Factura (FCP, always positive amounts in the
+ * sample) from Nota de Crédito (CCP, always negative), regardless of
+ * letra, so a bare letra can't tell a Factura C from a NC C.
+ */
+function adaptLibroIvaCompras(row: RawRow): AdaptedRow {
+  const prefix = asString(firstPresent(row, ['__prefix']));
+  const letra = asString(firstPresent(row, ['__letra']));
+  const tipoRaw = prefix && letra ? `${prefix} ${letra}` : undefined;
+  return {
+    cuit_emisor_raw: asString(firstPresent(row, ['CUIT'])),
+    tipo_cbte: lookupAfipTipo('libro_iva_compras', tipoRaw),
+    punto_venta_raw: asString(firstPresent(row, ['__punto_venta'])),
+    numero_raw: asString(firstPresent(row, ['__numero'])),
+    fecha_emision_raw: asString(firstPresent(row, ['Fecha Cpbte'])),
+    importe_total_raw: asString(firstPresent(row, ['Impuestos Total'])),
+    source_row: row,
+  };
+}
+
 const ADAPTERS: Record<SourceSystem, (row: RawRow) => AdaptedRow> = {
   arca: adaptArca,
   tango: adaptTango,
   bejerman: adaptBejerman,
   xubio: adaptXubio,
   contabilium: adaptContabilium,
+  libro_iva_compras: adaptLibroIvaCompras,
 };
 
 export function adaptRow(source: SourceSystem, row: RawRow): AdaptedRow {

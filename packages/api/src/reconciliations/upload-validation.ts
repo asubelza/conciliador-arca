@@ -27,7 +27,13 @@ export interface UploadFieldFiles {
   contabilidad_file?: UploadedFileLike[];
 }
 
-export const CONTABILIDAD_SOURCE_SYSTEMS = ['tango', 'bejerman', 'xubio', 'contabilium'] as const;
+export const CONTABILIDAD_SOURCE_SYSTEMS = [
+  'tango',
+  'bejerman',
+  'xubio',
+  'contabilium',
+  'libro_iva_compras',
+] as const;
 export type ContabilidadSourceSystem = (typeof CONTABILIDAD_SOURCE_SYSTEMS)[number];
 
 export type ValidationFailure =

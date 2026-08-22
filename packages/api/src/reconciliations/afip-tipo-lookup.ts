@@ -79,6 +79,24 @@ const TEXT_ALIASES: Record<Exclude<SourceSystem, 'arca'>, Record<string, number>
     'nota de credito b': 8,
     'nota de credito c': 13,
   },
+  libro_iva_compras: {
+    // Confirmed from a real "Libro de IVA Compras" export (2026-08-21):
+    // comprobantes are like "0001-FCP-A-0001-00000320" — sucursal, a
+    // 3-letter prefix, then the AFIP letra. Keys here are
+    // "<prefix> <letra>" (lowercased), built by column-adapters.ts's
+    // adaptLibroIvaCompras from `__prefix`/`__letra`
+    // (libro-iva-compras-parser.ts). Only "FCP" and "CCP" appear in the
+    // sample, and every single FCP row has a positive first amount while
+    // every single CCP row is negative (225 vs 6 rows, no exceptions) —
+    // i.e. FCP = Factura de Compra, CCP = Nota de Crédito de compra. No
+    // Nota de Débito example exists yet to confirm its own prefix.
+    'fcp a': 1,
+    'fcp b': 6,
+    'fcp c': 11,
+    'ccp a': 3,
+    'ccp b': 8,
+    'ccp c': 13,
+  },
 };
 
 function normalizeKey(value: string): string {

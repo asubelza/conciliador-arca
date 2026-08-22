@@ -78,7 +78,7 @@ export async function processReconciliationJob(
       data.tenantId,
       jobId,
       'contabilidad',
-      streamRowsFromFile(data.contabilidad.filePath, data.contabilidad.extension),
+      streamRowsFromFile(data.contabilidad.filePath, data.contabilidad.extension, data.contabilidadSourceSystem),
     );
 
     // Read back within the same transaction (COPY's writes are visible to
