@@ -74,6 +74,9 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     it('defines a migration for periodos (conciliacion-periodica T16)', () => {
       expect(files.some((f) => /periodos/.test(f))).toBe(true);
     });
+    it('defines a migration for periodo_resultados (conciliacion-periodica T27)', () => {
+      expect(files.some((f) => /periodo_resultados/.test(f))).toBe(true);
+    });
   });
 
   describe('table definitions', () => {
@@ -85,6 +88,7 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       'reconciliation_results',
       'audit_trail',
       'periodos',
+      'periodo_resultados',
     ];
 
     tables.forEach((t) => {
@@ -163,6 +167,16 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(sqlLc).toMatch(/create\s+unique\s+index\s+idx_vouchers_tenant_key_unique/);
       expect(sqlLc).toMatch(/idx_vouchers_tenant_key_unique\s+on\s+vouchers_canonical\s*\(\s*tenant_id\s*,\s*file_source\s*,\s*cuit_emisor\s*,\s*tipo_cbte\s*,\s*punto_venta\s*,\s*numero\s*\)/);
     });
+
+    it('periodo_resultados references periodos, has classification CHECK + sistema_row/arca_row jsonb (T27, RF-20)', () => {
+      expect(sqlLc).toContain('periodo_resultados');
+      expect(sqlLc).toMatch(/references\s+periodos\s*\(id\)/);
+      expect(sqlLc).toContain('classification');
+      expect(sqlLc).toContain('sistema_row');
+      expect(sqlLc).toContain('arca_row');
+      expect(sqlLc).toContain("'conciliado_ok'");
+      expect(sqlLc).toContain("'pendiente_en_arca'");
+    });
   });
 
   describe('indexes', () => {
@@ -192,6 +206,7 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       'reconciliation_results',
       'audit_trail',
       'periodos',
+      'periodo_resultados',
     ];
 
     tenantTables.forEach((t) => {
@@ -207,6 +222,10 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
 
     it('audit_trail is append-only (UPDATE/DELETE revoked from app role)', () => {
       expect(sqlLc).toMatch(/revoke\s+update\s*,\s*delete\s+on\s+audit_trail/);
+    });
+
+    it('periodo_resultados is append-only, same guarantee as audit_trail (T27, RF-20)', () => {
+      expect(sqlLc).toMatch(/revoke\s+update\s*,\s*delete\s+on\s+periodo_resultados/);
     });
   });
 
@@ -254,7 +273,7 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(schema).toMatch(/datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"postgresql"/);
     });
 
-    it('declares all seven models', () => {
+    it('declares all eight models', () => {
       const models = [
         'Tenant',
         'AfipTipoMap',
@@ -263,6 +282,7 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
         'ReconciliationResult',
         'AuditTrail',
         'Periodo',
+        'PeriodoResultado',
       ];
       models.forEach((m) => {
         expect(schema).toMatch(new RegExp(`model\\s+${m}\\s*\\{`));

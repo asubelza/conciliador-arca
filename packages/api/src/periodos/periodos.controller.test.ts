@@ -169,4 +169,88 @@ describe('T18: /api/periodos (integration)', () => {
       expect(res.body).toEqual({ error: 'periodo id must be a UUID' });
     });
   });
+
+  /**
+   * T27/T29 — integration coverage for the actual HTTP wiring of
+   * POST /api/periodos/:id/cerrar and GET /api/periodos/:id/report
+   * (RF-20–RF-23). Exhaustive matching-taxonomy/snapshot-shape coverage
+   * lives in periodo-cierre.test.ts and periodo-report.test.ts; this proves
+   * the controller maps their typed results/failures to the right HTTP
+   * status/body.
+   */
+  describe('POST /api/periodos/:id/cerrar and GET /api/periodos/:id/report', () => {
+    it('closes an open período, then the report reflects the frozen snapshot', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .send({ tenant_id: tenantId, mes: '2026-09-01' });
+      const periodoId = created.body.id;
+
+      const openReport = await request(app.getHttpServer()).get(`/api/periodos/${periodoId}/report`);
+      expect(openReport.status).toBe(200);
+      expect(openReport.body.live).toBe(true);
+      expect(openReport.body.sections).toEqual({
+        conciliados_ok: [],
+        discrepancias_y_alertas: [],
+        pendientes_en_arca: [],
+      });
+
+      const cerrar = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/cerrar`)
+        .send({ cerrado_por: 'contador@estudio.com' });
+      expect(cerrar.status).toBe(200);
+      expect(cerrar.body.periodo.estado).toBe('cerrado');
+      expect(cerrar.body.periodo.cerrado_por).toBe('contador@estudio.com');
+      expect(cerrar.body.counts).toBeDefined();
+
+      const detail = await request(app.getHttpServer()).get(`/api/periodos/${periodoId}`);
+      expect(detail.body.estado).toBe('cerrado');
+
+      const closedReport = await request(app.getHttpServer()).get(`/api/periodos/${periodoId}/report`);
+      expect(closedReport.status).toBe(200);
+      expect(closedReport.body.live).toBe(false);
+    });
+
+    it('rejects closing an already-cerrado período with 409', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .send({ tenant_id: tenantId, mes: '2026-10-01' });
+      const periodoId = created.body.id;
+
+      const first = await request(app.getHttpServer()).post(`/api/periodos/${periodoId}/cerrar`).send({});
+      expect(first.status).toBe(200);
+
+      const second = await request(app.getHttpServer()).post(`/api/periodos/${periodoId}/cerrar`).send({});
+      expect(second.status).toBe(409);
+      expect(second.body).toEqual({ error: 'período is already cerrado' });
+    });
+
+    it('returns 404 closing/reporting an unknown período id', async () => {
+      const unknown = '00000000-0000-0000-0000-000000000000';
+      const cerrar = await request(app.getHttpServer()).post(`/api/periodos/${unknown}/cerrar`).send({});
+      expect(cerrar.status).toBe(404);
+
+      const report = await request(app.getHttpServer()).get(`/api/periodos/${unknown}/report`);
+      expect(report.status).toBe(404);
+    });
+
+    it('returns 400 for a malformed período id on both endpoints', async () => {
+      const cerrar = await request(app.getHttpServer()).post('/api/periodos/not-a-uuid/cerrar').send({});
+      expect(cerrar.status).toBe(400);
+
+      const report = await request(app.getHttpServer()).get('/api/periodos/not-a-uuid/report');
+      expect(report.status).toBe(400);
+    });
+
+    it('returns 400 for a non-string cerrado_por', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .send({ tenant_id: tenantId, mes: '2026-11-01' });
+
+      const cerrar = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/cerrar`)
+        .send({ cerrado_por: 123 });
+      expect(cerrar.status).toBe(400);
+      expect(cerrar.body).toEqual({ error: 'cerrado_por must be a string when provided' });
+    });
+  });
 });

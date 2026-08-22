@@ -18,7 +18,17 @@ import type { Pool, PoolClient } from 'pg';
  * 006_init_audit_trail.sql), so this union is enforced at the TypeScript
  * layer only.
  */
-export type AuditAction = 'upload' | 'staging' | 'normalize' | 'match' | 'export' | 'user_mark' | 'feedback_read';
+// T27 (RF-20, conciliacion-periodica) adds 'close' — logged once per
+// período when POST /api/periodos/:id/cerrar succeeds (periodo-cierre.ts).
+export type AuditAction =
+  | 'upload'
+  | 'staging'
+  | 'normalize'
+  | 'match'
+  | 'export'
+  | 'user_mark'
+  | 'feedback_read'
+  | 'close';
 
 export interface AuditEvent {
   tenantId: string;

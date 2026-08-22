@@ -89,6 +89,26 @@ model VoucherCanonical {
   @@map("vouchers_canonical")
 }
 
+// T27/T28 (RF-20/RF-21, conciliacion-periodica): the frozen 3-section
+// snapshot written once, atomically, when a período closes — see
+// 016_init_periodo_resultados.sql and periodo-cierre.ts's module doc for
+// why this is a separate table from ReconciliationResult (job-scoped,
+// different classification taxonomy).
+model PeriodoResultado {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  periodoId       String   @map("periodo_id")
+  classification  String
+  compositeKey    String   @map("composite_key")
+  sistemaRow      Json?    @map("sistema_row")
+  arcaRow         Json?    @map("arca_row")
+  delta           Decimal? @db.Decimal(15, 2)
+  antiguedadMeses Int?     @map("antiguedad_meses")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("periodo_resultados")
+}
+
 model ReconciliationResult {
   id                 String   @id @default(uuid())
   tenantId           String   @map("tenant_id")

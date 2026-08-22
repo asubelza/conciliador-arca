@@ -29,6 +29,17 @@
  */
 import type { Pool } from 'pg';
 
+/**
+ * T27 (conciliacion-periodica): `matchPeriodo` is called two ways — a
+ * read-only live view (`Pool`, from the report endpoint on an open período)
+ * and as part of `periodo-cierre.ts`'s single close transaction (a
+ * `PoolClient`, so the match and the state-persisting writes it feeds run
+ * against the same transaction, per RF-20's "within a single transaction").
+ * Both expose a structurally-identical `query()`, so this module only
+ * depends on that, not on the rest of either class's surface.
+ */
+type Queryable = Pick<Pool, 'query'>;
+
 export type PeriodoClassification =
   | 'conciliado_ok'
   | 'con_divergencia'
@@ -88,7 +99,7 @@ const ROW_COLUMNS = `
   file_source, estado, periodo_alta_id
 `;
 
-async function queryRows(pool: Pool, whereClause: string, params: unknown[]): Promise<VoucherCanonicalRow[]> {
+async function queryRows(pool: Queryable, whereClause: string, params: unknown[]): Promise<VoucherCanonicalRow[]> {
   const { rows } = await pool.query<VoucherCanonicalRow>(
     `SELECT ${ROW_COLUMNS} FROM vouchers_canonical WHERE ${whereClause}`,
     params,
@@ -98,7 +109,7 @@ async function queryRows(pool: Pool, whereClause: string, params: unknown[]): Pr
 
 /** RF-19: calendar-month difference between a período and the currently viewed período, via periodos.mes (both normalized to the 1st of their month). */
 async function fetchAntiguedadLookup(
-  pool: Pool,
+  pool: Queryable,
   periodoId: string,
   otherPeriodoIds: string[],
 ): Promise<Map<string, number>> {
@@ -131,7 +142,7 @@ async function fetchAntiguedadLookup(
  * `tenants.tolerancia_redondeo_ars` and passing it through.
  */
 export async function matchPeriodo(
-  pool: Pool,
+  pool: Queryable,
   tenantId: string,
   periodoId: string,
   toleranciaArs: number,

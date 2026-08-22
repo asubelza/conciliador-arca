@@ -5,9 +5,17 @@
  * shared pool (no repository/ORM layer in this codebase; prisma is
  * documentation-only, see seed-runner.ts's module doc).
  */
-import { Body, Controller, Get, HttpException, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { getPgPool } from '../db/pg-pool';
-import { validateCreatePeriodoBody, validatePeriodoIdParam, validateTenantIdQuery } from './periodos-validation';
+import {
+  validateCerrarBody,
+  validateCreatePeriodoBody,
+  validatePeriodoIdParam,
+  validateTenantIdQuery,
+} from './periodos-validation';
+import { cerrarPeriodo } from './periodo-cierre';
+import { getPeriodoReport } from './periodo-report';
+import { logAuditEvent } from '../reconciliations/audit-logger';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -119,5 +127,64 @@ export class PeriodosController {
       throw new HttpException({ error: 'período not found' }, HttpStatus.NOT_FOUND);
     }
     return rows[0];
+  }
+
+  /**
+   * T27/T28 (RF-20/RF-21): "Cerrar Conciliación del Mes" — persists final
+   * conciliado/pendiente states, freezes the período's report snapshot, and
+   * snapshots the tolerance used. All the real work (including the 409 on
+   * an already-cerrado período) lives in periodo-cierre.ts, which runs
+   * entirely inside one transaction; this handler only maps its typed
+   * result/failure to an HTTP response.
+   */
+  @Post(':id/cerrar')
+  @HttpCode(HttpStatus.OK)
+  async cerrar(@Param('id') id: unknown, @Body() body: unknown) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+    const bodyFailure = validateCerrarBody(body);
+    if (bodyFailure) {
+      throw new HttpException({ error: bodyFailure.error }, bodyFailure.status);
+    }
+
+    const cerradoPor = (body as { cerrado_por?: string } | null)?.cerrado_por ?? null;
+    const result = await cerrarPeriodo(getPgPool(), id as string, cerradoPor);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * T29 (RF-22/RF-23): the 3-section período report — live while abierto,
+   * frozen once cerrado (see periodo-report.ts's module doc). Logged as an
+   * 'export' audit event, same as the per-job report endpoint (T12/RF-11),
+   * so every report view/download is traceable regardless of which
+   * endpoint served it.
+   */
+  @Get(':id/report')
+  async report(@Param('id') id: unknown) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const pool = getPgPool();
+    const result = await getPeriodoReport(pool, id as string);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+
+    await logAuditEvent(pool, {
+      tenantId: result.periodo.tenant_id,
+      action: 'export',
+      entity: 'periodo',
+      entityId: id as string,
+      details: { format: 'json', live: result.live },
+    });
+
+    return result;
   }
 }

@@ -17,7 +17,8 @@ const MES_RE = /^\d{4}-\d{2}(-\d{2})?$/;
 export type PeriodoValidationFailure =
   | { code: 'INVALID_TENANT_ID'; status: 400; error: string }
   | { code: 'INVALID_MES'; status: 400; error: string }
-  | { code: 'INVALID_PERIODO_ID'; status: 400; error: string };
+  | { code: 'INVALID_PERIODO_ID'; status: 400; error: string }
+  | { code: 'INVALID_CERRADO_POR'; status: 400; error: string };
 
 export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
@@ -52,6 +53,21 @@ export function validateTenantIdQuery(value: unknown): PeriodoValidationFailure 
 export function validatePeriodoIdParam(value: unknown): PeriodoValidationFailure | null {
   if (!isUuid(value)) {
     return { code: 'INVALID_PERIODO_ID', status: 400, error: 'periodo id must be a UUID' };
+  }
+  return null;
+}
+
+/**
+ * T27 (RF-20): `POST /api/periodos/:id/cerrar`'s optional body —
+ * `cerrado_por` is a free-text label (no auth/user system exists yet in
+ * this codebase, same gap noted for `feedback_loop.user_id`), so this only
+ * rejects a non-string value; an absent body or missing field is valid
+ * (persisted as NULL, same as periodos.cerrado_por's nullable column).
+ */
+export function validateCerrarBody(body: unknown): PeriodoValidationFailure | null {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (b.cerrado_por !== undefined && b.cerrado_por !== null && typeof b.cerrado_por !== 'string') {
+    return { code: 'INVALID_CERRADO_POR', status: 400, error: 'cerrado_por must be a string when provided' };
   }
   return null;
 }

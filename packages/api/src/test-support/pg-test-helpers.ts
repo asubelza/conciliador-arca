@@ -32,6 +32,9 @@ export async function deleteTestTenant(pool: Pool, tenantId: string): Promise<vo
   await pool.query('DELETE FROM vouchers_canonical WHERE tenant_id = $1', [tenantId]);
   await pool.query('DELETE FROM reconciliation_results WHERE tenant_id = $1', [tenantId]);
   await pool.query('DELETE FROM audit_trail WHERE tenant_id = $1', [tenantId]);
+  // periodo_resultados.periodo_id REFERENCES periodos(id) with no ON DELETE
+  // CASCADE (016_init_periodo_resultados.sql) — must go before periodos.
+  await pool.query('DELETE FROM periodo_resultados WHERE tenant_id = $1', [tenantId]);
   // periodos.tenant_id REFERENCES tenants(id) with no ON DELETE CASCADE
   // (013_init_periodos.sql) — must go before the tenants row itself.
   await pool.query('DELETE FROM periodos WHERE tenant_id = $1', [tenantId]);
