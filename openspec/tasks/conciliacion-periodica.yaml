@@ -1,0 +1,47 @@
+# Tasks: conciliacion-periodica
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~1400 |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | PR-4 (schema fix + períodos) → PR-5 (stock histórico + matching de 3 pasos + tolerancia) → PR-6 (cierre de mes + reporte de 3 secciones + frontend) |
+| Delivery strategy | auto-forecast → C3 Chained |
+| Chain strategy | feature-branch-chain (same pattern as pr-2/pr-3) |
+
+Decision needed before apply: No
+Chained PRs recommended: Yes
+
+## Phase 1: Schema fix + Períodos (PR-4 — base: feature/mvp-carga-comprobantes-pr-3)
+
+- [ ] T14: Migración: reemplazar el esquema legacy CHAR(3) de `afip_tipo_map`/`vouchers_canonical.tipo` por los códigos AFIP enteros reales que ya usa `afip-tipo-lookup.ts` (RF-14) (M, api+db, PR-4)
+- [ ] T15: Re-escribir `seed.ts`/`seed-runner.ts` para sembrar los códigos reales; actualizar `shared-types` si corresponde (S, api, PR-4)
+- [ ] T16: Migración: tabla `periodos` (tenant_id, mes, estado, tolerancia_ars snapshot, cerrado_at/cerrado_por) + `UNIQUE(tenant_id, mes)` (S, db, PR-4)
+- [ ] T17: Migración: `tenants.tolerancia_redondeo_ars` (default 0.99) (S, db, PR-4)
+- [ ] T18: Endpoints: `POST /api/periodos`, `GET /api/periodos`, `GET /api/periodos/:id` (RF-12) (S, api, PR-4)
+- [ ] T19: `POST /api/reconciliations` exige `periodo_id`; rechaza upload contra período cerrado (RF-13) (M, api, PR-4)
+- [ ] T20: Endpoint de configuración de tolerancia por tenant: `GET`/`PUT /api/tenants/:id/config` (S, api, PR-4)
+
+## Phase 2: Stock Histórico + Matching de 3 Pasos (PR-5 — base: PR-4)
+
+- [ ] T21: Migración: columnas `estado`/`periodo_alta_id`/`periodo_cierre_id` en `vouchers_canonical` + índice único de clave compuesta por `file_source` (RF-15) (M, db, PR-5)
+- [ ] T22: Upsert real de `CanonicalVoucher` normalizado -> `vouchers_canonical` por clave compuesta, respetando inmutabilidad de filas `conciliado` (RF-15) (M, api, PR-5)
+- [ ] T23: Motor de matching de 3 pasos: excluir conciliado, match corriente, match histórico contra stock pendiente (RF-16) (L, api, PR-5)
+- [ ] T24: Comparación de importes con tolerancia por tenant + clasificación `con_divergencia` (RF-18) (S, api, PR-5)
+- [ ] T25: Detección de `posible_duplicado_en_sistema` (RF-17) (S, api, PR-5)
+- [ ] T26: Cálculo de `antiguedad_meses` para stock pendiente (RF-19) (S, api, PR-5)
+
+## Phase 3: Cierre de Mes + Reporte + Frontend (PR-6 — base: PR-5)
+
+- [ ] T27: `POST /api/periodos/:id/cerrar` — persistir estados finales, rollover implícito de pendientes, rechazo de doble cierre (RF-20) (M, api, PR-6)
+- [ ] T28: Snapshot de tolerancia al cerrar + inmutabilidad del resultado congelado (RF-21) (S, api+db, PR-6)
+- [ ] T29: `GET /api/periodos/:id/report` — reporte de 3 secciones (RF-22/RF-23) (M, api, PR-6)
+- [ ] T30: Frontend: alta/selección de período, cargas múltiples dentro de un período abierto, botón "Cerrar Conciliación del Mes" con confirmación (M, frontend, PR-6)
+- [ ] T31: Frontend: nuevo visor de reporte de 3 secciones, con antigüedad visible en Pendientes en ARCA (M, frontend, PR-6)
+- [ ] T32: Frontend: configuración simple de tolerancia por tenant (S, frontend, PR-6)
+
+## Verification Discipline (unchanged from PR-1/2/3)
+
+Cada tarea se verifica contra Postgres/Redis reales (no solo jest con mocks), se sincroniza a la máquina del usuario, y se confirma con `git log`/`git show --stat` corridos directamente sobre su repo antes de marcarse como hecha — mismo estándar que se aplicó en todo `mvp-carga-comprobantes` y en el fix de `libro_iva_compras`.
