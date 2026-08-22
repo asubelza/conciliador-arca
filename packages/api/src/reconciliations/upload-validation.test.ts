@@ -3,6 +3,7 @@ import {
   MAX_FILE_SIZE_BYTES,
   getAllowedExtension,
   validateContabilidadSourceSystem,
+  validatePeriodoIdFormat,
   validateTenantId,
   validateUploadFiles,
 } from './upload-validation';
@@ -185,6 +186,30 @@ describe('T04: validateUploadFiles (RF-01, RF-02)', () => {
 
     it('rejects "arca" (arca has a fixed adapter, not selectable here)', () => {
       expect(validateContabilidadSourceSystem('arca')?.code).toBe('INVALID_SOURCE_SYSTEM');
+    });
+  });
+
+  describe('T19: validatePeriodoIdFormat (RF-13, conciliacion-periodica)', () => {
+    it('accepts a well-formed UUID', () => {
+      expect(validatePeriodoIdFormat('123e4567-e89b-12d3-a456-426614174000')).toBeNull();
+    });
+
+    it('rejects a missing periodo_id', () => {
+      expect(validatePeriodoIdFormat(undefined)).toEqual({
+        code: 'INVALID_PERIODO_ID',
+        status: 400,
+        error: 'periodo_id is required and must be a UUID',
+      });
+    });
+
+    it('rejects a non-UUID periodo_id', () => {
+      const result = validatePeriodoIdFormat('not-a-uuid');
+      expect(result?.code).toBe('INVALID_PERIODO_ID');
+      expect(result?.status).toBe(400);
+    });
+
+    it('rejects a non-string periodo_id', () => {
+      expect(validatePeriodoIdFormat(123)?.code).toBe('INVALID_PERIODO_ID');
     });
   });
 });

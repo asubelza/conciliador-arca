@@ -8,7 +8,7 @@ import { AppModule } from '../app.module';
 import { MAX_FILE_SIZE_BYTES } from './upload-validation';
 import { createReconciliationWorker } from './reconciliation.worker';
 import { getReconciliationQueue, resetReconciliationQueueForTests } from './reconciliation.queue';
-import { createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
 
 /**
  * T04 — integration coverage for the actual HTTP wiring (multer parsing,
@@ -25,6 +25,15 @@ import { createTestTenant, deleteTestTenant } from '../test-support/pg-test-help
  * column adapter — see upload-validation.ts), and asserts the worker's
  * classification results actually land in reconciliation_results.
  *
+ * T19 (conciliacion-periodica) adds: periodo_id as a required field —
+ * uploads now belong to an `abierto` período. `periodoId` here is a single
+ * open período created once in beforeAll and reused by every
+ * success-path upload test (itself real coverage of RF-13's "a período can
+ * receive multiple uploads while abierto" scenario, since every one of
+ * those tests uploads into the same período). Dedicated periodo_id
+ * validation scenarios (missing, malformed, unknown, cerrado) live in the
+ * "T19: periodo_id" describe block below.
+ *
  * Note on AC3 (413): the fileSize limit is enforced by multer itself while
  * streaming, and @nestjs/platform-express maps that rejection straight to
  * a 413 PayloadTooLargeException — this test exercises that built-in Nest
@@ -34,6 +43,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
   let tenantId: string;
+  let periodoId: string;
   let worker: Worker;
 
   beforeAll(async () => {
@@ -46,6 +56,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
     tenantId = await createTestTenant(pool, 'reconciliations.controller.test');
+    periodoId = await createTestPeriodo(pool, tenantId);
     worker = createReconciliationWorker(pool);
   });
 
@@ -67,6 +78,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
+      .field('periodo_id', periodoId)
       .attach(
         'arca_file',
         Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
@@ -93,6 +105,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
+      .field('periodo_id', periodoId)
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -107,6 +120,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
+      .field('periodo_id', periodoId)
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001\n30222222223,003'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
 
@@ -142,6 +156,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       .post('/api/reconciliations')
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
+      .field('periodo_id', periodoId)
       .attach(
         'arca_file',
         Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
@@ -262,6 +277,111 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     expect(res.body.error).toMatch(/contabilidad_source_system/);
   });
 
+  describe('T19: periodo_id (RF-13, conciliacion-periodica)', () => {
+    it('returns 400 when periodo_id is missing', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'periodo_id is required and must be a UUID' });
+    });
+
+    it('returns 400 when periodo_id is not a UUID', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', 'not-a-uuid')
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'periodo_id is required and must be a UUID' });
+    });
+
+    it('returns 400 when periodo_id does not reference an existing período for this tenant', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', '00000000-0000-0000-0000-000000000000')
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({
+        error: 'periodo_id does not reference an existing período for this tenant',
+      });
+    });
+
+    it("returns 400 when periodo_id belongs to a different tenant (scoped lookup, doesn't leak existence)", async () => {
+      const otherTenantId = await createTestTenant(pool, 'T19 other tenant');
+      const otherPeriodoId = await createTestPeriodo(pool, otherTenantId, '2026-02-01');
+      try {
+        const res = await request(app.getHttpServer())
+          .post('/api/reconciliations')
+          .field('tenant_id', tenantId)
+          .field('contabilidad_source_system', 'tango')
+          .field('periodo_id', otherPeriodoId)
+          .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+          .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({
+          error: 'periodo_id does not reference an existing período for this tenant',
+        });
+      } finally {
+        await deleteTestTenant(pool, otherTenantId);
+      }
+    });
+
+    it('returns 400 and rejects the upload when the período is cerrado', async () => {
+      const closedPeriodoId = await createTestPeriodo(pool, tenantId, '2026-03-01');
+      await pool.query("UPDATE periodos SET estado = 'cerrado' WHERE id = $1", [closedPeriodoId]);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', closedPeriodoId)
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({
+        error: 'período is closed — uploads are only accepted while abierto',
+      });
+      // The request is rejected in the controller before queue.add is ever
+      // called — no job_id in the response body means nothing was enqueued.
+      expect(res.body.job_id).toBeUndefined();
+    });
+
+    it('accepts a second upload into the same open período (RF-13: multiple cargas per período)', async () => {
+      const res1 = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca-1.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad-1.csv');
+      expect(res1.status).toBe(202);
+
+      const res2 = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit,tipo\n30222222223,001'), 'arca-2.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30222222223,001'), 'contabilidad-2.csv');
+      expect(res2.status).toBe(202);
+      expect(res2.body.job_id).not.toBe(res1.body.job_id);
+    });
+  });
+
   describe('T06: GET /api/reconciliations/:jobId/status', () => {
     it('AC: returns 404 for an unknown job id', async () => {
       const res = await request(app.getHttpServer()).get(
@@ -279,6 +399,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
           .post('/api/reconciliations')
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
+          .field('periodo_id', periodoId)
           .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
           .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
         expect(res.status).toBe(202);
@@ -296,6 +417,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         .post('/api/reconciliations')
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
         .attach('arca_file', Buffer.from('cuit\n30111111112\n30222222223'), 'arca.csv')
         .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
       expect(uploadRes.status).toBe(202);
@@ -321,6 +443,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         .post('/api/reconciliations')
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
         .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
         .attach('contabilidad_file', Buffer.from('not a real xlsx file'), 'contabilidad.xlsx');
       expect(uploadRes.status).toBe(202);
@@ -357,6 +480,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
           .post('/api/reconciliations')
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
+          .field('periodo_id', periodoId)
           .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
           .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
         expect(uploadRes.status).toBe(202);
@@ -469,6 +593,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
           .post('/api/reconciliations')
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
+          .field('periodo_id', periodoId)
           .attach('arca_file', Buffer.from('cuit\n30111111112'), 'arca.csv')
           .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
         expect(uploadRes.status).toBe(202);

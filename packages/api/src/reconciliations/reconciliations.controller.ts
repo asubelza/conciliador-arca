@@ -24,6 +24,7 @@ import {
   ContabilidadSourceSystem,
   getAllowedExtension,
   validateContabilidadSourceSystem,
+  validatePeriodoIdFormat,
   validateTenantId,
   validateUploadFiles,
 } from './upload-validation';
@@ -35,6 +36,7 @@ import type { PersistedResultRow } from './report-generator';
 import { logAuditEvent } from './audit-logger';
 import { validateMarkRequest } from './marks-validation';
 import { insertFeedbackMark } from './feedback-writer';
+import { assertPeriodoOpenForUpload } from '../periodos/periodo-upload-guard';
 
 /**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
@@ -74,6 +76,7 @@ export class ReconciliationsController {
     @UploadedFiles() files: { arca_file?: Express.Multer.File[]; contabilidad_file?: Express.Multer.File[] },
     @Body('tenant_id') tenantId: unknown,
     @Body('contabilidad_source_system') contabilidadSourceSystem: unknown,
+    @Body('periodo_id') periodoId: unknown,
   ) {
     const filesFailure = validateUploadFiles(files ?? {});
     if (filesFailure) {
@@ -93,6 +96,25 @@ export class ReconciliationsController {
       throw new HttpException(body, sourceSystemFailure.status);
     }
 
+    // T19 (RF-13): periodo_id is required and must reference an existing,
+    // open período for this tenant. Format checked first (pure, cheap);
+    // the DB-backed existence/estado check only runs once the id is at
+    // least well-formed.
+    const periodoFormatFailure = validatePeriodoIdFormat(periodoId);
+    if (periodoFormatFailure) {
+      const body = 'error' in periodoFormatFailure ? { error: periodoFormatFailure.error } : {};
+      throw new HttpException(body, periodoFormatFailure.status);
+    }
+
+    const periodoGuardFailure = await assertPeriodoOpenForUpload(
+      getPgPool(),
+      tenantId as string,
+      periodoId as string,
+    );
+    if (periodoGuardFailure) {
+      throw new HttpException({ error: periodoGuardFailure.error }, periodoGuardFailure.status);
+    }
+
     const arcaFile = files.arca_file![0] as Express.Multer.File;
     const contabilidadFile = files.contabilidad_file![0] as Express.Multer.File;
 
@@ -104,6 +126,7 @@ export class ReconciliationsController {
       {
         tenantId: tenantId as string,
         contabilidadSourceSystem: contabilidadSourceSystem as ContabilidadSourceSystem,
+        periodoId: periodoId as string,
         arca: {
           filePath: arcaFile.path,
           originalName: arcaFile.originalname,

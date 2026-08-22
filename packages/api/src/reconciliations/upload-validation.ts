@@ -41,7 +41,8 @@ export type ValidationFailure =
   | { code: 'FILE_TOO_LARGE'; status: 413 }
   | { code: 'INVALID_EXTENSION'; status: 415; error: string }
   | { code: 'INVALID_TENANT_ID'; status: 400; error: string }
-  | { code: 'INVALID_SOURCE_SYSTEM'; status: 400; error: string };
+  | { code: 'INVALID_SOURCE_SYSTEM'; status: 400; error: string }
+  | { code: 'INVALID_PERIODO_ID'; status: 400; error: string };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -136,6 +137,25 @@ export function validateContabilidadSourceSystem(value: unknown): ValidationFail
       code: 'INVALID_SOURCE_SYSTEM',
       status: 400,
       error: `contabilidad_source_system is required and must be one of: ${CONTABILIDAD_SOURCE_SYSTEMS.join(', ')}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * T19 (RF-13, conciliacion-periodica): `periodo_id` is now a required
+ * multipart field — every upload belongs to a período. This only checks
+ * shape (UUID format), matching this module's pure/DB-free scope; whether
+ * the id actually references an existing, open período for this tenant is
+ * a DB-backed check the controller runs separately via
+ * periodo-upload-guard.ts's `assertPeriodoOpenForUpload`.
+ */
+export function validatePeriodoIdFormat(periodoId: unknown): ValidationFailure | null {
+  if (typeof periodoId !== 'string' || !UUID_RE.test(periodoId)) {
+    return {
+      code: 'INVALID_PERIODO_ID',
+      status: 400,
+      error: 'periodo_id is required and must be a UUID',
     };
   }
   return null;

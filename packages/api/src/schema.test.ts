@@ -71,6 +71,9 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     it('defines a migration for audit_trail', () => {
       expect(files.some((f) => /audit/.test(f))).toBe(true);
     });
+    it('defines a migration for periodos (conciliacion-periodica T16)', () => {
+      expect(files.some((f) => /periodos/.test(f))).toBe(true);
+    });
   });
 
   describe('table definitions', () => {
@@ -81,6 +84,7 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       'vouchers_canonical',
       'reconciliation_results',
       'audit_trail',
+      'periodos',
     ];
 
     tables.forEach((t) => {
@@ -96,9 +100,9 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(sqlLc).toContain('updated_at');
     });
 
-    it('afip_tipo_map has tipo, descripcion, activo boolean, created_at', () => {
+    it('afip_tipo_map has codigo (real AFIP integer, T14), descripcion, activo boolean, created_at', () => {
       expect(sqlLc).toContain('afip_tipo_map');
-      expect(sqlLc).toContain('tipo');
+      expect(sqlLc).toContain('codigo');
       expect(sqlLc).toContain('descripcion');
       expect(sqlLc).toContain('activo');
       expect(sqlLc).toContain('boolean');
@@ -135,6 +139,22 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(sqlLc).toContain('entity_id');
       expect(sqlLc).toContain('details');
     });
+
+    it('periodos has tenant_id FK, mes, estado, tolerancia_ars, cerrado_at/cerrado_por, UNIQUE(tenant_id, mes) (T16, RF-12)', () => {
+      expect(sqlLc).toContain('periodos');
+      expect(sqlLc).toContain('mes');
+      expect(sqlLc).toContain('estado');
+      expect(sqlLc).toContain('tolerancia_ars');
+      expect(sqlLc).toContain('cerrado_at');
+      expect(sqlLc).toContain('cerrado_por');
+      expect(sqlLc).toMatch(/references\s+tenants\s*\(id\)/);
+      expect(sqlLc).toMatch(/unique\s*\(\s*tenant_id\s*,\s*mes\s*\)/);
+    });
+
+    it('tenants has tolerancia_redondeo_ars, default 0.99 (T17, RF-18)', () => {
+      expect(sqlLc).toContain('tolerancia_redondeo_ars');
+      expect(sqlLc).toMatch(/tolerancia_redondeo_ars\s+numeric\(10,\s*2\)\s+not\s+null\s+default\s+0\.99/);
+    });
   });
 
   describe('indexes', () => {
@@ -158,7 +178,13 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
   });
 
   describe('row-level security (backstop tenant isolation)', () => {
-    const tenantTables = ['vouchers_staging', 'vouchers_canonical', 'reconciliation_results', 'audit_trail'];
+    const tenantTables = [
+      'vouchers_staging',
+      'vouchers_canonical',
+      'reconciliation_results',
+      'audit_trail',
+      'periodos',
+    ];
 
     tenantTables.forEach((t) => {
       it(`enables RLS on "${t}"`, () => {
@@ -220,8 +246,16 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(schema).toMatch(/datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"postgresql"/);
     });
 
-    it('declares all six models', () => {
-      const models = ['Tenant', 'AfipTipoMap', 'VoucherStaging', 'VoucherCanonical', 'ReconciliationResult', 'AuditTrail'];
+    it('declares all seven models', () => {
+      const models = [
+        'Tenant',
+        'AfipTipoMap',
+        'VoucherStaging',
+        'VoucherCanonical',
+        'ReconciliationResult',
+        'AuditTrail',
+        'Periodo',
+      ];
       models.forEach((m) => {
         expect(schema).toMatch(new RegExp(`model\\s+${m}\\s*\\{`));
       });

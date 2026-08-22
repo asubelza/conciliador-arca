@@ -12,23 +12,45 @@ datasource db {
 }
 
 model Tenant {
-  id        String   @id @default(uuid())
-  name      String
-  cuit      String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id                    String   @id @default(uuid())
+  name                  String
+  cuit                  String?
+  // T17 (RF-18, conciliacion-periodica): per-tenant amount-comparison
+  // tolerance — see 014_alter_tenants_add_tolerancia.sql.
+  toleranciaRedondeoArs Decimal  @default(0.99) @map("tolerancia_redondeo_ars") @db.Decimal(10, 2)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
 
   @@map("tenants")
 }
 
+// T14 (RF-14, conciliacion-periodica, 2026-08-22): `codigo` is a real AFIP
+// integer tipo code (1=Factura A, 6=Factura B, …), replacing the disconnected
+// zero-padded CHAR(3) scheme this model used before — see
+// 012_migrate_tipo_to_afip_integer_codes.sql and shared-types' module doc.
 model AfipTipoMap {
-  id          Int      @id @default(autoincrement()) @map("id")
-  tipo        String   @db.Char(3)
+  codigo      Int      @id
   descripcion String
   activo      Boolean  @default(true)
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("afip_tipo_map")
+}
+
+// T16 (RF-12/RF-13, conciliacion-periodica): a calendar month, per tenant,
+// that reconciliation uploads belong to — see 013_init_periodos.sql.
+model Periodo {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  mes            DateTime  @db.Date
+  estado         String    @default("abierto")
+  toleranciaArs  Decimal?  @map("tolerancia_ars") @db.Decimal(10, 2)
+  cerradoAt      DateTime? @map("cerrado_at")
+  cerradoPor     String?   @map("cerrado_por")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@unique([tenantId, mes])
+  @@map("periodos")
 }
 
 model VoucherStaging {
@@ -46,12 +68,15 @@ model VoucherCanonical {
   id           String   @id @default(uuid())
   tenantId     String   @map("tenant_id")
   fecha        DateTime?
-  tipo         String   @db.Char(3)
+  // T14: real AFIP integer tipo code (see AfipTipoMap's module doc above) —
+  // replaces the old CHAR(3) `tipo` column.
+  tipoCbte     Int      @map("tipo_cbte")
   cuitEmisor   String   @map("cuit_emisor") @db.VarChar(11)
   puntoVenta   Int      @map("punto_venta")
   numero       Int
-  importeTotal Decimal  @map("importe_total") @db.Decimal(15, 2)
+  importeTotal Decimal? @map("importe_total") @db.Decimal(15, 2)
   iva          Float?
+  fileSource   String   @map("file_source")
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@map("vouchers_canonical")

@@ -16,13 +16,13 @@ Chained PRs recommended: Yes
 
 ## Phase 1: Schema fix + Períodos (PR-4 — base: feature/mvp-carga-comprobantes-pr-3)
 
-- [ ] T14: Migración: reemplazar el esquema legacy CHAR(3) de `afip_tipo_map`/`vouchers_canonical.tipo` por los códigos AFIP enteros reales que ya usa `afip-tipo-lookup.ts` (RF-14) (M, api+db, PR-4)
-- [ ] T15: Re-escribir `seed.ts`/`seed-runner.ts` para sembrar los códigos reales; actualizar `shared-types` si corresponde (S, api, PR-4)
-- [ ] T16: Migración: tabla `periodos` (tenant_id, mes, estado, tolerancia_ars snapshot, cerrado_at/cerrado_por) + `UNIQUE(tenant_id, mes)` (S, db, PR-4)
-- [ ] T17: Migración: `tenants.tolerancia_redondeo_ars` (default 0.99) (S, db, PR-4)
-- [ ] T18: Endpoints: `POST /api/periodos`, `GET /api/periodos`, `GET /api/periodos/:id` (RF-12) (S, api, PR-4)
-- [ ] T19: `POST /api/reconciliations` exige `periodo_id`; rechaza upload contra período cerrado (RF-13) (M, api, PR-4)
-- [ ] T20: Endpoint de configuración de tolerancia por tenant: `GET`/`PUT /api/tenants/:id/config` (S, api, PR-4)
+- [x] T14: Migración: reemplazar el esquema legacy CHAR(3) de `afip_tipo_map`/`vouchers_canonical.tipo` por los códigos AFIP enteros reales que ya usa `afip-tipo-lookup.ts` (RF-14) (M, api+db, PR-4) — commit `d33ee79`
+- [x] T15: Re-escribir `seed.ts`/`seed-runner.ts` para sembrar los códigos reales; actualizar `shared-types` si corresponde (S, api, PR-4) — commit `d33ee79`
+- [x] T16: Migración: tabla `periodos` (tenant_id, mes, estado, tolerancia_ars snapshot, cerrado_at/cerrado_por) + `UNIQUE(tenant_id, mes)` (S, db, PR-4) — 013_init_periodos.sql
+- [x] T17: Migración: `tenants.tolerancia_redondeo_ars` (default 0.99) (S, db, PR-4) — 014_alter_tenants_add_tolerancia.sql
+- [x] T18: Endpoints: `POST /api/periodos`, `GET /api/periodos`, `GET /api/periodos/:id` (RF-12) (S, api, PR-4)
+- [x] T19: `POST /api/reconciliations` exige `periodo_id`; rechaza upload contra período cerrado (RF-13) (M, api, PR-4)
+- [x] T20: Endpoint de configuración de tolerancia por tenant: `GET`/`PUT /api/tenants/:id/config` (S, api, PR-4)
 
 ## Phase 2: Stock Histórico + Matching de 3 Pasos (PR-5 — base: PR-4)
 
