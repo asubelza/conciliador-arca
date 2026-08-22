@@ -40,7 +40,17 @@ services:
   migrate:
     image: conciliador-api-app:local
     container_name: conciliador-migrate
-    command: sh -c "node dist/migrate-runner.js && node dist/seed-runner.js || true"
+    # NOTE: parenthesized on purpose. `A && B || true` makes a *migrate-runner*
+    # failure non-fatal too (shell precedence: `(A && B) || true`), not just a
+    # seed-runner failure -- which is what actually happened on a real
+    # deployment: migrate-runner failed on every run since conciliacion-periodica
+    # landed (schema_migrations was missing backfilled rows for migrations
+    # already applied by hand before the tracker existed), the container still
+    # exited 0, and migrations 012-018 silently never applied for who knows how
+    # long. `depends_on: condition: service_completed_successfully` never caught
+    # it because "completed successfully" was true from the shell's point of
+    # view. Only seed-runner failures should be swallowed.
+    command: sh -c "node dist/migrate-runner.js && (node dist/seed-runner.js || true)"
     environment:
       DATABASE_URL: postgresql://conciliador:conciliador@postgres:5432/conciliador_arca
     depends_on:
@@ -59,6 +69,18 @@ services:
       DATABASE_URL: postgresql://conciliador:conciliador@postgres:5432/conciliador_arca
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # T34/T35 (autenticacion-roles): auth.service.ts (login) and
+      # auth-guard.ts (every protected endpoint) both need this to sign/verify
+      # JWTs -- jwt.ts throws "JWT_SECRET is not set" with no fallback on
+      # purpose (a real deploy must set its own), but this docker-compose
+      # service definition was never updated when Fase 1 added that
+      # requirement, so every login against this local stack failed with a
+      # 500 until this was added. Only `api` needs it -- `worker` never
+      # touches the auth module. Fixed value here (not a real secret, this is
+      # a local single-tenant dev/internal deployment, same trust level as
+      # POSTGRES_PASSWORD above) -- rotate it if this ever needs to survive
+      # being shared beyond this machine.
+      JWT_SECRET: "5lwvp8aTXVBhlUED1Syq12iL19kBnUGonwXfd/9X5TMlkMRv+Fmeea83aCCKFts0"
     ports:
       - "3000:3000"
     volumes:
