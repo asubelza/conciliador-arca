@@ -77,6 +77,13 @@ model VoucherCanonical {
   importeTotal Decimal? @map("importe_total") @db.Decimal(15, 2)
   iva          Float?
   fileSource   String   @map("file_source")
+  // T21 (RF-15/RF-16, conciliacion-periodica): the persistent-stock state —
+  // see 015_alter_vouchers_canonical_add_estado_periodo.sql and
+  // vouchers-canonical-writer.ts's module doc for the periodoAltaId
+  // asymmetry between the arca and contabilidad sides.
+  estado         String    @default("pendiente")
+  periodoAltaId  String?   @map("periodo_alta_id")
+  periodoCierreId String?  @map("periodo_cierre_id")
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@map("vouchers_canonical")

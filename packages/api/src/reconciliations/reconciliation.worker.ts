@@ -21,9 +21,10 @@ import { Worker } from 'bullmq';
 import { promises as fs } from 'fs';
 import { streamRowsFromFile } from './file-row-stream';
 import { writeRowsToStaging } from './staging-writer';
-import { classifyStagedRows } from './classification-engine';
+import { classifyVouchers, normalizeStagedRows } from './classification-engine';
 import { writeResultsToDb } from './results-writer';
 import { logAuditEvent } from './audit-logger';
+import { upsertVouchersCanonical } from './vouchers-canonical-writer';
 import type { RawRow } from './file-row-stream';
 import {
   RECONCILIATION_QUEUE_NAME,
@@ -104,15 +105,40 @@ export async function processReconciliationJob(
       },
     });
 
-    const { results, counts } = classifyStagedRows(arcaRawRows, contabilidadRawRows, data.contabilidadSourceSystem);
+    const { arcaOk, contabilidadOk, arcaErrors, contabilidadErrors } = normalizeStagedRows(
+      arcaRawRows,
+      contabilidadRawRows,
+      data.contabilidadSourceSystem,
+    );
+    const { results, counts } = classifyVouchers(arcaOk, contabilidadOk, arcaErrors, contabilidadErrors);
     await writeResultsToDb(client, data.tenantId, jobId, results);
+
+    // T22 (RF-15, conciliacion-periodica): upsert the successfully
+    // normalized vouchers into the persistent vouchers_canonical stock —
+    // only when this job belongs to a período (see ReconciliationJobData's
+    // module doc: periodoId is optional on the interface only because a
+    // handful of pre-conciliacion-periodica tests construct job data
+    // without it; every real upload through the controller always sets it,
+    // RF-13 requires periodo_id on every upload now).
+    let matchAuditDetails: Record<string, unknown> = { ...counts };
+    if (data.periodoId) {
+      const upsertResult = await upsertVouchersCanonical(client, data.tenantId, data.periodoId, [
+        ...arcaOk,
+        ...contabilidadOk,
+      ]);
+      matchAuditDetails = {
+        ...matchAuditDetails,
+        vouchers_canonical_upserted: upsertResult.upserted,
+        vouchers_canonical_skipped_conciliado: upsertResult.skippedConciliado,
+      };
+    }
 
     await logAuditEvent(client, {
       tenantId: data.tenantId,
       action: 'match',
       entity: 'reconciliation_job',
       entityId: jobId,
-      details: { ...counts },
+      details: matchAuditDetails,
     });
 
     await client.query('COMMIT');

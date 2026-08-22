@@ -27,8 +27,40 @@ export interface ClassificationSummary {
   counts: ClassificationCounts;
 }
 
+export interface NormalizedSides {
+  arcaOk: CanonicalVoucher[];
+  contabilidadOk: CanonicalVoucher[];
+  arcaErrors: CanonicalVoucher[];
+  contabilidadErrors: CanonicalVoucher[];
+}
+
 function sideOf(voucher: CanonicalVoucher): 'arca' | 'contabilidad' {
   return voucher.file_source;
+}
+
+/**
+ * T22 (conciliacion-periodica, RF-15): the adapt -> normalize -> ok/error
+ * split, extracted out of `classifyStagedRows` so the worker can reuse the
+ * same normalized `arcaOk`/`contabilidadOk` `CanonicalVoucher[]` for the
+ * `vouchers_canonical` upsert step (`vouchers-canonical-writer.ts`) without
+ * re-running adaptation/normalization a second time.
+ */
+export function normalizeStagedRows(
+  arcaRawRows: RawRow[],
+  contabilidadRawRows: RawRow[],
+  contabilidadSourceSystem: Exclude<SourceSystem, 'arca'>,
+): NormalizedSides {
+  const arcaNormalized = arcaRawRows.map((row) => normalizeRow('arca', adaptRow('arca', row)));
+  const contabilidadNormalized = contabilidadRawRows.map((row) =>
+    normalizeRow('contabilidad', adaptRow(contabilidadSourceSystem, row)),
+  );
+
+  return {
+    arcaOk: arcaNormalized.filter((n) => n.ok).map((n) => n.voucher),
+    contabilidadOk: contabilidadNormalized.filter((n) => n.ok).map((n) => n.voucher),
+    arcaErrors: arcaNormalized.filter((n) => !n.ok).map((n) => n.voucher),
+    contabilidadErrors: contabilidadNormalized.filter((n) => !n.ok).map((n) => n.voucher),
+  };
 }
 
 /**
@@ -45,15 +77,11 @@ export function classifyStagedRows(
   contabilidadRawRows: RawRow[],
   contabilidadSourceSystem: Exclude<SourceSystem, 'arca'>,
 ): ClassificationSummary {
-  const arcaNormalized = arcaRawRows.map((row) => normalizeRow('arca', adaptRow('arca', row)));
-  const contabilidadNormalized = contabilidadRawRows.map((row) =>
-    normalizeRow('contabilidad', adaptRow(contabilidadSourceSystem, row)),
+  const { arcaOk, contabilidadOk, arcaErrors, contabilidadErrors } = normalizeStagedRows(
+    arcaRawRows,
+    contabilidadRawRows,
+    contabilidadSourceSystem,
   );
-
-  const arcaErrors = arcaNormalized.filter((n) => !n.ok).map((n) => n.voucher);
-  const contabilidadErrors = contabilidadNormalized.filter((n) => !n.ok).map((n) => n.voucher);
-  const arcaOk = arcaNormalized.filter((n) => n.ok).map((n) => n.voucher);
-  const contabilidadOk = contabilidadNormalized.filter((n) => n.ok).map((n) => n.voucher);
 
   return classifyVouchers(arcaOk, contabilidadOk, arcaErrors, contabilidadErrors);
 }

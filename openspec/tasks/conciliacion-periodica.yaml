@@ -26,12 +26,12 @@ Chained PRs recommended: Yes
 
 ## Phase 2: Stock Histórico + Matching de 3 Pasos (PR-5 — base: PR-4)
 
-- [ ] T21: Migración: columnas `estado`/`periodo_alta_id`/`periodo_cierre_id` en `vouchers_canonical` + índice único de clave compuesta por `file_source` (RF-15) (M, db, PR-5)
-- [ ] T22: Upsert real de `CanonicalVoucher` normalizado -> `vouchers_canonical` por clave compuesta, respetando inmutabilidad de filas `conciliado` (RF-15) (M, api, PR-5)
-- [ ] T23: Motor de matching de 3 pasos: excluir conciliado, match corriente, match histórico contra stock pendiente (RF-16) (L, api, PR-5)
-- [ ] T24: Comparación de importes con tolerancia por tenant + clasificación `con_divergencia` (RF-18) (S, api, PR-5)
-- [ ] T25: Detección de `posible_duplicado_en_sistema` (RF-17) (S, api, PR-5)
-- [ ] T26: Cálculo de `antiguedad_meses` para stock pendiente (RF-19) (S, api, PR-5)
+- [x] T21: Migración: columnas `estado`/`periodo_alta_id`/`periodo_cierre_id` en `vouchers_canonical` + índice único de clave compuesta por `file_source` (RF-15) (M, db, PR-5) — 015_alter_vouchers_canonical_add_estado_periodo.sql
+- [x] T22: Upsert real de `CanonicalVoucher` normalizado -> `vouchers_canonical` por clave compuesta, respetando inmutabilidad de filas `conciliado` (RF-15) (M, api, PR-5) — vouchers-canonical-writer.ts, wired into reconciliation.worker.ts
+- [x] T23: Motor de matching de 3 pasos: excluir conciliado, match corriente, match histórico contra stock pendiente (RF-16) (L, api, PR-5) — periodo-matching-engine.ts
+- [x] T24: Comparación de importes con tolerancia por tenant + clasificación `con_divergencia` (RF-18) (S, api, PR-5) — periodo-matching-engine.ts
+- [x] T25: Detección de `posible_duplicado_en_sistema` (RF-17) (S, api, PR-5) — periodo-matching-engine.ts
+- [x] T26: Cálculo de `antiguedad_meses` para stock pendiente (RF-19) (S, api, PR-5) — periodo-matching-engine.ts
 
 ## Phase 3: Cierre de Mes + Reporte + Frontend (PR-6 — base: PR-5)
 

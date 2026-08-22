@@ -1,4 +1,4 @@
-import { classifyStagedRows, classifyVouchers } from './classification-engine';
+import { classifyStagedRows, classifyVouchers, normalizeStagedRows } from './classification-engine';
 import { Classification } from 'shared-types';
 import type { CanonicalVoucher } from 'shared-types';
 
@@ -136,5 +136,43 @@ describe('T10: classifyStagedRows (raw-row end-to-end pipeline)', () => {
     const arcaRows = [{ 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '999' }];
     const { counts } = classifyStagedRows(arcaRows, [], 'tango');
     expect(counts[Classification.Errors]).toBe(1);
+  });
+});
+
+describe('T22 (conciliacion-periodica): normalizeStagedRows', () => {
+  it('exposes the same ok/error split classifyStagedRows uses internally, for vouchers-canonical-writer.ts to reuse', () => {
+    const arcaRows = [
+      { 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' },
+      { 'Nro. Doc. Receptor': '30222222223', 'Tipo de Comprobante': '999' }, // unresolvable tipo
+    ];
+    const contabilidadRows = [{ CUIT: '30111111112', Tipo: 'Factura A', 'Punto de Venta': '1', Número: '1', Importe: '100,00' }];
+
+    const { arcaOk, contabilidadOk, arcaErrors, contabilidadErrors } = normalizeStagedRows(
+      arcaRows,
+      contabilidadRows,
+      'tango',
+    );
+    expect(arcaOk).toHaveLength(1);
+    expect(arcaOk[0].file_source).toBe('arca');
+    expect(contabilidadOk).toHaveLength(1);
+    expect(contabilidadOk[0].file_source).toBe('contabilidad');
+    expect(arcaErrors).toHaveLength(1);
+    expect(contabilidadErrors).toHaveLength(0);
+  });
+
+  it('classifyVouchers(normalizeStagedRows(...)) produces the same result as classifyStagedRows', () => {
+    const arcaRows = [{ 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' }];
+    const contabilidadRows = [{ CUIT: '30111111112', Tipo: 'Factura A', 'Punto de Venta': '1', Número: '1', Importe: '100,00' }];
+
+    const direct = classifyStagedRows(arcaRows, contabilidadRows, 'tango');
+    const { arcaOk, contabilidadOk, arcaErrors, contabilidadErrors } = normalizeStagedRows(
+      arcaRows,
+      contabilidadRows,
+      'tango',
+    );
+    const viaNormalize = classifyVouchers(arcaOk, contabilidadOk, arcaErrors, contabilidadErrors);
+
+    expect(viaNormalize.counts).toEqual(direct.counts);
+    expect(viaNormalize.results).toEqual(direct.results);
   });
 });

@@ -155,6 +155,14 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(sqlLc).toContain('tolerancia_redondeo_ars');
       expect(sqlLc).toMatch(/tolerancia_redondeo_ars\s+numeric\(10,\s*2\)\s+not\s+null\s+default\s+0\.99/);
     });
+
+    it('vouchers_canonical gains estado, periodo_alta_id, periodo_cierre_id + a unique composite-key index (T21, RF-15/RF-16)', () => {
+      expect(sqlLc).toMatch(/estado\s+text\s+not\s+null\s+default\s+'pendiente'/);
+      expect(sqlLc).toContain('periodo_alta_id');
+      expect(sqlLc).toContain('periodo_cierre_id');
+      expect(sqlLc).toMatch(/create\s+unique\s+index\s+idx_vouchers_tenant_key_unique/);
+      expect(sqlLc).toMatch(/idx_vouchers_tenant_key_unique\s+on\s+vouchers_canonical\s*\(\s*tenant_id\s*,\s*file_source\s*,\s*cuit_emisor\s*,\s*tipo_cbte\s*,\s*punto_venta\s*,\s*numero\s*\)/);
+    });
   });
 
   describe('indexes', () => {

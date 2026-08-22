@@ -11,7 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { processReconciliationJob } from './reconciliation.worker';
-import { createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
 
 describe('T05 RF-03: processReconciliationJob', () => {
   let pool: Pool;
@@ -137,5 +137,72 @@ describe('T05 RF-03: processReconciliationJob', () => {
       [tenantId, jobId],
     );
     expect(auditRows).toHaveLength(0);
+  });
+
+  describe('T22 (RF-15, conciliacion-periodica): vouchers_canonical upsert', () => {
+    it('upserts successfully-normalized vouchers into vouchers_canonical when periodoId is set', async () => {
+      const periodoId = await createTestPeriodo(pool, tenantId, '2026-03-01');
+      const jobId = randomUUID();
+      const arcaPath = path.join(tmpDir, 'arca-t22.csv');
+      const contabilidadPath = path.join(tmpDir, 'contabilidad-t22.csv');
+      await fs.writeFile(
+        arcaPath,
+        'Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1',
+        'utf8',
+      );
+      await fs.writeFile(contabilidadPath, 'CUIT,Tipo\n30111111112,Factura A', 'utf8');
+
+      try {
+        await processReconciliationJob(pool, jobId, {
+          tenantId,
+          contabilidadSourceSystem: 'tango',
+          periodoId,
+          arca: { filePath: arcaPath, originalName: 'arca-t22.csv', extension: 'csv' },
+          contabilidad: { filePath: contabilidadPath, originalName: 'contabilidad-t22.csv', extension: 'csv' },
+        });
+
+        const { rows } = await pool.query(
+          "SELECT file_source, estado, periodo_alta_id, cuit_emisor FROM vouchers_canonical WHERE tenant_id = $1 ORDER BY file_source, cuit_emisor",
+          [tenantId],
+        );
+        expect(rows).toEqual([
+          { file_source: 'arca', estado: 'pendiente', periodo_alta_id: periodoId, cuit_emisor: '30111111112' },
+          { file_source: 'arca', estado: 'pendiente', periodo_alta_id: periodoId, cuit_emisor: '30222222223' },
+          {
+            file_source: 'contabilidad',
+            estado: 'pendiente',
+            periodo_alta_id: periodoId,
+            cuit_emisor: '30111111112',
+          },
+        ]);
+
+        const { rows: auditRows } = await pool.query(
+          "SELECT details FROM audit_trail WHERE tenant_id = $1 AND entity = 'reconciliation_job' AND entity_id = $2 AND action = 'match'",
+          [tenantId, jobId],
+        );
+        expect(auditRows[0].details.vouchers_canonical_upserted).toBe(3);
+        expect(auditRows[0].details.vouchers_canonical_skipped_conciliado).toBe(0);
+      } finally {
+        await pool.query('DELETE FROM vouchers_canonical WHERE tenant_id = $1', [tenantId]);
+      }
+    }, 15000);
+
+    it('does not touch vouchers_canonical when periodoId is absent (backward compat)', async () => {
+      const jobId = randomUUID();
+      const arcaPath = await writeCsv('arca-no-periodo.csv', 2);
+      const contabilidadPath = await writeCsv('contabilidad-no-periodo.csv', 1);
+
+      await processReconciliationJob(pool, jobId, {
+        tenantId,
+        contabilidadSourceSystem: 'tango',
+        arca: { filePath: arcaPath, originalName: 'arca-no-periodo.csv', extension: 'csv' },
+        contabilidad: { filePath: contabilidadPath, originalName: 'contabilidad-no-periodo.csv', extension: 'csv' },
+      });
+
+      const { rows } = await pool.query('SELECT count(*)::int AS n FROM vouchers_canonical WHERE tenant_id = $1', [
+        tenantId,
+      ]);
+      expect(rows[0].n).toBe(0);
+    }, 15000);
   });
 });
