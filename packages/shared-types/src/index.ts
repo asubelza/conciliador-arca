@@ -6,44 +6,51 @@
  * API, web frontend, and seed pipeline.
  */
 
-/** Zero-padded 3-digit AFIP comprobante tipo code, e.g. "001" (Factura). */
-export type AfipTipo = string;
+/**
+ * Real AFIP "Tabla de Comprobantes" integer code, e.g. `1` (Factura A).
+ *
+ * Until 2026-08-22 this package exported a DIFFERENT, unrelated zero-padded
+ * 3-digit scheme ('001', '003', ...) that was never actually wired to any
+ * real adapter/normalizer — see conciliacion-periodica's
+ * stock-historico-comprobantes.spec.md (RF-14) for the full story. This is
+ * now the single source of truth for the codes every real code path
+ * (column-adapters.ts, afip-tipo-lookup.ts, comprobante-normalizer.ts) has
+ * always actually used via `CanonicalVoucher.tipo_cbte: number`.
+ */
+export type AfipTipo = number;
 
 /**
- * The 15 canonical AFIP tipos commonly exchanged between ARCA and Argentine
- * accounting systems. Kept as a readonly tuple so consumers cannot import
- * an unknown tipo at runtime. See comprobante-normalization.spec.md (RF-06).
+ * The AFIP tipos this catalogue recognizes — the same set
+ * `afip-tipo-lookup.ts`'s `KNOWN_AFIP_CODES` resolves to a canonical
+ * `tipo_cbte`, imported from here rather than duplicated, so the two can
+ * never drift apart again. Kept as a readonly tuple so consumers cannot
+ * import an unknown tipo at runtime.
  */
 export const AFIP_TIPOS_CADENCIAL: AfipTipo[] = [
-  '001', '002', '003', '004', '005',
-  '006', '007', '008', '011', '014',
-  '015', '021', '022', '023', '024',
+  1, 2, 3, 6, 7, 8, 11, 12, 13, 19, 20, 21,
 ];
 
-/** Human-readable label keyed by canonical AFIP tipo code. */
+/** Human-readable label keyed by the real AFIP tipo integer code. */
 export const AFIP_TIPO_LABELS: Record<AfipTipo, string> = {
-  '001': 'FACTURA',
-  '002': 'NOTA_DE_VENTA',
-  '003': 'FACTURA_B',
-  '004': 'FACTURA_C',
-  '005': 'NOTA_DE_CREDITO',
-  '006': 'NOTA_DE_DEBITO',
-  '007': 'FACTURA_EXPORTACION',
-  '008': 'FACTURA_B_EXPORTACION',
-  '011': 'NOTA_CREDITO_EXPORTACION',
-  '014': 'NOTA_DEBITO_EXPORTACION',
-  '015': 'RECIBO',
-  '021': 'NOTA_DE_RETENCION',
-  '022': 'NOTA_DE_RETENCION_ENTIDADES',
-  '023': 'NOTA_DE_RETENCION_PERSONAS',
-  '024': 'COMPROBANTE_DE_RETENCION',
+  1: 'FACTURA_A',
+  2: 'NOTA_DEBITO_A',
+  3: 'NOTA_CREDITO_A',
+  6: 'FACTURA_B',
+  7: 'NOTA_DEBITO_B',
+  8: 'NOTA_CREDITO_B',
+  11: 'FACTURA_C',
+  12: 'NOTA_DEBITO_C',
+  13: 'NOTA_CREDITO_C',
+  19: 'FACTURA_E',
+  20: 'NOTA_DEBITO_E',
+  21: 'NOTA_CREDITO_E',
 };
 
 /** Enum-like lookup mirroring AFIP_TIPO_LABELS (code -> label). */
 export const ComprobanteTipo = AFIP_TIPO_LABELS;
 
-/** Type guard: true only for the 15 canonical AFIP tipos. */
-export function isValidAfipTipo(value: string): value is AfipTipo {
+/** Type guard: true only for the recognized real AFIP tipo codes. */
+export function isValidAfipTipo(value: number): value is AfipTipo {
   return AFIP_TIPOS_CADENCIAL.includes(value);
 }
 

@@ -18,11 +18,18 @@
  * An unrecognized tipo (numeric or textual) resolves to `undefined` — RF-06
  * requires that to flow into `classification = 'errors'`, not a crash or a
  * silently-wrong default (see comprobante-normalizer.ts).
+ *
+ * `KNOWN_AFIP_CODES` is sourced from shared-types' `AFIP_TIPOS_CADENCIAL`
+ * (not a locally duplicated list) since 2026-08-22's conciliacion-periodica
+ * work (RF-14) — see that package's module doc for why: `vouchers_canonical`
+ * used to carry a completely different, disconnected tipo encoding, and the
+ * fix was to make this the single source of truth both sides import.
  */
+import { AFIP_TIPOS_CADENCIAL } from 'shared-types';
 import type { SourceSystem } from './column-adapters';
 
 /** Numeric AFIP tipo codes this catalogue recognizes (real AFIP codes). */
-const KNOWN_AFIP_CODES = new Set([1, 2, 3, 6, 7, 8, 11, 12, 13, 19, 20, 21]);
+const KNOWN_AFIP_CODES = new Set<number>(AFIP_TIPOS_CADENCIAL);
 
 /**
  * Per-source text/shorthand -> canonical AFIP integer. Keys are matched

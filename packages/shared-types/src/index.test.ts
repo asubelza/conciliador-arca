@@ -12,47 +12,50 @@ import {
   isValidAfipTipo,
 } from './index';
 
-// The canonical 15 AFIP comprobante tipos (zero-padded 3-digit) per T01 spec.
-const EXPECTED_TIPOS: AfipTipo[] = [
-  '001', '002', '003', '004', '005',
-  '006', '007', '008', '011', '014',
-  '015', '021', '022', '023', '024',
-];
+// The real AFIP tipo integer codes ("Tabla de Comprobantes") — replaced the
+// disconnected zero-padded 3-digit scheme on 2026-08-22 (conciliacion-periodica,
+// RF-14): this is now the same set afip-tipo-lookup.ts's KNOWN_AFIP_CODES
+// imports from here, not a separately maintained list.
+const EXPECTED_TIPOS: AfipTipo[] = [1, 2, 3, 6, 7, 8, 11, 12, 13, 19, 20, 21];
 
-describe('T01: shared-types AFIP tipo map + canonical voucher types', () => {
+describe('T01/T14: shared-types AFIP tipo map + canonical voucher types', () => {
   describe('AFIP_TIPOS_CADENCIAL', () => {
-    it('contains exactly the 15 canonical AFIP tipos', () => {
-      expect(AFIP_TIPOS_CADENCIAL).toHaveLength(15);
-      expect(AFIP_TIPOS_CADENCIAL.sort()).toEqual(EXPECTED_TIPOS.sort());
+    it('contains exactly the real AFIP tipo codes', () => {
+      expect(AFIP_TIPOS_CADENCIAL).toHaveLength(EXPECTED_TIPOS.length);
+      expect([...AFIP_TIPOS_CADENCIAL].sort((a, b) => a - b)).toEqual(
+        [...EXPECTED_TIPOS].sort((a, b) => a - b),
+      );
     });
 
-    it('only contains zero-padded 3-digit codes', () => {
-      const invalid = AFIP_TIPOS_CADENCIAL.filter((t) => !/^\d{3}$/.test(t));
+    it('only contains positive integers (no more zero-padded string codes)', () => {
+      const invalid = AFIP_TIPOS_CADENCIAL.filter(
+        (t) => !Number.isInteger(t) || t <= 0,
+      );
       expect(invalid).toEqual([]);
     });
   });
 
   describe('isValidAfipTipo', () => {
-    it('accepts all 15 canonical tipos', () => {
+    it('accepts all canonical tipos', () => {
       EXPECTED_TIPOS.forEach((t) => {
         expect(isValidAfipTipo(t)).toBe(true);
       });
     });
 
-    it('rejects unknown or malformed tipos (no runtime imports of unknown tipos)', () => {
-      expect(isValidAfipTipo('999')).toBe(false);
-      expect(isValidAfipTipo('1')).toBe(false);
-      expect(isValidAfipTipo('abc')).toBe(false);
-      expect(isValidAfipTipo('025')).toBe(false);
-      expect(isValidAfipTipo('')).toBe(false);
+    it('rejects unknown tipo codes (no runtime imports of unknown tipos)', () => {
+      expect(isValidAfipTipo(999)).toBe(false);
+      expect(isValidAfipTipo(0)).toBe(false);
+      expect(isValidAfipTipo(-1)).toBe(false);
+      expect(isValidAfipTipo(4)).toBe(false); // not a real AFIP code
+      expect(isValidAfipTipo(NaN)).toBe(false);
     });
   });
 
   describe('AFIP_TIPO_LABELS', () => {
     it('has a label for every canonical tipo and only those', () => {
-      const keys = Object.keys(AFIP_TIPO_LABELS);
-      expect(keys.length).toBe(15);
-      expect(keys.sort()).toEqual(EXPECTED_TIPOS.sort());
+      const keys = Object.keys(AFIP_TIPO_LABELS).map(Number);
+      expect(keys.length).toBe(EXPECTED_TIPOS.length);
+      expect(keys.sort((a, b) => a - b)).toEqual([...EXPECTED_TIPOS].sort((a, b) => a - b));
     });
 
     it('labels are non-empty strings', () => {
@@ -64,14 +67,14 @@ describe('T01: shared-types AFIP tipo map + canonical voucher types', () => {
   });
 
   describe('ComprobanteTipo', () => {
-    it('exposes the same 15 tipos with human labels', () => {
-      const entries = Object.keys(ComprobanteTipo);
-      expect(entries.length).toBe(15);
-      expect(entries.sort()).toEqual(EXPECTED_TIPOS.sort());
+    it('exposes the same tipos with human labels', () => {
+      const entries = Object.keys(ComprobanteTipo).map(Number);
+      expect(entries.length).toBe(EXPECTED_TIPOS.length);
+      expect(entries.sort((a, b) => a - b)).toEqual([...EXPECTED_TIPOS].sort((a, b) => a - b));
     });
 
-    it('maps 001 to a Factura label', () => {
-      expect(ComprobanteTipo['001'].toUpperCase()).toContain('FACTURA');
+    it('maps 1 to a Factura A label', () => {
+      expect(ComprobanteTipo[1].toUpperCase()).toContain('FACTURA');
     });
   });
 

@@ -8,7 +8,7 @@
  * documentation mirroring the SQL migrations, per its own header comment) —
  * running `npm run db:seed` fails immediately with "prisma: not found".
  * This file wires `runSeed` to a real `pg` connection (already a direct
- * dependency of this package) so `npm run seed` actually inserts the 15
+ * dependency of this package) so `npm run seed` actually inserts the
  * canonical AFIP tipos into a real PostgreSQL database.
  */
 import { Pool } from 'pg';
