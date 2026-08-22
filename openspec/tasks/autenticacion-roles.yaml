@@ -1,0 +1,28 @@
+# Tasks: autenticacion-roles (RF-14)
+
+## Fase 1: Infraestructura de auth (no rompe nada existente — PR-7)
+
+- [ ] T33: Migración: tablas `users` (email, password_hash, role, is_active) + `user_tenant_access`, con GRANTs de app_role (M, db)
+- [ ] T34: `auth.service.ts`: hash/verify de contraseña (bcryptjs), emisión/verificación de JWT (jsonwebtoken) (M, api)
+- [ ] T35: `POST /api/auth/login` (S, api)
+- [ ] T36: `AuthGuard` + `GET /api/auth/me` (endpoint protegido de prueba) (S, api)
+
+## Fase 2: Proteger los endpoints existentes (rompe el acceso sin login — PR-8)
+
+- [ ] T37: `assertTenantAccess` + aplicar `AuthGuard`/chequeo de rol a `periodos.controller.ts` (M, api)
+- [ ] T38: Aplicar a `reconciliations.controller.ts` (M, api)
+- [ ] T39: Aplicar a `tenants.controller.ts` (S, api)
+
+## Fase 3: Frontend (PR-8, junto con Fase 2 — sin login el frontend no puede llamar a nada)
+
+- [ ] T40: Pantalla de login + módulo de sesión (token en memoria/localStorage) (M, frontend)
+- [ ] T41: Todos los `fetch` de `lib/api.ts` mandan `Authorization: Bearer` (S, frontend)
+- [ ] T42: UI condicionada por rol (ocultar cierre/config según corresponda) (S, frontend)
+
+## Fase 4: Alta manual de usuarios
+
+- [ ] T43: Crear las cuentas del estudio (admin/colaborador) una vez verificado todo (S, manual — no requiere código nuevo, usa T35's mecanismo de alta directa a la tabla `users`)
+
+## Disciplina de verificación (sin cambios respecto al resto del proyecto)
+
+Cada tarea se verifica contra Postgres real (no solo jest con mocks), se sincroniza a la máquina del usuario, y se confirma con `git log`/`git show --stat` corridos directamente sobre su repo antes de marcarse como hecha.

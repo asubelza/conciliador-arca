@@ -148,3 +148,29 @@ model FeedbackLoop {
 
   @@map("feedback_loop")
 }
+
+// T33 (RF-14, autenticacion-roles, 2026-08-22): login + roles. No tenantId —
+// a single estudio's admin/colaborador users implicitly span every tenant;
+// see openspec/designs/autenticacion-roles/architecture.md's "Por qué no
+// hay tabla estudios".
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String
+  displayName  String?  @map("display_name")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+// Only meaningful for role='cliente' — which tenant(s) that user may see.
+model UserTenantAccess {
+  userId   String @map("user_id")
+  tenantId String @map("tenant_id")
+
+  @@id([userId, tenantId])
+  @@map("user_tenant_access")
+}

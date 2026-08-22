@@ -314,12 +314,54 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     });
   });
 
+  describe('018: users + roles (autenticacion-roles, RF-14)', () => {
+    const files = fs.existsSync(MIGRATIONS_DIR)
+      ? fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+      : [];
+
+    it('defines migration 018', () => {
+      expect(files.some((f) => /018_init_users_and_roles/.test(f))).toBe(true);
+    });
+
+    it('creates users with email UNIQUE, password_hash, role CHECK, is_active', () => {
+      expect(sqlLc).toMatch(/create\s+table\s+users/);
+      expect(sqlLc).toContain('email');
+      expect(sqlLc).toMatch(/email\s+text\s+not\s+null\s+unique/);
+      expect(sqlLc).toContain('password_hash');
+      expect(sqlLc).toMatch(/role\s+in\s*\(\s*'admin'\s*,\s*'colaborador'\s*,\s*'cliente'\s*\)/);
+      expect(sqlLc).toMatch(/is_active\s+boolean\s+not\s+null\s+default\s+true/);
+    });
+
+    it('CHECKs users.email is always lowercase (so a plain lower() lookup never misses a row on case alone)', () => {
+      expect(sqlLc).toMatch(/check\s*\(\s*email\s*=\s*lower\s*\(\s*email\s*\)\s*\)/);
+    });
+
+    it('creates user_tenant_access referencing users and tenants with a composite PK', () => {
+      expect(sqlLc).toMatch(/create\s+table\s+user_tenant_access/);
+      expect(sqlLc).toMatch(/references\s+users\s*\(\s*id\s*\)/);
+      expect(sqlLc).toMatch(/primary\s+key\s*\(\s*user_id\s*,\s*tenant_id\s*\)/);
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on users (no DELETE — deactivate via is_active)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+users\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT+DELETE on user_tenant_access', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*delete\s+on\s+user_tenant_access\s+to\s+app_role/);
+    });
+
+    it('does NOT enable RLS/tenant_isolation on users or user_tenant_access (see migration 018\'s module doc — chicken-and-egg with tenant access resolution)', () => {
+      expect(sqlLc).not.toMatch(/alter\s+table\s+users\s+enable\s+row\s+level\s+security/);
+      expect(sqlLc).not.toMatch(/alter\s+table\s+user_tenant_access\s+enable\s+row\s+level\s+security/);
+    });
+  });
+
   describe('Prisma schema', () => {
     it('declares a postgresql datasource', () => {
       expect(schema).toMatch(/datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"postgresql"/);
     });
 
-    it('declares all eight models', () => {
+    it('declares all eight core models', () => {
       const models = [
         'Tenant',
         'AfipTipoMap',
@@ -333,6 +375,11 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       models.forEach((m) => {
         expect(schema).toMatch(new RegExp(`model\\s+${m}\\s*\\{`));
       });
+    });
+
+    it('declares User and UserTenantAccess (T33, autenticacion-roles)', () => {
+      expect(schema).toMatch(/model\s+User\s*\{/);
+      expect(schema).toMatch(/model\s+UserTenantAccess\s*\{/);
     });
 
     it('generates the Prisma client', () => {

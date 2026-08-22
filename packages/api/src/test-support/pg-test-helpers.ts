@@ -5,6 +5,8 @@
  */
 import type { Pool } from 'pg';
 import { randomUUID } from 'crypto';
+import { hashPassword } from '../auth/password';
+import type { UserRole } from '../auth/users-types';
 
 export async function createTestTenant(pool: Pool, name = 'Test Tenant'): Promise<string> {
   const id = randomUUID();
@@ -25,6 +27,36 @@ export async function createTestPeriodo(pool: Pool, tenantId: string, mes = '202
     [tenantId, mes],
   );
   return rows[0].id;
+}
+
+/**
+ * T33/T34 (autenticacion-roles): creates a real, correctly-hashed test
+ * user (real bcrypt, not a stub) so login tests exercise the actual
+ * password-verification path, not a shortcut.
+ */
+export async function createTestUser(
+  pool: Pool,
+  overrides: { email?: string; password?: string; role?: UserRole; isActive?: boolean } = {},
+): Promise<{ id: string; email: string; password: string }> {
+  // users.email has a CHECK (email = lower(email)) constraint (migration
+  // 018) — normalize here the same way any real account-creation path
+  // must, so a caller passing a mixed-case override (e.g. to test
+  // case-insensitive login) doesn't hit the constraint or silently create
+  // a row login() can never match.
+  const email = (overrides.email ?? `test-${randomUUID()}@example.com`).trim().toLowerCase();
+  const password = overrides.password ?? 'correct-horse-battery-staple';
+  const role = overrides.role ?? 'admin';
+  const passwordHash = await hashPassword(password);
+  const { rows } = await pool.query<{ id: string }>(
+    'INSERT INTO users (email, password_hash, role, is_active) VALUES ($1, $2, $3, $4) RETURNING id',
+    [email, passwordHash, role, overrides.isActive ?? true],
+  );
+  return { id: rows[0].id, email, password };
+}
+
+export async function deleteTestUser(pool: Pool, userId: string): Promise<void> {
+  await pool.query('DELETE FROM user_tenant_access WHERE user_id = $1', [userId]);
+  await pool.query('DELETE FROM users WHERE id = $1', [userId]);
 }
 
 export async function deleteTestTenant(pool: Pool, tenantId: string): Promise<void> {

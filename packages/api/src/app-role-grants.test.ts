@@ -206,6 +206,69 @@ describe('017_grant_app_role_remaining_tables: real privilege checks', () => {
     });
   });
 
+  describe('018: users SELECT+INSERT+UPDATE granted; no DELETE (T33/T34, autenticacion-roles)', () => {
+    it('app_role can SELECT, INSERT, and UPDATE users (no RLS on this table — see migration 018)', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET ROLE app_role');
+        const { rows } = await client.query(
+          `INSERT INTO users (email, password_hash, role) VALUES ($1, 'hash', 'admin') RETURNING id`,
+          [`app-role-grants-test-${Date.now()}@example.com`],
+        );
+        await expect(client.query('SELECT id FROM users WHERE id = $1', [rows[0].id])).resolves.toBeTruthy();
+        await expect(
+          client.query('UPDATE users SET display_name = $1 WHERE id = $2', ['Nombre', rows[0].id]),
+        ).resolves.toBeTruthy();
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    });
+
+    it('app_role cannot DELETE users (deactivate via is_active instead)', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `INSERT INTO users (email, password_hash, role) VALUES ($1, 'hash', 'admin') RETURNING id`,
+          [`app-role-grants-test-del-${Date.now()}@example.com`],
+        );
+        await client.query('SET ROLE app_role');
+        await expect(client.query('DELETE FROM users WHERE id = $1', [rows[0].id])).rejects.toThrow(/permission denied/i);
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    });
+  });
+
+  describe('018: user_tenant_access SELECT+INSERT+DELETE granted (T33, autenticacion-roles)', () => {
+    it('app_role can SELECT, INSERT, and DELETE user_tenant_access rows', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: userRows } = await client.query(
+          `INSERT INTO users (email, password_hash, role) VALUES ($1, 'hash', 'cliente') RETURNING id`,
+          [`app-role-grants-test-uta-${Date.now()}@example.com`],
+        );
+        await client.query('SET ROLE app_role');
+        await expect(
+          client.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userRows[0].id, tenantId]),
+        ).resolves.toBeTruthy();
+        await expect(
+          client.query('SELECT * FROM user_tenant_access WHERE user_id = $1', [userRows[0].id]),
+        ).resolves.toBeTruthy();
+        await expect(
+          client.query('DELETE FROM user_tenant_access WHERE user_id = $1', [userRows[0].id]),
+        ).resolves.toBeTruthy();
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    });
+  });
+
   describe('afip_tipo_map: deliberately not granted anything', () => {
     it('app_role cannot even SELECT afip_tipo_map (the app never queries it at request time — see afip-tipo-lookup.ts)', async () => {
       await expect(runAsAppRole('SELECT codigo FROM afip_tipo_map LIMIT 1', [])).rejects.toThrow(/permission denied/i);
