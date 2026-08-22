@@ -107,31 +107,52 @@ async function queryRows(pool: Queryable, whereClause: string, params: unknown[]
   return rows;
 }
 
-/** RF-19: calendar-month difference between a período and the currently viewed período, via periodos.mes (both normalized to the 1st of their month). */
-async function fetchAntiguedadLookup(
+/**
+ * RF-19: calendar-month difference between the currently viewed período and
+ * a pendiente ARCA voucher's own `fecha` (fecha de emisión) — NOT the
+ * período it first entered the system through.
+ *
+ * This replaces an earlier version of this function that measured
+ * `periodo_alta_id`'s own mes instead of the voucher's real emission date —
+ * confirmed wrong by the client when asked directly (2026-08-22): "La
+ * antigüedad se debe calcular siempre en base a la Fecha de Emisión real
+ * del comprobante en ARCA... nunca en función de la fecha de carga del
+ * archivo al sistema. Si un comprobante fue emitido en ARCA en Noviembre y
+ * la empresa lo termina registrando en Febrero, la antigüedad/diferimiento
+ * es de 3 meses, sin importar si el archivo de ARCA de Noviembre se subió
+ * una o varias veces." `periodo_alta_id` still exists and still matters for
+ * the corriente/histórico split above (and for RF-15's upsert semantics in
+ * vouchers-canonical-writer.ts) — it's just no longer what antiguedad
+ * measures.
+ */
+async function fetchViewedPeriodoYearMonth(
   pool: Queryable,
   periodoId: string,
-  otherPeriodoIds: string[],
-): Promise<Map<string, number>> {
-  const ids = Array.from(new Set([periodoId, ...otherPeriodoIds]));
-  if (ids.length === 0) return new Map();
-
-  const { rows } = await pool.query<{ id: string; anio: number; mes_num: number }>(
-    `SELECT id, EXTRACT(YEAR FROM mes)::int AS anio, EXTRACT(MONTH FROM mes)::int AS mes_num
-       FROM periodos WHERE id = ANY($1::uuid[])`,
-    [ids],
+): Promise<{ anio: number; mes_num: number } | undefined> {
+  const { rows } = await pool.query<{ anio: number; mes_num: number }>(
+    `SELECT EXTRACT(YEAR FROM mes)::int AS anio, EXTRACT(MONTH FROM mes)::int AS mes_num
+       FROM periodos WHERE id = $1`,
+    [periodoId],
   );
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const viewed = byId.get(periodoId);
-  if (!viewed) return new Map();
+  return rows[0];
+}
 
-  const antiguedad = new Map<string, number>();
-  for (const altaId of otherPeriodoIds) {
-    const alta = byId.get(altaId);
-    if (!alta) continue;
-    antiguedad.set(altaId, (viewed.anio - alta.anio) * 12 + (viewed.mes_num - alta.mes_num));
-  }
-  return antiguedad;
+/**
+ * `fecha` is read back as 'YYYY-MM-DD' text (see ROW_COLUMNS's
+ * `fecha::text`) — sliced directly rather than parsed through `Date`, which
+ * would apply local-timezone shifting to what is really just a plain
+ * calendar date with no time component.
+ */
+function yearMonthFromIsoDate(fecha: string): { anio: number; mes_num: number } {
+  const [anioStr, mesStr] = fecha.split('-');
+  return { anio: Number(anioStr), mes_num: Number(mesStr) };
+}
+
+function calendarMonthsBetween(
+  viewed: { anio: number; mes_num: number },
+  other: { anio: number; mes_num: number },
+): number {
+  return (viewed.anio - other.anio) * 12 + (viewed.mes_num - other.mes_num);
 }
 
 /**
@@ -225,17 +246,15 @@ export async function matchPeriodo(
     ...arcaCorriente.filter((r) => !consumedCorriente.has(buildCompositeKey(r))),
     ...arcaHistorico.filter((r) => !consumedHistorico.has(buildCompositeKey(r))),
   ];
-  const antiguedadLookup = await fetchAntiguedadLookup(
-    pool,
-    periodoId,
-    pendientes.map((r) => r.periodo_alta_id),
-  );
+  const viewedYearMonth = await fetchViewedPeriodoYearMonth(pool, periodoId);
   for (const arca of pendientes) {
+    const antiguedadMeses =
+      viewedYearMonth && arca.fecha ? calendarMonthsBetween(viewedYearMonth, yearMonthFromIsoDate(arca.fecha)) : undefined;
     results.push({
       classification: 'pendiente_en_arca',
       composite_key: buildCompositeKey(arca),
       arca,
-      antiguedad_meses: antiguedadLookup.get(arca.periodo_alta_id),
+      antiguedad_meses: antiguedadMeses,
     });
   }
 

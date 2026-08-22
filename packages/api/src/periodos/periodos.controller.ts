@@ -5,7 +5,8 @@
  * shared pool (no repository/ORM layer in this codebase; prisma is
  * documentation-only, see seed-runner.ts's module doc).
  */
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { getPgPool } from '../db/pg-pool';
 import {
   validateCerrarBody,
@@ -15,6 +16,7 @@ import {
 } from './periodos-validation';
 import { cerrarPeriodo } from './periodo-cierre';
 import { getPeriodoReport } from './periodo-report';
+import { buildPeriodoExportSections, toPeriodoReportCsv, toPeriodoReportXlsxBuffer } from './periodo-report-exporter';
 import { logAuditEvent } from '../reconciliations/audit-logger';
 
 const UNIQUE_VIOLATION = '23505';
@@ -163,12 +165,22 @@ export class PeriodosController {
    * 'export' audit event, same as the per-job report endpoint (T12/RF-11),
    * so every report view/download is traceable regardless of which
    * endpoint served it.
+   *
+   * `format=csv|xlsx` (client-requested 2026-08-22, "con diseño
+   * profesional" for xlsx — see periodo-report-exporter.ts) added on top of
+   * T29's original `json`-only scope; default stays `json` so the existing
+   * frontend viewer (which never passes `format`) is unaffected.
    */
   @Get(':id/report')
-  async report(@Param('id') id: unknown) {
+  async report(@Param('id') id: unknown, @Query('format') format: unknown, @Res() res: Response) {
     const idFailure = validatePeriodoIdParam(id);
     if (idFailure) {
       throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const resolvedFormat = format === undefined ? 'json' : format;
+    if (resolvedFormat !== 'json' && resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx') {
+      throw new HttpException({ error: "format must be 'json', 'csv', or 'xlsx'" }, HttpStatus.BAD_REQUEST);
     }
 
     const pool = getPgPool();
@@ -182,9 +194,33 @@ export class PeriodosController {
       action: 'export',
       entity: 'periodo',
       entityId: id as string,
-      details: { format: 'json', live: result.live },
+      details: { format: resolvedFormat, live: result.live },
     });
 
-    return result;
+    if (resolvedFormat === 'json') {
+      res.json(result);
+      return;
+    }
+
+    const exportSections = buildPeriodoExportSections(result.sections);
+
+    if (resolvedFormat === 'xlsx') {
+      const buffer = await toPeriodoReportXlsxBuffer(exportSections, result.periodo, result.live);
+      res
+        .set({
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'Content-Disposition': `attachment; filename="periodo-${result.periodo.mes}-${id}.xlsx"`,
+        })
+        .send(buffer);
+      return;
+    }
+
+    const csv = toPeriodoReportCsv(exportSections);
+    res
+      .set({
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="periodo-${result.periodo.mes}-${id}.csv"`,
+      })
+      .send(csv);
   }
 }

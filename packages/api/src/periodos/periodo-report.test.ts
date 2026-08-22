@@ -16,14 +16,23 @@ async function insertVoucher(
     importeTotal?: number;
     fileSource: 'arca' | 'contabilidad';
     periodoAltaId: string;
+    /** Fecha de emisión — RF-19's antiguedad_meses is computed from this, not periodoAltaId (see periodo-matching-engine.ts). */
+    fecha?: string;
   },
 ): Promise<void> {
   await pool.query(
     `INSERT INTO vouchers_canonical (
        tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
-       file_source, estado, periodo_alta_id
-     ) VALUES ($1, '30111111112', 1, 1, $2, $3, $4, 'pendiente', $5)`,
-    [tenantId, overrides.numero ?? 1, overrides.importeTotal ?? 1000, overrides.fileSource, overrides.periodoAltaId],
+       file_source, estado, periodo_alta_id, fecha
+     ) VALUES ($1, '30111111112', 1, 1, $2, $3, $4, 'pendiente', $5, $6)`,
+    [
+      tenantId,
+      overrides.numero ?? 1,
+      overrides.importeTotal ?? 1000,
+      overrides.fileSource,
+      overrides.periodoAltaId,
+      overrides.fecha ?? null,
+    ],
   );
 }
 
@@ -58,7 +67,7 @@ describe('T29: getPeriodoReport (RF-22, RF-23)', () => {
     await insertVoucher(pool, tenantId, { fileSource: 'contabilidad', periodoAltaId: p1, numero: 1, importeTotal: 1000 });
     await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1, numero: 2, importeTotal: 500 });
     await insertVoucher(pool, tenantId, { fileSource: 'contabilidad', periodoAltaId: p1, numero: 2, importeTotal: 490 });
-    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1, numero: 3, importeTotal: 300 });
+    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1, numero: 3, importeTotal: 300, fecha: '2026-01-10' });
 
     const result = await getPeriodoReport(pool, p1);
     if ('code' in result) throw new Error('expected success');

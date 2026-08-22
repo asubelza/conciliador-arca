@@ -210,6 +210,41 @@ describe('T18: /api/periodos (integration)', () => {
       expect(closedReport.body.live).toBe(false);
     });
 
+    it('format=csv and format=xlsx download the período report (client-requested 2026-08-22)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .send({ tenant_id: tenantId, mes: '2027-01-01' });
+      const periodoId = created.body.id;
+
+      const csv = await request(app.getHttpServer()).get(`/api/periodos/${periodoId}/report?format=csv`);
+      expect(csv.status).toBe(200);
+      expect(csv.headers['content-type']).toContain('text/csv');
+      expect(csv.headers['content-disposition']).toContain('attachment');
+      expect(csv.text.split('\n')[0]).toBe(
+        'seccion,clasificacion,cuit_emisor,tipo_cbte,punto_venta,numero,fecha_emision,importe_arca,importe_sistema,divergencia_ars,antiguedad_meses',
+      );
+
+      const xlsx = await request(app.getHttpServer()).get(`/api/periodos/${periodoId}/report?format=xlsx`).buffer(true).parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+      expect(xlsx.status).toBe(200);
+      expect(xlsx.headers['content-type']).toContain('spreadsheetml');
+      expect(Buffer.isBuffer(xlsx.body)).toBe(true);
+      expect(xlsx.body.length).toBeGreaterThan(0);
+    });
+
+    it('returns 400 for an unsupported format value', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .send({ tenant_id: tenantId, mes: '2027-02-01' });
+      const periodoId = created.body.id;
+
+      const bad = await request(app.getHttpServer()).get(`/api/periodos/${periodoId}/report?format=pdf`);
+      expect(bad.status).toBe(400);
+    });
+
     it('rejects closing an already-cerrado período with 409', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/periodos')

@@ -221,6 +221,11 @@ export async function getPeriodoReport(periodoId: string): Promise<PeriodoReport
   return res.json();
 }
 
+/** Client-requested (2026-08-22): CSV/XLSX download for the período report, same `<a href>` pattern as reportDownloadUrl (T11's per-job export). */
+export function periodoReportDownloadUrl(periodoId: string, format: 'csv' | 'xlsx'): string {
+  return `${API_BASE_URL}/api/periodos/${periodoId}/report?format=${format}`;
+}
+
 export interface TenantConfig {
   id: string;
   tolerancia_redondeo_ars: string;

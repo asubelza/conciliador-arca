@@ -55,6 +55,18 @@ describe('T31: PeriodoReportViewer', () => {
     expect(screen.getByText('3')).toBeInTheDocument(); // antiguedad_meses cell
   });
 
+  it('offers CSV/Excel download links for the período report (client-requested 2026-08-22)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody }) as unknown as typeof fetch;
+
+    render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+    await screen.findByText(/conciliados ok \(1\)/i);
+
+    const csvLink = screen.getByRole('link', { name: /descargar csv/i });
+    const xlsxLink = screen.getByRole('link', { name: /descargar excel/i });
+    expect(csvLink).toHaveAttribute('href', expect.stringContaining(`/api/periodos/${PERIODO_ID}/report?format=csv`));
+    expect(xlsxLink).toHaveAttribute('href', expect.stringContaining(`/api/periodos/${PERIODO_ID}/report?format=xlsx`));
+  });
+
   it('shows the Cerrar Conciliación del Mes button only while abierto, and confirms before closing', async () => {
     const fetchMock = jest
       .fn()

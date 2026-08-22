@@ -1,7 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { cerrarPeriodo, getPeriodoReport, type Periodo, type PeriodoReport, type PeriodoReportRow } from '@/lib/api';
+import {
+  cerrarPeriodo,
+  getPeriodoReport,
+  periodoReportDownloadUrl,
+  type Periodo,
+  type PeriodoReport,
+  type PeriodoReportRow,
+} from '@/lib/api';
 
 export interface PeriodoReportViewerProps {
   periodoId: string;
@@ -104,6 +111,14 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
           <p className="text-xs text-gray-600">
             {report.live ? 'Vista en vivo (el período sigue abierto).' : 'Snapshot congelado al momento del cierre.'}
           </p>
+          <div className="flex gap-3 mt-1">
+            <a href={periodoReportDownloadUrl(periodoId, 'csv')} className="text-blue-600 underline text-sm">
+              Descargar CSV
+            </a>
+            <a href={periodoReportDownloadUrl(periodoId, 'xlsx')} className="text-blue-600 underline text-sm">
+              Descargar Excel
+            </a>
+          </div>
         </div>
         {report.periodo.estado === 'abierto' && (
           <button

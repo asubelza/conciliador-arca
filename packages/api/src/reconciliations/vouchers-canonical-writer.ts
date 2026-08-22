@@ -26,14 +26,23 @@
  *      contain that composite key — a company's own accounting export is
  *      period-specific by nature.
  *
- * Resolution (a judgment call — not spelled out by the spec, flagged in
- * openspec/progress/PR-5.md for the client to correct if this reads wrong
- * to them): `periodo_alta_id` is set once on first insert (either side),
- * then on every subsequent conflict only refreshed for `file_source =
- * 'contabilidad'` rows — ARCA rows keep whatever período first inserted
- * them, forever. `periodo-matching-engine.ts`'s "sistema_rows for período
- * P" query relies on this (`WHERE file_source = 'contabilidad' AND
- * periodo_alta_id = :periodoId`).
+ * Resolution (originally a judgment call, flagged in
+ * openspec/progress/PR-5.md — since confirmed correct with the client,
+ * 2026-08-22, when asked directly about re-uploading the same ARCA range/
+ * acumulado más adelante: "Es totalmente habitual volver a cargar archivos
+ * con rangos de fechas ya cargados... Si ya existe: Simplemente omite la
+ * inserción (o actualiza datos si hiciera falta), manteniendo su estado
+ * original (PENDIENTE o CONCILIADO)."): `periodo_alta_id` is set once on
+ * first insert (either side), then on every subsequent conflict only
+ * refreshed for `file_source = 'contabilidad'` rows — ARCA rows keep
+ * whatever período first inserted them, forever. `periodo-matching-
+ * engine.ts`'s "sistema_rows for período P" query relies on this (`WHERE
+ * file_source = 'contabilidad' AND periodo_alta_id = :periodoId`). Note
+ * that `periodo_alta_id` is no longer what RF-19's antiguedad_meses
+ * measures either (see periodo-matching-engine.ts's fetchViewedPeriodoYear
+ * Month doc) — the client also confirmed antiguedad must track the
+ * voucher's real fecha de emisión, not upload timing, so periodo_alta_id's
+ * only remaining job is the corriente/histórico split.
  *
  * ## Immutability once conciliado (RF-15's third scenario)
  *

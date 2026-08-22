@@ -24,13 +24,15 @@ async function insertVoucher(
     fileSource: 'arca' | 'contabilidad';
     estado?: 'pendiente' | 'conciliado';
     periodoAltaId: string;
+    /** Fecha de emisión (RF-19's antiguedad_meses is computed from this, not periodoAltaId — see periodo-matching-engine.ts's fetchViewedPeriodoYearMonth doc). */
+    fecha?: string;
   },
 ): Promise<string> {
   const { rows } = await pool.query<{ id: string }>(
     `INSERT INTO vouchers_canonical (
        tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
-       file_source, estado, periodo_alta_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       file_source, estado, periodo_alta_id, fecha
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id`,
     [
       tenantId,
@@ -42,6 +44,7 @@ async function insertVoucher(
       overrides.fileSource,
       overrides.estado ?? 'pendiente',
       overrides.periodoAltaId,
+      overrides.fecha ?? null,
     ],
   );
   return rows[0].id;
@@ -189,14 +192,42 @@ describe('T23–T26: matchPeriodo (RF-16, RF-17, RF-18, RF-19)', () => {
     expect(lenient.counts.conciliado_ok).toBe(1); // 2.00 <= 5.00
   });
 
-  it('RF-19 Scenario: a 3-month-old pendiente voucher reports antiguedad_meses = 3', async () => {
+  it('RF-19 Scenario: a 3-month-old pendiente voucher (by fecha de emisión) reports antiguedad_meses = 3', async () => {
     const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
     const p4 = await createTestPeriodo(pool, tenantId, '2026-04-01');
-    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1 });
+    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1, fecha: '2026-01-15' });
 
     const summary = await matchPeriodo(pool, tenantId, p4, 0.99);
     expect(summary.counts.pendiente_en_arca).toBe(1);
     expect(summary.results[0].antiguedad_meses).toBe(3);
+  });
+
+  it('RF-19 (client-confirmed 2026-08-22): antiguedad tracks the real fecha de emisión, not when the file was uploaded/re-uploaded', async () => {
+    // The exact scenario the client described: emitted in ARCA in
+    // November, but the accounting side only registers it in February —
+    // and the ARCA export itself might have been uploaded (or re-uploaded,
+    // e.g. as part of an acumulado anual) in February too. periodo_alta_id
+    // here is P_feb (upload time) but fecha is November — antiguedad must
+    // follow fecha (3 months to April), not periodo_alta_id (which would
+    // wrongly say 2 months, Feb->Apr).
+    const pFeb = await createTestPeriodo(pool, tenantId, '2026-02-01');
+    const pApr = await createTestPeriodo(pool, tenantId, '2026-04-01');
+    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: pFeb, fecha: '2025-11-20' });
+
+    const summary = await matchPeriodo(pool, tenantId, pApr, 0.99);
+    expect(summary.counts.pendiente_en_arca).toBe(1);
+    // Nov 2025 -> Apr 2026 = 5 months, definitely not Feb 2026 -> Apr 2026 (2 months).
+    expect(summary.results[0].antiguedad_meses).toBe(5);
+  });
+
+  it('RF-19: a pendiente voucher with no fecha (never captured) reports antiguedad_meses as undefined, not a wrong number', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    const p4 = await createTestPeriodo(pool, tenantId, '2026-04-01');
+    await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p1 }); // no fecha override -> NULL
+
+    const summary = await matchPeriodo(pool, tenantId, p4, 0.99);
+    expect(summary.counts.pendiente_en_arca).toBe(1);
+    expect(summary.results[0].antiguedad_meses).toBeUndefined();
   });
 
   it('tenant isolation: another tenant’s vouchers never enter this tenant’s match', async () => {
