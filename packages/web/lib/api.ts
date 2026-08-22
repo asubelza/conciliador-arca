@@ -5,9 +5,29 @@
  * Kept dependency-free (no framework imports) so it's testable in isolation
  * with a mocked `fetch`, same rationale as upload-validation.ts on the API
  * side.
+ *
+ * T39 (Fase 3, autenticacion-roles): every endpoint below now requires a
+ * bearer token (Fase 2 protected them all server-side) — `authHeaders()`
+ * attaches it from lib/session.ts, and `handleUnauthorized` clears the
+ * session on any 401 so the app falls back to the login screen
+ * automatically (architecture.md: "Un 401 en cualquier request → limpia el
+ * token y vuelve a login").
  */
+import { clearSession, getSession } from './session';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const session = getSession();
+  return session ? { ...extra, Authorization: `Bearer ${session.token}` } : extra;
+}
+
+/** Any 401 means the token is missing/invalid/expired — drop the session so the UI falls back to login. */
+function handleUnauthorized(res: Response): void {
+  if (res.status === 401) {
+    clearSession();
+  }
+}
 
 export const CONTABILIDAD_SOURCE_SYSTEMS = [
   'tango',
@@ -63,6 +83,36 @@ async function readErrorMessage(res: Response, fallback: string): Promise<string
   }
 }
 
+// --- autenticación (T39, Fase 3) ---
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  role: 'admin' | 'colaborador' | 'cliente';
+  display_name: string | null;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: SessionUser;
+}
+
+/** POST /api/auth/login is the one endpoint that never needs a bearer token — it's what issues one. */
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    // Login's own 401 (bad credentials) must NOT trigger handleUnauthorized's
+    // "clear session" — there's no session yet to clear, and doing so would
+    // be a no-op at best, confusing at worst.
+    throw new Error(await readErrorMessage(res, `Login failed (${res.status})`));
+  }
+  return res.json();
+}
+
 export async function uploadReconciliation(params: {
   tenantId: string;
   periodoId: string;
@@ -77,33 +127,81 @@ export async function uploadReconciliation(params: {
   form.append('arca_file', params.arcaFile);
   form.append('contabilidad_file', params.contabilidadFile);
 
-  const res = await fetch(`${API_BASE_URL}/api/reconciliations`, { method: 'POST', body: form });
+  const res = await fetch(`${API_BASE_URL}/api/reconciliations`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Upload failed (${res.status})`));
   }
   return res.json();
 }
 
 export async function getStatus(jobId: string): Promise<StatusResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/reconciliations/${jobId}/status`);
+  const res = await fetch(`${API_BASE_URL}/api/reconciliations/${jobId}/status`, { headers: authHeaders() });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Status check failed (${res.status})`));
   }
   return res.json();
 }
 
 export async function getReportRows(jobId: string): Promise<DiffReportRow[]> {
-  const res = await fetch(`${API_BASE_URL}/api/reconciliations/${jobId}/report?format=json`);
+  const res = await fetch(`${API_BASE_URL}/api/reconciliations/${jobId}/report?format=json`, {
+    headers: authHeaders(),
+  });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Report fetch failed (${res.status})`));
   }
   const data = await res.json();
   return data.rows;
 }
 
-/** Plain download link — the browser follows it directly, no fetch/blob juggling needed. */
-export function reportDownloadUrl(jobId: string, format: 'csv' | 'xlsx'): string {
+function reportUrl(jobId: string, format: 'csv' | 'xlsx'): string {
   return `${API_BASE_URL}/api/reconciliations/${jobId}/report?format=${format}`;
+}
+
+/**
+ * T39 (Fase 3): every download endpoint has required a bearer token since
+ * Fase 2 — a plain `<a href>` can't carry a custom header, so navigating to
+ * it directly now 401s. This fetches with the token, then hands the
+ * browser the resulting blob through a throwaway `<a download>` so the
+ * save-file UX is the same as clicking a real link. `filenameFromHeader`
+ * reuses the exact filename the API already put in Content-Disposition
+ * (`periodo-report-exporter.ts`/`report-generator.ts`) rather than
+ * reconstructing it client-side.
+ */
+function filenameFromContentDisposition(res: Response, fallback: string): string {
+  const header = res.headers.get('content-disposition');
+  const match = header ? /filename="([^"]+)"/.exec(header) : null;
+  return match ? match[1] : fallback;
+}
+
+async function downloadAuthenticated(url: string, fallbackFilename: string): Promise<void> {
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Download failed (${res.status})`));
+  }
+  const filename = filenameFromContentDisposition(res, fallbackFilename);
+  const blob = await res.blob();
+  if (typeof window === 'undefined') return;
+  const blobUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(blobUrl);
+}
+
+/** T11/T13: downloads a single job's diff report (RF-10). */
+export async function downloadReconciliationReport(jobId: string, format: 'csv' | 'xlsx'): Promise<void> {
+  await downloadAuthenticated(reportUrl(jobId, format), `reconciliation-${jobId}.${format}`);
 }
 
 export async function createMark(
@@ -112,10 +210,11 @@ export async function createMark(
 ): Promise<MarkResponse> {
   const res = await fetch(`${API_BASE_URL}/api/reconciliations/${jobId}/marks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(mark),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Mark failed (${res.status})`));
   }
   return res.json();
@@ -137,8 +236,11 @@ export interface Periodo {
 }
 
 export async function listPeriodos(tenantId: string): Promise<Periodo[]> {
-  const res = await fetch(`${API_BASE_URL}/api/periodos?tenant_id=${encodeURIComponent(tenantId)}`);
+  const res = await fetch(`${API_BASE_URL}/api/periodos?tenant_id=${encodeURIComponent(tenantId)}`, {
+    headers: authHeaders(),
+  });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Períodos fetch failed (${res.status})`));
   }
   const data = await res.json();
@@ -149,10 +251,11 @@ export async function listPeriodos(tenantId: string): Promise<Periodo[]> {
 export async function createPeriodo(tenantId: string, mes: string): Promise<Periodo> {
   const res = await fetch(`${API_BASE_URL}/api/periodos`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ tenant_id: tenantId, mes }),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Período creation failed (${res.status})`));
   }
   return res.json();
@@ -167,10 +270,11 @@ export interface PeriodoCierreResponse {
 export async function cerrarPeriodo(periodoId: string, cerradoPor?: string): Promise<PeriodoCierreResponse> {
   const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/cerrar`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(cerradoPor ? { cerrado_por: cerradoPor } : {}),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Cierre failed (${res.status})`));
   }
   return res.json();
@@ -214,16 +318,21 @@ export interface PeriodoReport {
 
 /** RF-22/RF-23: the 3-section período report — live while abierto, frozen once cerrado. */
 export async function getPeriodoReport(periodoId: string): Promise<PeriodoReport> {
-  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/report`);
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/report`, { headers: authHeaders() });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Reporte de período failed (${res.status})`));
   }
   return res.json();
 }
 
-/** Client-requested (2026-08-22): CSV/XLSX download for the período report, same `<a href>` pattern as reportDownloadUrl (T11's per-job export). */
-export function periodoReportDownloadUrl(periodoId: string, format: 'csv' | 'xlsx'): string {
+function periodoReportUrl(periodoId: string, format: 'csv' | 'xlsx'): string {
   return `${API_BASE_URL}/api/periodos/${periodoId}/report?format=${format}`;
+}
+
+/** Client-requested (2026-08-22): CSV/XLSX download for the período report — same authenticated-blob pattern as downloadReconciliationReport. */
+export async function downloadPeriodoReport(periodoId: string, mes: string, format: 'csv' | 'xlsx'): Promise<void> {
+  await downloadAuthenticated(periodoReportUrl(periodoId, format), `periodo-${mes}-${periodoId}.${format}`);
 }
 
 export interface TenantConfig {
@@ -232,8 +341,9 @@ export interface TenantConfig {
 }
 
 export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
-  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/config`);
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/config`, { headers: authHeaders() });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Config fetch failed (${res.status})`));
   }
   return res.json();
@@ -242,10 +352,11 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
 export async function updateTenantConfig(tenantId: string, toleranciaRedondeoArs: number): Promise<TenantConfig> {
   const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/config`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ tolerancia_redondeo_ars: toleranciaRedondeoArs }),
   });
   if (!res.ok) {
+    handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Config update failed (${res.status})`));
   }
   return res.json();

@@ -8,7 +8,14 @@ import { AppModule } from '../app.module';
 import { MAX_FILE_SIZE_BYTES } from './upload-validation';
 import { createReconciliationWorker } from './reconciliation.worker';
 import { getReconciliationQueue, resetReconciliationQueueForTests } from './reconciliation.queue';
-import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+import {
+  authHeaderFor,
+  createTestPeriodo,
+  createTestTenant,
+  createTestUser,
+  deleteTestTenant,
+  deleteTestUser,
+} from '../test-support/pg-test-helpers';
 
 /**
  * T04 — integration coverage for the actual HTTP wiring (multer parsing,
@@ -34,6 +41,12 @@ import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-s
  * validation scenarios (missing, malformed, unknown, cerrado) live in the
  * "T19: periodo_id" describe block below.
  *
+ * T38 (Fase 2, autenticacion-roles) adds: every request now needs a bearer
+ * token — `adminAuth` throughout, since admin passes every role check
+ * (upload/marks are admin/colaborador-only) and every assertTenantAccess
+ * check. The dedicated `describe('auth (T38)')` block at the end proves
+ * the guard/role/tenant checks themselves.
+ *
  * Note on AC3 (413): the fileSize limit is enforced by multer itself while
  * streaming, and @nestjs/platform-express maps that rejection straight to
  * a 413 PayloadTooLargeException — this test exercises that built-in Nest
@@ -45,6 +58,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   let tenantId: string;
   let periodoId: string;
   let worker: Worker;
+  const adminAuth = authHeaderFor('admin');
 
   beforeAll(async () => {
     resetReconciliationQueueForTests();
@@ -76,6 +90,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   async function uploadAndWaitForCompletion(): Promise<string> {
     const uploadRes = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .field('periodo_id', periodoId)
@@ -103,6 +118,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('AC1: returns 202 with job_id + status_url for two valid files + tenant_id + source system', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .field('periodo_id', periodoId)
@@ -118,6 +134,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('T05: the enqueued job actually stages both files into vouchers_staging', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .field('periodo_id', periodoId)
@@ -154,6 +171,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('T10: the enqueued job classifies and persists reconciliation_results', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .field('periodo_id', periodoId)
@@ -192,6 +210,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('AC2: returns 400 with the RF-01 error message when only one file is attached', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv');
@@ -201,7 +220,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   });
 
   it('AC2: returns 400 when no files are attached', async () => {
-    const res = await request(app.getHttpServer()).post('/api/reconciliations');
+    const res = await request(app.getHttpServer()).post('/api/reconciliations').set('Authorization', adminAuth);
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Both ARCA and contabilidad files are required' });
@@ -210,6 +229,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('AC4: returns 415 for a disallowed extension', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('%PDF-1.4'), 'export.pdf')
@@ -223,6 +243,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     const big = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1024, 'a');
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'tango')
       .attach('arca_file', big, 'arca.csv')
@@ -234,6 +255,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('T05: returns 400 when tenant_id is missing, even with two valid files', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
@@ -245,6 +267,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('T05: returns 400 when tenant_id is not a UUID', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', 'not-a-uuid')
       .field('contabilidad_source_system', 'tango')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
@@ -257,6 +280,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('T10: returns 400 when contabilidad_source_system is missing', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
       .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
@@ -268,6 +292,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   it('T10: returns 400 when contabilidad_source_system is unknown', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/reconciliations')
+      .set('Authorization', adminAuth)
       .field('tenant_id', tenantId)
       .field('contabilidad_source_system', 'sap')
       .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
@@ -281,6 +306,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     it('returns 400 when periodo_id is missing', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
@@ -293,6 +319,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     it('returns 400 when periodo_id is not a UUID', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', 'not-a-uuid')
@@ -306,6 +333,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     it('returns 400 when periodo_id does not reference an existing período for this tenant', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', '00000000-0000-0000-0000-000000000000')
@@ -324,6 +352,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       try {
         const res = await request(app.getHttpServer())
           .post('/api/reconciliations')
+          .set('Authorization', adminAuth)
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
           .field('periodo_id', otherPeriodoId)
@@ -345,6 +374,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
       const res = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', closedPeriodoId)
@@ -360,9 +390,10 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       expect(res.body.job_id).toBeUndefined();
     });
 
-    it('accepts a second upload into the same open período (RF-13: multiple cargas per período)', async () => {
+    it('accepts a second upload into the same open período (RF-13: multiple cargas por período)', async () => {
       const res1 = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', periodoId)
@@ -372,6 +403,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
       const res2 = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', periodoId)
@@ -384,9 +416,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
   describe('T06: GET /api/reconciliations/:jobId/status', () => {
     it('AC: returns 404 for an unknown job id', async () => {
-      const res = await request(app.getHttpServer()).get(
-        '/api/reconciliations/00000000-0000-0000-0000-000000000000/status',
-      );
+      const res = await request(app.getHttpServer())
+        .get('/api/reconciliations/00000000-0000-0000-0000-000000000000/status')
+        .set('Authorization', adminAuth);
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: 'Reconciliation job not found' });
     });
@@ -397,6 +429,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       try {
         const res = await request(app.getHttpServer())
           .post('/api/reconciliations')
+          .set('Authorization', adminAuth)
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
           .field('periodo_id', periodoId)
@@ -404,7 +437,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
           .attach('contabilidad_file', Buffer.from('cuit\n30111111112'), 'contabilidad.csv');
         expect(res.status).toBe(202);
 
-        const statusRes = await request(app.getHttpServer()).get(res.body.status_url);
+        const statusRes = await request(app.getHttpServer())
+          .get(res.body.status_url)
+          .set('Authorization', adminAuth);
         expect(statusRes.status).toBe(200);
         expect(statusRes.body).toEqual({ status: 'pending' });
       } finally {
@@ -415,6 +450,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     it('AC: returns {status: "completed", counts} once the job finishes', async () => {
       const uploadRes = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', periodoId)
@@ -426,7 +462,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const deadline = Date.now() + 10000;
       let statusBody: Record<string, unknown> = {};
       while (Date.now() < deadline) {
-        const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/status`);
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/status`)
+          .set('Authorization', adminAuth);
         statusBody = res.body as Record<string, unknown>;
         if (statusBody.status !== 'pending' && statusBody.status !== 'processing') break;
         await new Promise((r) => setTimeout(r, 100));
@@ -441,6 +479,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     it('AC: returns {status: "error", detail} when the job fails (corrupt file)', async () => {
       const uploadRes = await request(app.getHttpServer())
         .post('/api/reconciliations')
+        .set('Authorization', adminAuth)
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', periodoId)
@@ -452,7 +491,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const deadline = Date.now() + 10000;
       let statusBody: Record<string, unknown> = {};
       while (Date.now() < deadline) {
-        const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/status`);
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/status`)
+          .set('Authorization', adminAuth);
         statusBody = res.body as Record<string, unknown>;
         if (statusBody.status !== 'pending' && statusBody.status !== 'processing') break;
         await new Promise((r) => setTimeout(r, 100));
@@ -465,9 +506,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
   describe('T11: GET /api/reconciliations/:jobId/report', () => {
     it('AC: returns 404 for an unknown job id', async () => {
-      const res = await request(app.getHttpServer()).get(
-        '/api/reconciliations/00000000-0000-0000-0000-000000000000/report',
-      );
+      const res = await request(app.getHttpServer())
+        .get('/api/reconciliations/00000000-0000-0000-0000-000000000000/report')
+        .set('Authorization', adminAuth);
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: 'Reconciliation job not found' });
     });
@@ -478,6 +519,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       try {
         const uploadRes = await request(app.getHttpServer())
           .post('/api/reconciliations')
+          .set('Authorization', adminAuth)
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
           .field('periodo_id', periodoId)
@@ -486,7 +528,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         expect(uploadRes.status).toBe(202);
         const jobId = uploadRes.body.job_id as string;
 
-        const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report`);
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/report`)
+          .set('Authorization', adminAuth);
         expect(res.status).toBe(409);
         expect(res.body.error).toMatch(/not completed yet/);
       } finally {
@@ -496,14 +540,18 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
     it('AC: returns 400 for an unrecognized format query param', async () => {
       const jobId = await uploadAndWaitForCompletion();
-      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=pdf`);
+      const res = await request(app.getHttpServer())
+        .get(`/api/reconciliations/${jobId}/report?format=pdf`)
+        .set('Authorization', adminAuth);
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ error: "format must be 'csv', 'xlsx', or 'json'" });
     }, 15000);
 
     it('AC: defaults to CSV, includes matched + unmatched-arca rows, sets download headers', async () => {
       const jobId = await uploadAndWaitForCompletion();
-      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report`);
+      const res = await request(app.getHttpServer())
+        .get(`/api/reconciliations/${jobId}/report`)
+        .set('Authorization', adminAuth);
 
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^text\/csv/);
@@ -520,7 +568,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
     it('T13: format=json returns { rows } as structured data, no download header', async () => {
       const jobId = await uploadAndWaitForCompletion();
-      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=json`);
+      const res = await request(app.getHttpServer())
+        .get(`/api/reconciliations/${jobId}/report?format=json`)
+        .set('Authorization', adminAuth);
 
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/^application\/json/);
@@ -536,6 +586,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const jobId = await uploadAndWaitForCompletion();
       const res = await request(app.getHttpServer())
         .get(`/api/reconciliations/${jobId}/report?format=xlsx`)
+        .set('Authorization', adminAuth)
         .buffer(true)
         .parse((response, callback) => {
           const chunks: Buffer[] = [];
@@ -564,7 +615,9 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
     it('AC: logs an "export" audit_trail event scoped to the job', async () => {
       const jobId = await uploadAndWaitForCompletion();
-      const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/report?format=csv`);
+      const res = await request(app.getHttpServer())
+        .get(`/api/reconciliations/${jobId}/report?format=csv`)
+        .set('Authorization', adminAuth);
       expect(res.status).toBe(200);
 
       const { rows } = await pool.query(
@@ -580,6 +633,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     it('AC: returns 404 for an unknown job id', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/reconciliations/00000000-0000-0000-0000-000000000000/marks')
+        .set('Authorization', adminAuth)
         .send({ composite_key: 'k', classification: 'revisado' });
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ error: 'Reconciliation job not found' });
@@ -591,6 +645,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       try {
         const uploadRes = await request(app.getHttpServer())
           .post('/api/reconciliations')
+          .set('Authorization', adminAuth)
           .field('tenant_id', tenantId)
           .field('contabilidad_source_system', 'tango')
           .field('periodo_id', periodoId)
@@ -601,6 +656,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
 
         const res = await request(app.getHttpServer())
           .post(`/api/reconciliations/${jobId}/marks`)
+          .set('Authorization', adminAuth)
           .send({ composite_key: 'k', classification: 'revisado' });
         expect(res.status).toBe(409);
       } finally {
@@ -612,6 +668,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const jobId = await uploadAndWaitForCompletion();
       const res = await request(app.getHttpServer())
         .post(`/api/reconciliations/${jobId}/marks`)
+        .set('Authorization', adminAuth)
         .send({ classification: 'revisado' });
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ error: 'composite_key is required' });
@@ -621,6 +678,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const jobId = await uploadAndWaitForCompletion();
       const res = await request(app.getHttpServer())
         .post(`/api/reconciliations/${jobId}/marks`)
+        .set('Authorization', adminAuth)
         .send({ composite_key: 'k', classification: 'aprobado' });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/classification/);
@@ -630,6 +688,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       const jobId = await uploadAndWaitForCompletion();
       const res = await request(app.getHttpServer())
         .post(`/api/reconciliations/${jobId}/marks`)
+        .set('Authorization', adminAuth)
         .send({
           composite_key: '30111111112|1|1|1',
           classification: 'explicado',
@@ -661,6 +720,80 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         composite_key: '30111111112|1|1|1',
         classification: 'explicado',
       });
+    }, 15000);
+  });
+
+  describe('auth (T38, autenticacion-roles)', () => {
+    it('POST /api/reconciliations with no Authorization header returns 401', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /api/reconciliations as cliente returns 403 (upload is admin/colaborador-only)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations')
+        .set('Authorization', authHeaderFor('cliente'))
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+      expect(res.status).toBe(403);
+    });
+
+    it('POST /api/reconciliations as a cliente WITH tenant access is still 403 (role check applies regardless)', async () => {
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
+        const res = await request(app.getHttpServer())
+          .post('/api/reconciliations')
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }))
+          .field('tenant_id', tenantId)
+          .field('contabilidad_source_system', 'tango')
+          .field('periodo_id', periodoId)
+          .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+          .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+        expect(res.status).toBe(403);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('GET .../status as a cliente WITHOUT access to the job’s tenant returns 403', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer())
+        .get(`/api/reconciliations/${jobId}/status`)
+        .set('Authorization', authHeaderFor('cliente'));
+      expect(res.status).toBe(403);
+    }, 15000);
+
+    it('GET .../status as a cliente WITH access to the job’s tenant is allowed', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/status`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+        expect(res.status).toBe(200);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    }, 15000);
+
+    it('POST .../marks as cliente returns 403 (marking is admin/colaborador-only)', async () => {
+      const jobId = await uploadAndWaitForCompletion();
+      const res = await request(app.getHttpServer())
+        .post(`/api/reconciliations/${jobId}/marks`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({ composite_key: 'k', classification: 'revisado' });
+      expect(res.status).toBe(403);
     }, 15000);
   });
 });

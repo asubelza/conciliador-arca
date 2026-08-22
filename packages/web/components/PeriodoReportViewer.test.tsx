@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PeriodoReportViewer } from './PeriodoReportViewer';
+import { clearSession, setSession } from '@/lib/session';
 
 const PERIODO_ID = '22222222-2222-2222-2222-222222222222';
 
@@ -40,9 +41,23 @@ const openReportBody = {
   },
 };
 
+/**
+ * T39 (Fase 3, autenticacion-roles): CSV/Excel are buttons now (an `<a
+ * href>` can't carry the Authorization header every report endpoint has
+ * required since Fase 2 — see lib/api.ts's downloadAuthenticated), and the
+ * "Cerrar Conciliación del Mes" button is hidden for role='cliente'
+ * (read-only, RF-14). Every test needs a session — admin by default so the
+ * pre-existing behavior is unaffected; the dedicated 'role-gating' block
+ * covers cliente.
+ */
 describe('T31: PeriodoReportViewer', () => {
+  beforeEach(() => {
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+  });
+
   afterEach(() => {
     jest.restoreAllMocks();
+    clearSession();
   });
 
   it('fetches and renders the 3 sections, with antigüedad_meses in Pendientes en ARCA', async () => {
@@ -55,16 +70,43 @@ describe('T31: PeriodoReportViewer', () => {
     expect(screen.getByText('3')).toBeInTheDocument(); // antiguedad_meses cell
   });
 
-  it('offers CSV/Excel download links for the período report (client-requested 2026-08-22)', async () => {
+  it('offers CSV/Excel download buttons for the período report (client-requested 2026-08-22)', async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody }) as unknown as typeof fetch;
 
     render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
     await screen.findByText(/conciliados ok \(1\)/i);
 
-    const csvLink = screen.getByRole('link', { name: /descargar csv/i });
-    const xlsxLink = screen.getByRole('link', { name: /descargar excel/i });
-    expect(csvLink).toHaveAttribute('href', expect.stringContaining(`/api/periodos/${PERIODO_ID}/report?format=csv`));
-    expect(xlsxLink).toHaveAttribute('href', expect.stringContaining(`/api/periodos/${PERIODO_ID}/report?format=xlsx`));
+    expect(screen.getByRole('button', { name: /descargar csv/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /descargar excel/i })).toBeInTheDocument();
+  });
+
+  it('downloads the XLSX report via an authenticated fetch when clicked', async () => {
+    const xlsxBlob = { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => openReportBody })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => `attachment; filename="periodo-2026-04-01-${PERIODO_ID}.xlsx"` },
+        blob: async () => xlsxBlob,
+      });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    window.URL.createObjectURL = jest.fn().mockReturnValue('blob:mock');
+    window.URL.revokeObjectURL = jest.fn();
+    // See ReportViewer.test.tsx's equivalent test for why click() is stubbed.
+    jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+    const xlsxButton = await screen.findByRole('button', { name: /descargar excel/i });
+    await act(async () => {
+      await userEvent.click(xlsxButton);
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining(`/api/periodos/${PERIODO_ID}/report?format=xlsx`),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token' }) }),
+    );
+    expect(window.URL.createObjectURL).toHaveBeenCalledWith(xlsxBlob);
   });
 
   it('shows the Cerrar Conciliación del Mes button only while abierto, and confirms before closing', async () => {
@@ -106,5 +148,17 @@ describe('T31: PeriodoReportViewer', () => {
 
     expect(window.confirm).toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial report load, no cierre POST
+  });
+
+  describe('role-gating (T39, autenticacion-roles)', () => {
+    it('cliente never sees "Cerrar Conciliación del Mes" even while abierto (read-only, RF-14)', async () => {
+      setSession('fake-token', { id: 'u2', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      await screen.findByText(/conciliados ok \(1\)/i);
+
+      expect(screen.queryByRole('button', { name: /cerrar conciliaci[oó]n del mes/i })).not.toBeInTheDocument();
+    });
   });
 });

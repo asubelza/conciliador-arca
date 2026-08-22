@@ -5,7 +5,7 @@
  * shared pool (no repository/ORM layer in this codebase; prisma is
  * documentation-only, see seed-runner.ts's module doc).
  */
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { getPgPool } from '../db/pg-pool';
 import {
@@ -18,6 +18,9 @@ import { cerrarPeriodo } from './periodo-cierre';
 import { getPeriodoReport } from './periodo-report';
 import { buildPeriodoExportSections, toPeriodoReportCsv, toPeriodoReportXlsxBuffer } from './periodo-report-exporter';
 import { logAuditEvent } from '../reconciliations/audit-logger';
+import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
+import { assertTenantAccess } from '../auth/tenant-access';
+import { assertRole } from '../auth/role-check';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -43,7 +46,20 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === UNIQUE_VIOLATION;
 }
 
+/**
+ * T38 (Fase 2): a cheap, dedicated lookup for the one thing detail/cerrar/
+ * report need to authorize BEFORE doing any real work — the período's
+ * tenant_id — rather than piggy-backing on cerrarPeriodo's/getPeriodoReport's
+ * own (heavier) queries, which only resolve tenant_id as a side effect deep
+ * inside logic that may already have started matching/locking rows.
+ */
+async function resolvePeriodoTenantId(pool: ReturnType<typeof getPgPool>, id: string): Promise<string | undefined> {
+  const { rows } = await pool.query<{ tenant_id: string }>('SELECT tenant_id FROM periodos WHERE id = $1', [id]);
+  return rows[0]?.tenant_id;
+}
+
 @Controller('api/periodos')
+@UseGuards(AuthGuard)
 export class PeriodosController {
   /**
    * RF-12: creates a período for a tenant + calendar month. `mes` is
@@ -60,15 +76,25 @@ export class PeriodosController {
    * the day-of-month case ("2026-04-15" -> "2026-04-01").
    */
   @Post()
-  async create(@Body() body: unknown) {
+  async create(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
     const failure = validateCreatePeriodoBody(body);
     if (failure) {
       throw new HttpException({ error: failure.error }, failure.status);
     }
 
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
     const { tenant_id: tenantId, mes: rawMes } = body as { tenant_id: string; mes: string };
     const mes = /^\d{4}-\d{2}$/.test(rawMes) ? `${rawMes}-01` : rawMes;
     const pool = getPgPool();
+
+    const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
 
     try {
       const { rows } = await pool.query<PeriodoRow>(
@@ -91,13 +117,18 @@ export class PeriodosController {
 
   /** RF-12: lists a tenant's períodos, most recent month first. */
   @Get()
-  async list(@Query('tenant_id') tenantId: unknown) {
+  async list(@Query('tenant_id') tenantId: unknown, @Req() req: AuthenticatedRequest) {
     const failure = validateTenantIdQuery(tenantId);
     if (failure) {
       throw new HttpException({ error: failure.error }, failure.status);
     }
 
     const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, tenantId as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
     const { rows } = await pool.query<PeriodoRow>(
       `SELECT ${PERIODO_COLUMNS} FROM periodos WHERE tenant_id = $1 ORDER BY mes DESC`,
       [tenantId],
@@ -114,7 +145,7 @@ export class PeriodosController {
    * against columns that don't exist yet.
    */
   @Get(':id')
-  async detail(@Param('id') id: unknown) {
+  async detail(@Param('id') id: unknown, @Req() req: AuthenticatedRequest) {
     const failure = validatePeriodoIdParam(id);
     if (failure) {
       throw new HttpException({ error: failure.error }, failure.status);
@@ -128,6 +159,12 @@ export class PeriodosController {
     if (rows.length === 0) {
       throw new HttpException({ error: 'período not found' }, HttpStatus.NOT_FOUND);
     }
+
+    const authFailure = await assertTenantAccess(pool, req.user!, rows[0].tenant_id);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
     return rows[0];
   }
 
@@ -141,7 +178,7 @@ export class PeriodosController {
    */
   @Post(':id/cerrar')
   @HttpCode(HttpStatus.OK)
-  async cerrar(@Param('id') id: unknown, @Body() body: unknown) {
+  async cerrar(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
     const idFailure = validatePeriodoIdParam(id);
     if (idFailure) {
       throw new HttpException({ error: idFailure.error }, idFailure.status);
@@ -151,8 +188,28 @@ export class PeriodosController {
       throw new HttpException({ error: bodyFailure.error }, bodyFailure.status);
     }
 
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    // Resolve the período's tenant_id and authorize BEFORE cerrarPeriodo
+    // does any writes (architecture.md: "se resuelve primero, luego se
+    // autoriza, antes de cualquier escritura"). A genuinely missing
+    // período still surfaces its 404 from cerrarPeriodo's own check below —
+    // this only short-circuits the write path when the período DOES exist
+    // but the caller isn't allowed to touch it.
+    const tenantId = await resolvePeriodoTenantId(pool, id as string);
+    if (tenantId !== undefined) {
+      const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+      if (authFailure) {
+        throw new HttpException({ error: authFailure.error }, authFailure.status);
+      }
+    }
+
     const cerradoPor = (body as { cerrado_por?: string } | null)?.cerrado_por ?? null;
-    const result = await cerrarPeriodo(getPgPool(), id as string, cerradoPor);
+    const result = await cerrarPeriodo(pool, id as string, cerradoPor);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }
@@ -172,7 +229,12 @@ export class PeriodosController {
    * frontend viewer (which never passes `format`) is unaffected.
    */
   @Get(':id/report')
-  async report(@Param('id') id: unknown, @Query('format') format: unknown, @Res() res: Response) {
+  async report(
+    @Param('id') id: unknown,
+    @Query('format') format: unknown,
+    @Res() res: Response,
+    @Req() req: AuthenticatedRequest,
+  ) {
     const idFailure = validatePeriodoIdParam(id);
     if (idFailure) {
       throw new HttpException({ error: idFailure.error }, idFailure.status);
@@ -184,6 +246,20 @@ export class PeriodosController {
     }
 
     const pool = getPgPool();
+
+    // Same "resolve, then authorize, before real work" posture as cerrar —
+    // this report can be expensive to build (a live período re-runs the
+    // full match), so authorizing off a cheap tenant_id-only lookup first
+    // avoids doing that work for a tenant the caller can't see. A missing
+    // período still gets its 404 from getPeriodoReport's own check below.
+    const tenantId = await resolvePeriodoTenantId(pool, id as string);
+    if (tenantId !== undefined) {
+      const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+      if (authFailure) {
+        throw new HttpException({ error: authFailure.error }, authFailure.status);
+      }
+    }
+
     const result = await getPeriodoReport(pool, id as string);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);

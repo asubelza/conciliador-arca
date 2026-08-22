@@ -2,22 +2,22 @@
 
 ## Fase 1: Infraestructura de auth (no rompe nada existente — PR-7)
 
-- [ ] T33: Migración: tablas `users` (email, password_hash, role, is_active) + `user_tenant_access`, con GRANTs de app_role (M, db)
-- [ ] T34: `auth.service.ts`: hash/verify de contraseña (bcryptjs), emisión/verificación de JWT (jsonwebtoken) (M, api)
-- [ ] T35: `POST /api/auth/login` (S, api)
-- [ ] T36: `AuthGuard` + `GET /api/auth/me` (endpoint protegido de prueba) (S, api)
+- [x] T33: Migración: tablas `users` (email, password_hash, role, is_active) + `user_tenant_access`, con GRANTs de app_role (M, db) — commit `c21718c`
+- [x] T34: `auth.service.ts`: hash/verify de contraseña (bcryptjs), emisión/verificación de JWT (jsonwebtoken) (M, api) — commit `c21718c`
+- [x] T35: `POST /api/auth/login` (S, api) — commit `c21718c`
+- [x] T36: `AuthGuard` + `GET /api/auth/me` (endpoint protegido de prueba) (S, api) — commit `c21718c`
 
 ## Fase 2: Proteger los endpoints existentes (rompe el acceso sin login — PR-8)
 
-- [ ] T37: `assertTenantAccess` + aplicar `AuthGuard`/chequeo de rol a `periodos.controller.ts` (M, api)
-- [ ] T38: Aplicar a `reconciliations.controller.ts` (M, api)
-- [ ] T39: Aplicar a `tenants.controller.ts` (S, api)
+- [x] T37: `assertTenantAccess` + `assertRole` + aplicar `AuthGuard`/chequeo de rol a `periodos.controller.ts` (M, api)
+- [x] T38: Aplicar a `reconciliations.controller.ts` (M, api)
+- [x] T39: Aplicar a `tenants.controller.ts` (S, api)
 
 ## Fase 3: Frontend (PR-8, junto con Fase 2 — sin login el frontend no puede llamar a nada)
 
-- [ ] T40: Pantalla de login + módulo de sesión (token en memoria/localStorage) (M, frontend)
-- [ ] T41: Todos los `fetch` de `lib/api.ts` mandan `Authorization: Bearer` (S, frontend)
-- [ ] T42: UI condicionada por rol (ocultar cierre/config según corresponda) (S, frontend)
+- [x] T40: Pantalla de login + módulo de sesión (token en memoria/localStorage) (M, frontend)
+- [x] T41: Todos los `fetch` de `lib/api.ts` mandan `Authorization: Bearer`; los downloads CSV/XLSX pasaron de `<a href>` a fetch autenticado + blob (S, frontend — más de lo previsto: los links de descarga no podían llevar el header, así que se detectó y corrigió como parte de esta tarea, no quedó documentado como limitación) (S, frontend)
+- [x] T42: UI condicionada por rol (cliente no ve "Cerrar Conciliación del Mes", "Crear período", ni el formulario de carga; el panel de tolerancia queda admin-only) (S, frontend)
 
 ## Fase 4: Alta manual de usuarios
 

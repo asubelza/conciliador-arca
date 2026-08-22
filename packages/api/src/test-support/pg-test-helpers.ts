@@ -6,6 +6,7 @@
 import type { Pool } from 'pg';
 import { randomUUID } from 'crypto';
 import { hashPassword } from '../auth/password';
+import { signToken } from '../auth/jwt';
 import type { UserRole } from '../auth/users-types';
 
 export async function createTestTenant(pool: Pool, name = 'Test Tenant'): Promise<string> {
@@ -52,6 +53,28 @@ export async function createTestUser(
     [email, passwordHash, role, overrides.isActive ?? true],
   );
   return { id: rows[0].id, email, password };
+}
+
+/**
+ * T38 (Fase 2, autenticacion-roles): a ready-to-use `Authorization` header
+ * for controller integration tests. AuthGuard only verifies the JWT's
+ * signature/expiry (see auth-guard.ts's module doc) — it never hits the
+ * DB — so this mints a token directly with `signToken`, no `users` row
+ * required. That's correct for admin/colaborador (they never trigger a
+ * user_tenant_access lookup either — see assertTenantAccess). A test that
+ * specifically needs a `cliente` WITH real tenant access must still create
+ * a real user (createTestUser) and a real user_tenant_access row — a
+ * fabricated `cliente` from this helper alone always fails
+ * assertTenantAccess, which is what most tests want by default (a plain
+ * admin token that always passes).
+ */
+export function authHeaderFor(role: UserRole = 'admin', overrides: { sub?: string; email?: string } = {}): string {
+  const token = signToken({
+    sub: overrides.sub ?? randomUUID(),
+    role,
+    email: overrides.email ?? `test-${role}-${randomUUID()}@example.com`,
+  });
+  return `Bearer ${token}`;
 }
 
 export async function deleteTestUser(pool: Pool, userId: string): Promise<void> {

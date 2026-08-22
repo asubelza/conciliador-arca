@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   cerrarPeriodo,
+  downloadPeriodoReport,
   getPeriodoReport,
-  periodoReportDownloadUrl,
   type Periodo,
   type PeriodoReport,
   type PeriodoReportRow,
 } from '@/lib/api';
+import { useAuth } from '@/lib/session';
 
 export interface PeriodoReportViewerProps {
   periodoId: string;
@@ -50,10 +51,12 @@ function compositeKeyLabel(row: PeriodoReportRow): string {
  * this report, so it lives right where they're already looking.
  */
 export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewerProps) {
+  const { user } = useAuth();
   const [report, setReport] = useState<PeriodoReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -68,6 +71,16 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function handleDownload(format: 'csv' | 'xlsx') {
+    if (!report) return;
+    setDownloadError(null);
+    try {
+      await downloadPeriodoReport(periodoId, report.periodo.mes, format);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Download failed');
+    }
+  }
 
   async function handleCerrar() {
     if (typeof window !== 'undefined') {
@@ -112,15 +125,18 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
             {report.live ? 'Vista en vivo (el período sigue abierto).' : 'Snapshot congelado al momento del cierre.'}
           </p>
           <div className="flex gap-3 mt-1">
-            <a href={periodoReportDownloadUrl(periodoId, 'csv')} className="text-blue-600 underline text-sm">
+            <button type="button" onClick={() => handleDownload('csv')} className="text-blue-600 underline text-sm">
               Descargar CSV
-            </a>
-            <a href={periodoReportDownloadUrl(periodoId, 'xlsx')} className="text-blue-600 underline text-sm">
+            </button>
+            <button type="button" onClick={() => handleDownload('xlsx')} className="text-blue-600 underline text-sm">
               Descargar Excel
-            </a>
+            </button>
           </div>
         </div>
-        {report.periodo.estado === 'abierto' && (
+        {/* T39 (Fase 3): cliente is read-only (RF-14) — closing a período is an
+            admin/colaborador action server-side (assertRole in periodos.controller.ts),
+            so a cliente never sees the button that would only 403 anyway. */}
+        {report.periodo.estado === 'abierto' && user?.role !== 'cliente' && (
           <button
             type="button"
             onClick={handleCerrar}
@@ -131,6 +147,12 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
           </button>
         )}
       </div>
+
+      {downloadError && (
+        <p role="alert" className="text-red-600 text-sm">
+          {downloadError}
+        </p>
+      )}
 
       {closeError && (
         <p role="alert" className="text-red-600 text-sm">

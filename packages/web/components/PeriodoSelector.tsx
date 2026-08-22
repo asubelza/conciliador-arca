@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { createPeriodo, listPeriodos, type Periodo } from '@/lib/api';
+import { useAuth } from '@/lib/session';
 import { TenantConfigPanel } from './TenantConfigPanel';
 
 export interface PeriodoSelectorProps {
@@ -20,6 +21,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * frontend").
  */
 export function PeriodoSelector({ onSelected }: PeriodoSelectorProps) {
+  const { user } = useAuth();
   const [tenantId, setTenantId] = useState('');
   const [lookedUpTenantId, setLookedUpTenantId] = useState<string | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[] | null>(null);
@@ -115,30 +117,40 @@ export function PeriodoSelector({ onSelected }: PeriodoSelectorProps) {
             )}
           </div>
 
-          <form onSubmit={handleCreate} className="flex flex-col gap-2">
-            <label htmlFor="new-mes" className="text-sm font-medium">
-              Nuevo período (mes)
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="new-mes"
-                type="month"
-                value={newMes}
-                onChange={(e) => setNewMes(e.target.value)}
-                className="border rounded px-3 py-2 flex-1"
-              />
-              <button type="submit" className="bg-blue-600 text-white rounded px-4 py-2">
-                Crear período
-              </button>
-            </div>
-          </form>
+          {/* T39 (Fase 3): cliente is read-only (RF-14) — POST /api/periodos is
+              admin/colaborador-only server-side (assertRole in
+              periodos.controller.ts), so a cliente never sees a form that
+              would only 403 anyway. */}
+          {user?.role !== 'cliente' && (
+            <form onSubmit={handleCreate} className="flex flex-col gap-2">
+              <label htmlFor="new-mes" className="text-sm font-medium">
+                Nuevo período (mes)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="new-mes"
+                  type="month"
+                  value={newMes}
+                  onChange={(e) => setNewMes(e.target.value)}
+                  className="border rounded px-3 py-2 flex-1"
+                />
+                <button type="submit" className="bg-blue-600 text-white rounded px-4 py-2">
+                  Crear período
+                </button>
+              </div>
+            </form>
+          )}
 
-          <div>
-            <button type="button" onClick={() => setShowConfig((v) => !v)} className="text-sm underline text-gray-600">
-              {showConfig ? 'Ocultar configuración de tolerancia' : 'Configurar tolerancia de redondeo'}
-            </button>
-            {showConfig && <TenantConfigPanel tenantId={lookedUpTenantId} />}
-          </div>
+          {/* PUT /api/tenants/:id/config is admin-only server-side — hidden
+              for cliente/colaborador per architecture.md's frontend plan. */}
+          {user?.role === 'admin' && (
+            <div>
+              <button type="button" onClick={() => setShowConfig((v) => !v)} className="text-sm underline text-gray-600">
+                {showConfig ? 'Ocultar configuración de tolerancia' : 'Configurar tolerancia de redondeo'}
+              </button>
+              {showConfig && <TenantConfigPanel tenantId={lookedUpTenantId} />}
+            </div>
+          )}
         </>
       )}
     </div>

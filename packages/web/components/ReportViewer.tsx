@@ -1,7 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { createMark, getReportRows, reportDownloadUrl, type DiffReportRow, type UserMarkClassification } from '@/lib/api';
+import {
+  createMark,
+  downloadReconciliationReport,
+  getReportRows,
+  type DiffReportRow,
+  type UserMarkClassification,
+} from '@/lib/api';
 
 export interface ReportViewerProps {
   jobId: string;
@@ -18,6 +24,7 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
   const [error, setError] = useState<string | null>(null);
   const [markError, setMarkError] = useState<string | null>(null);
   const [markedKeys, setMarkedKeys] = useState<Record<string, UserMarkClassification>>({});
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -31,6 +38,15 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function handleDownload(format: 'csv' | 'xlsx') {
+    setDownloadError(null);
+    try {
+      await downloadReconciliationReport(jobId, format);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Download failed');
+    }
+  }
 
   async function handleMark(compositeKey: string, classification: UserMarkClassification) {
     setMarkError(null);
@@ -61,13 +77,19 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-4">
-        <a href={reportDownloadUrl(jobId, 'csv')} className="text-blue-600 underline text-sm">
+        <button type="button" onClick={() => handleDownload('csv')} className="text-blue-600 underline text-sm">
           Descargar CSV
-        </a>
-        <a href={reportDownloadUrl(jobId, 'xlsx')} className="text-blue-600 underline text-sm">
+        </button>
+        <button type="button" onClick={() => handleDownload('xlsx')} className="text-blue-600 underline text-sm">
           Descargar Excel
-        </a>
+        </button>
       </div>
+
+      {downloadError && (
+        <p role="alert" className="text-red-600 text-sm">
+          {downloadError}
+        </p>
+      )}
 
       {markError && (
         <p role="alert" className="text-red-600 text-sm">

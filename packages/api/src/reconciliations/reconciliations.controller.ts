@@ -8,8 +8,10 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
   UploadedFiles,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
@@ -37,6 +39,9 @@ import { logAuditEvent } from './audit-logger';
 import { validateMarkRequest } from './marks-validation';
 import { insertFeedbackMark } from './feedback-writer';
 import { assertPeriodoOpenForUpload } from '../periodos/periodo-upload-guard';
+import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
+import { assertTenantAccess } from '../auth/tenant-access';
+import { assertRole } from '../auth/role-check';
 
 /**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
@@ -50,6 +55,7 @@ import { assertPeriodoOpenForUpload } from '../periodos/periodo-upload-guard';
  * GET status poll endpoint that resolves this same id.
  */
 @Controller('api/reconciliations')
+@UseGuards(AuthGuard)
 export class ReconciliationsController {
   @Post()
   @UseInterceptors(
@@ -77,6 +83,7 @@ export class ReconciliationsController {
     @Body('tenant_id') tenantId: unknown,
     @Body('contabilidad_source_system') contabilidadSourceSystem: unknown,
     @Body('periodo_id') periodoId: unknown,
+    @Req() req: AuthenticatedRequest,
   ) {
     const filesFailure = validateUploadFiles(files ?? {});
     if (filesFailure) {
@@ -88,6 +95,16 @@ export class ReconciliationsController {
     if (tenantFailure) {
       const body = 'error' in tenantFailure ? { error: tenantFailure.error } : {};
       throw new HttpException(body, tenantFailure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const authFailure = await assertTenantAccess(getPgPool(), req.user!, tenantId as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
     }
 
     const sourceSystemFailure = validateContabilidadSourceSystem(contabilidadSourceSystem);
@@ -154,12 +171,18 @@ export class ReconciliationsController {
    * is needed.
    */
   @Get(':jobId/status')
-  async status(@Param('jobId') jobId: string) {
+  async status(@Param('jobId') jobId: string, @Req() req: AuthenticatedRequest) {
     const queue = getReconciliationQueue();
     const job = await queue.getJob(jobId);
     if (!job) {
       throw new HttpException({ error: 'Reconciliation job not found' }, HttpStatus.NOT_FOUND);
     }
+
+    const authFailure = await assertTenantAccess(getPgPool(), req.user!, job.data.tenantId as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
     const state = await job.getState();
     return mapJobToStatusResponse(state, job);
   }
@@ -182,7 +205,12 @@ export class ReconciliationsController {
    * save as a file).
    */
   @Get(':jobId/report')
-  async report(@Param('jobId') jobId: string, @Query('format') format: unknown, @Res() res: Response) {
+  async report(
+    @Param('jobId') jobId: string,
+    @Query('format') format: unknown,
+    @Res() res: Response,
+    @Req() req: AuthenticatedRequest,
+  ) {
     const job = await this.getCompletedJobOrThrow(jobId);
 
     const resolvedFormat = format === undefined ? 'csv' : format;
@@ -191,6 +219,11 @@ export class ReconciliationsController {
     }
 
     const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, job.data.tenantId as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
     const { rows } = await pool.query<PersistedResultRow>(
       `SELECT tipo_clasificacion, composite_key, arca_row, contabilidad_row, iva_impacto
          FROM reconciliation_results
@@ -244,7 +277,7 @@ export class ReconciliationsController {
    */
   @Post(':jobId/marks')
   @HttpCode(HttpStatus.CREATED)
-  async createMark(@Param('jobId') jobId: string, @Body() body: unknown) {
+  async createMark(@Param('jobId') jobId: string, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
     const job = await this.getCompletedJobOrThrow(jobId);
 
     const validation = validateMarkRequest(body);
@@ -252,7 +285,17 @@ export class ReconciliationsController {
       throw new HttpException({ error: validation.failure.error }, validation.failure.status);
     }
 
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
     const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, job.data.tenantId as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
     const mark = await insertFeedbackMark(pool, job.data.tenantId, validation.value);
 
     await logAuditEvent(pool, {

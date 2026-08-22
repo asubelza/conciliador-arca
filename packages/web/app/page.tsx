@@ -6,6 +6,8 @@ import { UploadForm } from '@/components/UploadForm';
 import { StatusPoller } from '@/components/StatusPoller';
 import { ReportViewer } from '@/components/ReportViewer';
 import { PeriodoReportViewer } from '@/components/PeriodoReportViewer';
+import { LoginForm } from '@/components/LoginForm';
+import { clearSession, useAuth } from '@/lib/session';
 import type { Periodo } from '@/lib/api';
 
 type UploadStep = 'upload' | 'processing' | 'completed';
@@ -32,11 +34,20 @@ type UploadStep = 'upload' | 'processing' | 'completed';
  * was still processing — spun on a permanent 409).
  */
 export default function Home() {
+  const { user } = useAuth();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periodo, setPeriodo] = useState<Periodo | null>(null);
   const [uploadStep, setUploadStep] = useState<UploadStep>('upload');
   const [jobId, setJobId] = useState<string | null>(null);
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
+
+  // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
+  // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
+  // show the login screen instead of the app. Everything below this line
+  // only ever renders for an authenticated user.
+  if (!user) {
+    return <LoginForm />;
+  }
 
   function handlePeriodoSelected(selectedTenantId: string, selectedPeriodo: Periodo) {
     setTenantId(selectedTenantId);
@@ -60,9 +71,18 @@ export default function Home() {
 
   return (
     <main className="max-w-3xl mx-auto p-8 flex flex-col gap-8">
-      <div>
-        <h1 className="text-2xl font-semibold">Conciliador Inteligente de Comprobantes</h1>
-        <p className="text-sm text-gray-600">Subí el archivo de ARCA y el de tu sistema contable para conciliar.</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Conciliador Inteligente de Comprobantes</h1>
+          <p className="text-sm text-gray-600">Subí el archivo de ARCA y el de tu sistema contable para conciliar.</p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm text-gray-700">{user.display_name ?? user.email}</p>
+          <p className="text-xs text-gray-500">{user.role}</p>
+          <button type="button" onClick={() => clearSession()} className="text-xs underline text-gray-600">
+            Cerrar sesión
+          </button>
+        </div>
       </div>
 
       {!periodo && <PeriodoSelector onSelected={handlePeriodoSelected} />}
@@ -90,7 +110,17 @@ export default function Home() {
 
           {periodo.estado === 'abierto' && !showPeriodoReport && (
             <>
-              {uploadStep === 'upload' && (
+              {/* T39 (Fase 3): cliente is read-only (RF-14) — POST
+                  /api/reconciliations is admin/colaborador-only server-side
+                  (assertRole in reconciliations.controller.ts), so a
+                  cliente never sees a form that would only 403 anyway. */}
+              {uploadStep === 'upload' && user.role === 'cliente' && (
+                <p className="text-sm text-gray-600">
+                  Tu usuario es de solo lectura — no podés subir comprobantes para este período.
+                </p>
+              )}
+
+              {uploadStep === 'upload' && user.role !== 'cliente' && (
                 <UploadForm
                   tenantId={tenantId}
                   periodoId={periodo.id}

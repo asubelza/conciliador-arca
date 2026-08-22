@@ -1,13 +1,28 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ReportViewer } from './ReportViewer';
+import { clearSession, setSession } from '@/lib/session';
 
+/**
+ * T39 (Fase 3, autenticacion-roles): every report/export endpoint now
+ * requires a bearer token, so the CSV/Excel links became buttons that fetch
+ * with the token and hand the browser a blob (lib/api.ts's
+ * downloadAuthenticated) instead of plain `<a href>` navigation — a bare
+ * href can't carry an Authorization header, and the endpoints 401 without
+ * one since Fase 2. jsdom doesn't implement URL.createObjectURL, so tests
+ * that click a download button stub it.
+ */
 describe('T13: ReportViewer', () => {
-  afterEach(() => {
-    jest.restoreAllMocks();
+  beforeEach(() => {
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
   });
 
-  it('fetches and renders the diff report rows + download links', async () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('fetches and renders the diff report rows + download buttons', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -29,14 +44,41 @@ describe('T13: ReportViewer', () => {
     render(<ReportViewer jobId="job-1" />);
 
     expect(await screen.findByText('k1')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /descargar csv/i })).toHaveAttribute(
-      'href',
-      expect.stringContaining('format=csv'),
+    expect(screen.getByRole('button', { name: /descargar csv/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /descargar excel/i })).toBeInTheDocument();
+  });
+
+  it('downloads the CSV report via an authenticated fetch when clicked', async () => {
+    const csvBlob = { type: 'text/csv' };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ rows: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'attachment; filename="reconciliation-job-1.csv"' },
+        blob: async () => csvBlob,
+      });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    window.URL.createObjectURL = jest.fn().mockReturnValue('blob:mock');
+    window.URL.revokeObjectURL = jest.fn();
+    // jsdom doesn't implement the <a download> save-file behavior — a real
+    // click() would try to actually navigate and log a harmless but noisy
+    // "not implemented: navigation" error. Stub click() itself since the
+    // assertions below only care that fetch/createObjectURL were called
+    // correctly, not that jsdom can simulate a browser download.
+    jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<ReportViewer jobId="job-1" />);
+    const csvButton = await screen.findByRole('button', { name: /descargar csv/i });
+    await act(async () => {
+      await userEvent.click(csvButton);
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining('/api/reconciliations/job-1/report?format=csv'),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token' }) }),
     );
-    expect(screen.getByRole('link', { name: /descargar excel/i })).toHaveAttribute(
-      'href',
-      expect.stringContaining('format=xlsx'),
-    );
+    expect(window.URL.createObjectURL).toHaveBeenCalledWith(csvBlob);
   });
 
   it('shows an empty state when there are no diff rows', async () => {

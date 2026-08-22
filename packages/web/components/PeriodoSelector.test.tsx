@@ -1,12 +1,25 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PeriodoSelector } from './PeriodoSelector';
+import { clearSession, setSession } from '@/lib/session';
 
 const TENANT_ID = '11111111-1111-1111-1111-111111111111';
 
+/**
+ * T39 (Fase 3, autenticacion-roles): PeriodoSelector now reads the logged-in
+ * user's role to decide what to show (see its own module doc) — every test
+ * below needs a session, admin by default so the pre-existing behavior
+ * (both the "crear período" form and the tolerance config toggle visible)
+ * is unaffected. The dedicated 'role-gating' block covers cliente/colaborador.
+ */
 describe('T30: PeriodoSelector', () => {
+  beforeEach(() => {
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+  });
+
   afterEach(() => {
     jest.restoreAllMocks();
+    clearSession();
   });
 
   it('rejects a non-UUID tenant_id without calling fetch', async () => {
@@ -101,5 +114,39 @@ describe('T30: PeriodoSelector', () => {
     expect(screen.queryByLabelText(/tolerancia de redondeo/i)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /configurar tolerancia/i }));
     expect(await screen.findByLabelText(/tolerancia de redondeo/i)).toBeInTheDocument();
+  });
+
+  describe('role-gating (T39, autenticacion-roles)', () => {
+    it('cliente sees neither the "crear período" form nor the tolerance config toggle', async () => {
+      setSession('fake-token', { id: 'u2', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ periodos: [] }) });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoSelector onSelected={jest.fn()} />);
+      await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+      await act(async () => {
+        await userEvent.click(screen.getByRole('button', { name: /buscar per[ií]odos/i }));
+      });
+      await screen.findByText(/todav[ií]a no tiene per[ií]odos/i);
+
+      expect(screen.queryByLabelText(/nuevo per[ií]odo/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /configurar tolerancia/i })).not.toBeInTheDocument();
+    });
+
+    it('colaborador sees the "crear período" form but NOT the tolerance config toggle (admin-only)', async () => {
+      setSession('fake-token', { id: 'u3', email: 'colaborador@example.com', role: 'colaborador', display_name: null });
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ periodos: [] }) });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoSelector onSelected={jest.fn()} />);
+      await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+      await act(async () => {
+        await userEvent.click(screen.getByRole('button', { name: /buscar per[ií]odos/i }));
+      });
+      await screen.findByText(/todav[ií]a no tiene per[ií]odos/i);
+
+      expect(screen.queryByLabelText(/nuevo per[ií]odo/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /configurar tolerancia/i })).not.toBeInTheDocument();
+    });
   });
 });
