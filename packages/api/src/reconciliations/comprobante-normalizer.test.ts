@@ -81,7 +81,7 @@ describe('T08 RF-07: normalizeRow', () => {
 
   it('RF-06: unknown tipo -> ok=false, importe forced to 0', () => {
     const adapted = adaptRow('arca', {
-      'Nro. Doc. Receptor': '30-12345678-9',
+      'Nro. Doc. Emisor': '30-12345678-9',
       'Tipo de Comprobante': '99',
       'Imp. Total': '1.500,00',
     });
@@ -93,7 +93,7 @@ describe('T08 RF-07: normalizeRow', () => {
 
   it('produces a fully canonical voucher for a complete ARCA row', () => {
     const adapted = adaptRow('arca', {
-      'Nro. Doc. Receptor': '30-12345678-9',
+      'Nro. Doc. Emisor': '30-12345678-9',
       'Tipo de Comprobante': '1',
       'Punto de Venta': '1',
       'Número de Comprobante': '1234',

@@ -147,7 +147,7 @@ describe('T05 RF-03: processReconciliationJob', () => {
       const contabilidadPath = path.join(tmpDir, 'contabilidad-t22.csv');
       await fs.writeFile(
         arcaPath,
-        'Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1',
+        'Nro. Doc. Emisor,Tipo de Comprobante\n30111111112,1\n30222222223,1',
         'utf8',
       );
       await fs.writeFile(contabilidadPath, 'CUIT,Tipo\n30111111112,Factura A', 'utf8');

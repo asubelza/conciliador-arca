@@ -16,12 +16,14 @@ After staging, raw rows from ARCA and four accounting-system exports (Tango, Bej
 
 The system MUST read each vendor's variant column names and map them to the canonical fields: `cuit_emisor`, `tipo_cbte`, `punto_venta`, `numero`, `fecha_emision`, `importe_total_ars`, `moneda`, `cotizacion`.
 
-#### Scenario: Normalize ARCA "Tipo Doc. Receptor" column
+#### Scenario: Normalize ARCA "Tipo Doc. Emisor" column
 
-- GIVEN a staged ARCA row with `Nro. Doc. Receptor = "30-12345678-9"`
+- GIVEN a staged ARCA row with `Nro. Doc. Emisor = "30-12345678-9"`
 - WHEN normalization runs
 - THEN `cuit_emisor` is stored as `"30123456789"` (punctuation stripped)
 - AND `tipo_cbte` is canonicalized from `"1"` → `1` (integer)
+
+**Correction (2026-08-23, real client data):** this scenario originally named `Nro. Doc. Receptor` as the source of `cuit_emisor` — an assumption never checked against a real ARCA export until a client-provided 995-row "Comprobantes Recibidos" file showed `Nro. Doc. Receptor` is constant across the whole file (the estudio's own client — the party *receiving* the comprobante), while `Nro. Doc. Emisor` varies per row (292 distinct vendor CUITs — the party who actually issued it, what reconciliation needs). Also confirmed on that same real export and now handled by `column-adapters.ts`'s `adaptArca`: `Tipo de Comprobante` arrives as `"<código> - <descripción>"` (e.g. `"1 - Factura A"`), not a bare code; and the comprobante number arrives as a `Número Desde`/`Número Hasta` pair rather than a single `Número` column.
 
 #### Scenario: Normalize Tango "CUIT" column
 

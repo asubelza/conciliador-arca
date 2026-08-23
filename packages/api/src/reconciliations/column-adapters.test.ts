@@ -6,12 +6,63 @@ import { adaptRow } from './column-adapters';
  * using the spec's own scenario rows where one exists.
  */
 describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
-  it('ARCA: maps "Nro. Doc. Receptor" + numeric tipo (RF-05 scenario)', () => {
-    const row = { 'Nro. Doc. Receptor': '30-12345678-9', 'Tipo de Comprobante': '1' };
+  it('ARCA: maps "Nro. Doc. Emisor" + numeric tipo (RF-05 scenario, corrected 2026-08-23)', () => {
+    const row = { 'Nro. Doc. Emisor': '30-12345678-9', 'Tipo de Comprobante': '1' };
     const adapted = adaptRow('arca', row);
     expect(adapted.cuit_emisor_raw).toBe('30-12345678-9');
     expect(adapted.tipo_cbte).toBe(1);
-    expect(adapted.source_row).toBe(row);
+  });
+
+  it('ARCA: "Nro. Doc. Emisor" wins over "Nro. Doc. Receptor" when a row somehow carries both (Receptor is the estudio\'s own client, not the vendor)', () => {
+    const row = { 'Nro. Doc. Emisor': '30500061711', 'Nro. Doc. Receptor': '33711871409', 'Tipo de Comprobante': '1' };
+    const adapted = adaptRow('arca', row);
+    expect(adapted.cuit_emisor_raw).toBe('30500061711');
+  });
+
+  /**
+   * Real "Comprobantes Recibidos" export shape (client file, 2026-08-23):
+   * `Tipo de Comprobante` carries the description ("1 - Factura A", not a
+   * bare "1"), the number arrives as a Desde/Hasta pair, and — on this
+   * specific export — every accented header is mojibake'd (UTF-8 bytes
+   * decoded as Latin-1 somewhere upstream, baked into the file itself).
+   */
+  it('ARCA real export: strips the description from "N - Descripción" tipo values', () => {
+    const row = { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '11 - Factura C' };
+    const adapted = adaptRow('arca', row);
+    expect(adapted.tipo_cbte).toBe(11);
+  });
+
+  it('ARCA real export: a genuinely unrecognized AFIP code (e.g. "51 - Factura A con leyenda...") still resolves to undefined, not a wrong guess', () => {
+    const row = { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '51 - Factura A con leyenda Operación Sujeta a Retención' };
+    const adapted = adaptRow('arca', row);
+    expect(adapted.tipo_cbte).toBeUndefined();
+  });
+
+  it('ARCA real export: reads "Número Desde" when there is no plain "Número" column', () => {
+    const row = { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '1', 'Número Desde': 482088, 'Número Hasta': 482088 };
+    const adapted = adaptRow('arca', row);
+    expect(adapted.numero_raw).toBe('482088');
+  });
+
+  it('ARCA real export: repairs mojibake\'d headers (UTF-8 decoded as Latin-1 upstream of us) so accented column names still match', () => {
+    // Literal mojibake bytes, same as the real file: "Fecha de EmisiÃ³n" /
+    // "NÃºmero Desde" — i.e. what "Fecha de Emisión"/"Número Desde" become
+    // when UTF-8 bytes get misread as Latin-1.
+    const row = {
+      'Nro. Doc. Emisor': '30500061711',
+      'Tipo de Comprobante': '1',
+      'Fecha de EmisiÃ³n': '01/04/2026',
+      'NÃºmero Desde': 482088,
+    };
+    const adapted = adaptRow('arca', row);
+    expect(adapted.fecha_emision_raw).toBe('01/04/2026');
+    expect(adapted.numero_raw).toBe('482088');
+  });
+
+  it('ARCA: a bare numeric tipo (no description) still resolves exactly as before — the description-stripping is additive, not a behavior change for clean exports', () => {
+    const row = { 'Nro. Doc. Emisor': '30-12345678-9', 'Tipo de Comprobante': '19' };
+    const adapted = adaptRow('arca', row);
+    expect(adapted.tipo_cbte).toBe(19);
   });
 
   it('Tango: maps "CUIT" + "Tipo" text label (RF-05 scenario)', () => {

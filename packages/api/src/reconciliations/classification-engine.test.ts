@@ -124,7 +124,7 @@ describe('T10 RF-09: IVA priority sort on unmatched', () => {
 
 describe('T10: classifyStagedRows (raw-row end-to-end pipeline)', () => {
   it('adapts, normalizes and classifies raw staged rows end to end', () => {
-    const arcaRows = [{ 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' }];
+    const arcaRows = [{ 'Nro. Doc. Emisor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' }];
     const contabilidadRows = [{ CUIT: '30111111112', Tipo: 'Factura A', 'Punto de Venta': '1', Número: '1', Importe: '100,00' }];
 
     const { results, counts } = classifyStagedRows(arcaRows, contabilidadRows, 'tango');
@@ -133,7 +133,7 @@ describe('T10: classifyStagedRows (raw-row end-to-end pipeline)', () => {
   });
 
   it('routes an unresolvable tipo to errors instead of throwing', () => {
-    const arcaRows = [{ 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '999' }];
+    const arcaRows = [{ 'Nro. Doc. Emisor': '30111111112', 'Tipo de Comprobante': '999' }];
     const { counts } = classifyStagedRows(arcaRows, [], 'tango');
     expect(counts[Classification.Errors]).toBe(1);
   });
@@ -142,8 +142,8 @@ describe('T10: classifyStagedRows (raw-row end-to-end pipeline)', () => {
 describe('T22 (conciliacion-periodica): normalizeStagedRows', () => {
   it('exposes the same ok/error split classifyStagedRows uses internally, for vouchers-canonical-writer.ts to reuse', () => {
     const arcaRows = [
-      { 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' },
-      { 'Nro. Doc. Receptor': '30222222223', 'Tipo de Comprobante': '999' }, // unresolvable tipo
+      { 'Nro. Doc. Emisor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' },
+      { 'Nro. Doc. Emisor': '30222222223', 'Tipo de Comprobante': '999' }, // unresolvable tipo
     ];
     const contabilidadRows = [{ CUIT: '30111111112', Tipo: 'Factura A', 'Punto de Venta': '1', Número: '1', Importe: '100,00' }];
 
@@ -161,7 +161,7 @@ describe('T22 (conciliacion-periodica): normalizeStagedRows', () => {
   });
 
   it('classifyVouchers(normalizeStagedRows(...)) produces the same result as classifyStagedRows', () => {
-    const arcaRows = [{ 'Nro. Doc. Receptor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' }];
+    const arcaRows = [{ 'Nro. Doc. Emisor': '30111111112', 'Tipo de Comprobante': '1', 'Punto de Venta': '1', 'Número de Comprobante': '1', 'Imp. Total': '100,00' }];
     const contabilidadRows = [{ CUIT: '30111111112', Tipo: 'Factura A', 'Punto de Venta': '1', Número: '1', Importe: '100,00' }];
 
     const direct = classifyStagedRows(arcaRows, contabilidadRows, 'tango');

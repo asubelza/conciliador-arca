@@ -96,7 +96,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       .field('periodo_id', periodoId)
       .attach(
         'arca_file',
-        Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
+        Buffer.from('Nro. Doc. Emisor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
         'arca.csv',
       )
       .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
@@ -177,7 +177,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
       .field('periodo_id', periodoId)
       .attach(
         'arca_file',
-        Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
+        Buffer.from('Nro. Doc. Emisor,Tipo de Comprobante\n30111111112,1\n30222222223,1'),
         'arca.csv',
       )
       .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
@@ -755,7 +755,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         .attach(
           'arca_file',
           Buffer.from(
-            'Nro. Doc. Receptor,Tipo de Comprobante,Punto de Venta,Número de Comprobante,Fecha de Emisión,Imp. Total\n' +
+            'Nro. Doc. Emisor,Tipo de Comprobante,Punto de Venta,Número de Comprobante,Fecha de Emisión,Imp. Total\n' +
               '30111111112,1,1,100,01/04/2026,"1.500,00"\n' +
               '30222222223,1,1,101,02/04/2026,"2.000,00"',
           ),
@@ -820,7 +820,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', periodoId)
-        .attach('arca_file', Buffer.from('Nro. Doc. Receptor\n30111111112'), 'arca.csv')
+        .attach('arca_file', Buffer.from('Nro. Doc. Emisor\n30111111112'), 'arca.csv')
         .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
 
       expect(res.status).toBe(200);
@@ -896,7 +896,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         .field('tenant_id', tenantId)
         .field('contabilidad_source_system', 'tango')
         .field('periodo_id', periodoId)
-        .attach('arca_file', Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1'), 'arca.csv')
+        .attach('arca_file', Buffer.from('Nro. Doc. Emisor,Tipo de Comprobante\n30111111112,1'), 'arca.csv')
         .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
 
       const { rows: afterStaging } = await pool.query(
