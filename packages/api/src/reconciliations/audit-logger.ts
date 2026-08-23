@@ -28,6 +28,9 @@ import type { Pool, PoolClient } from 'pg';
 // contador knows will never have a real contabilidad pair (e.g. loaded in
 // ARCA many months before the system was in use) and settles individually,
 // without linking it to any sistema voucher.
+// dashboard-principal RF-34 adds 'reopen' — logged INSIDE reabrirPeriodo's
+// transaction (periodo-reapertura.ts), so a rollback removes the audit row
+// and only committed reopens are audited.
 export type AuditAction =
   | 'upload'
   | 'staging'
@@ -37,6 +40,7 @@ export type AuditAction =
   | 'user_mark'
   | 'feedback_read'
   | 'close'
+  | 'reopen'
   | 'confirm_similarity'
   | 'discard_similarity'
   | 'resolve_pendiente_manual';
