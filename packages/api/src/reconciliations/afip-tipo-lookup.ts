@@ -6,8 +6,11 @@
  *
  * Real AFIP tipo codes (the actual "Tabla de Comprobantes" used by ARCA,
  * not an internal invention): 1=Factura A, 2=ND A, 3=NC A, 6=Factura B,
- * 7=ND B, 8=NC B, 11=Factura C, 12=ND C, 13=NC C, 19=Factura E, 20=ND E,
- * 21=NC E. ARCA's own export already carries these as numeric codes (see
+ * 7=ND B, 8=NC B, 11=Factura C, 12=ND C, 13=NC C, 15=Recibo C, 19=Factura E,
+ * 20=ND E, 21=NC E, 51=Factura A con leyenda "Operación Sujeta a Retención"
+ * (RG 5762/2025 repurposed this code away from its old "Factura M" meaning
+ * — see shared-types' AFIP_TIPOS_CADENCIAL doc comment), 81=Tique-Factura A.
+ * ARCA's own export already carries these as numeric codes (see
  * comprobante-normalization.spec.md's ARCA scenario: `"1" -> 1`), so ARCA
  * rows resolve via straight numeric parse. Each contabilidad system has its
  * own shorthand vocabulary for the same codes (Tango spells out "Factura A";

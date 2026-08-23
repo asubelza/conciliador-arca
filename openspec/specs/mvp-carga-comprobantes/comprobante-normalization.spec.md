@@ -66,6 +66,8 @@ The system MUST maintain a lookup table (`afip_tipo_map`) mapping textual and nu
 - AND an operator can add `"20" → 20` to `afip_tipo_map` via seed migration
 - AND re-processing the upload succeeds
 
+**Correction (2026-08-23, real client data):** exactly this "tipo drift" scenario played out for real. A client-provided ARCA "Comprobantes Recibidos" export (995 rows) had 8 rows with 3 AFIP codes not yet in `AFIP_TIPOS_CADENCIAL` (shared-types, the runtime source of truth `afip_tipo_map` is seeded from): `15` (Recibo C), `51` and `81`. They were added after confirming each against AFIP's own published "Tabla de Comprobantes" — see `AFIP_TIPOS_CADENCIAL`'s doc comment in `packages/shared-types/src/index.ts` for the full detail. `51` is worth flagging specifically: it used to mean "Factura M", but RG 5762/2025 ("Fin de las facturas M") repurposed that same numeric code to mean "Factura A con leyenda Operación Sujeta a Retención" instead — a different comprobante type that explicitly is *not* Factura M despite reusing the code. The real export's own row description matched this current, post-2025 meaning, which is what got encoded.
+
 ### RF-07: Locale-aware parsing (decimal, date, currency)
 
 The system MUST parse Argentine locale amounts (comma-decimal, e.g. `"1.500,00"`), dates (`dd/mm/yyyy` or Excel serial), and multi-currency cotización → ARS normalization. NC/ND rows MUST carry a sign consistent with their tipo.

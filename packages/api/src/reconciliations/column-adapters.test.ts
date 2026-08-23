@@ -32,10 +32,19 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
     expect(adapted.tipo_cbte).toBe(11);
   });
 
-  it('ARCA real export: a genuinely unrecognized AFIP code (e.g. "51 - Factura A con leyenda...") still resolves to undefined, not a wrong guess', () => {
-    const row = { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '51 - Factura A con leyenda Operación Sujeta a Retención' };
+  it('ARCA real export: a genuinely unrecognized AFIP code still resolves to undefined, not a wrong guess', () => {
+    const row = { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '999 - Código inventado' };
     const adapted = adaptRow('arca', row);
     expect(adapted.tipo_cbte).toBeUndefined();
+  });
+
+  it('ARCA real export: resolves the 3 codes added 2026-08-23 from a real client file — 15 (Recibo C), 51 (Factura A con leyenda "Operación Sujeta a Retención", RG 5762/2025 — not "Factura M"), and 81 (Tique-Factura A)', () => {
+    expect(adaptRow('arca', { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '15 - Recibo C' }).tipo_cbte).toBe(15);
+    expect(
+      adaptRow('arca', { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '51 - Factura A con leyenda Operación Sujeta a Retención' })
+        .tipo_cbte,
+    ).toBe(51);
+    expect(adaptRow('arca', { 'Nro. Doc. Emisor': '30500061711', 'Tipo de Comprobante': '81 - Tique Factura A' }).tipo_cbte).toBe(81);
   });
 
   it('ARCA real export: reads "Número Desde" when there is no plain "Número" column', () => {

@@ -17,7 +17,9 @@ CREATE TABLE afip_tipo_map (
 // The real AFIP tipo integer codes (shared-types AFIP_TIPOS_CADENCIAL) —
 // see conciliacion-periodica's stock-historico-comprobantes.spec.md (RF-14)
 // for why this replaced the old disconnected zero-padded 3-digit scheme.
-const EXPECTED: number[] = [1, 2, 3, 6, 7, 8, 11, 12, 13, 19, 20, 21];
+// 15/51/81 added 2026-08-23 from a real client ARCA export (see
+// shared-types' AFIP_TIPOS_CADENCIAL doc comment).
+const EXPECTED: number[] = [1, 2, 3, 6, 7, 8, 11, 12, 13, 15, 19, 20, 21, 51, 81];
 
 function openDb(): sqlite3.Database {
   const db = new sqlite3.Database(':memory:');

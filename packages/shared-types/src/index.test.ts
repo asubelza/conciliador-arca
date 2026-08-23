@@ -15,8 +15,11 @@ import {
 // The real AFIP tipo integer codes ("Tabla de Comprobantes") — replaced the
 // disconnected zero-padded 3-digit scheme on 2026-08-22 (conciliacion-periodica,
 // RF-14): this is now the same set afip-tipo-lookup.ts's KNOWN_AFIP_CODES
-// imports from here, not a separately maintained list.
-const EXPECTED_TIPOS: AfipTipo[] = [1, 2, 3, 6, 7, 8, 11, 12, 13, 19, 20, 21];
+// imports from here, not a separately maintained list. 15/51/81 added
+// 2026-08-23 from a real client ARCA export — see AFIP_TIPOS_CADENCIAL's
+// own doc comment in index.ts for why (51 in particular: RG 5762/2025
+// repurposed that code away from "Factura M").
+const EXPECTED_TIPOS: AfipTipo[] = [1, 2, 3, 6, 7, 8, 11, 12, 13, 15, 19, 20, 21, 51, 81];
 
 describe('T01/T14: shared-types AFIP tipo map + canonical voucher types', () => {
   describe('AFIP_TIPOS_CADENCIAL', () => {
