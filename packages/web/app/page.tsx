@@ -4,13 +4,14 @@ import { useState } from 'react';
 import { PeriodoSelector } from '@/components/PeriodoSelector';
 import { UploadForm } from '@/components/UploadForm';
 import { StatusPoller } from '@/components/StatusPoller';
+import { UploadSummary } from '@/components/UploadSummary';
 import { ReportViewer } from '@/components/ReportViewer';
 import { PeriodoReportViewer } from '@/components/PeriodoReportViewer';
 import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
-import type { Periodo, SessionUser } from '@/lib/api';
+import type { Periodo, SessionUser, StatusResponse } from '@/lib/api';
 
 const ROLE_BADGE_CLASSES: Record<SessionUser['role'], string> = {
   admin: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300',
@@ -47,6 +48,8 @@ export default function Home() {
   const [periodo, setPeriodo] = useState<Periodo | null>(null);
   const [uploadStep, setUploadStep] = useState<UploadStep>('upload');
   const [jobId, setJobId] = useState<string | null>(null);
+  const [jobCounts, setJobCounts] = useState<StatusResponse['counts']>(undefined);
+  const [showJobReport, setShowJobReport] = useState(false);
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
@@ -62,6 +65,8 @@ export default function Home() {
     setPeriodo(selectedPeriodo);
     setUploadStep('upload');
     setJobId(null);
+    setJobCounts(undefined);
+    setShowJobReport(false);
     setShowPeriodoReport(selectedPeriodo.estado === 'cerrado');
   }
 
@@ -69,11 +74,15 @@ export default function Home() {
     setTenantId(null);
     setPeriodo(null);
     setJobId(null);
+    setJobCounts(undefined);
+    setShowJobReport(false);
     setShowPeriodoReport(false);
   }
 
   function handleUploadAnother() {
     setJobId(null);
+    setJobCounts(undefined);
+    setShowJobReport(false);
     setUploadStep('upload');
   }
 
@@ -182,22 +191,24 @@ export default function Home() {
                 )}
 
                 {uploadStep === 'processing' && jobId && (
-                  <StatusPoller jobId={jobId} onCompleted={() => setUploadStep('completed')} />
+                  <StatusPoller
+                    jobId={jobId}
+                    onCompleted={(counts) => {
+                      setJobCounts(counts);
+                      setUploadStep('completed');
+                    }}
+                  />
                 )}
 
                 {uploadStep === 'completed' && jobId && (
                   <div className="flex flex-col gap-4">
-                    <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-card dark:border-emerald-900 dark:bg-emerald-950/30">
-                      <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Carga procesada.</p>
-                      <button
-                        type="button"
-                        onClick={handleUploadAnother}
-                        className="focus-ring rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-card hover:bg-indigo-500"
-                      >
-                        Subir otro archivo
-                      </button>
-                    </div>
-                    <ReportViewer jobId={jobId} />
+                    <UploadSummary
+                      counts={jobCounts}
+                      showingDetails={showJobReport}
+                      onViewDetails={() => setShowJobReport(true)}
+                      onUploadAnother={handleUploadAnother}
+                    />
+                    {showJobReport && <ReportViewer jobId={jobId} />}
                   </div>
                 )}
               </>

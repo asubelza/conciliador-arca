@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PeriodoReportViewer } from './PeriodoReportViewer';
 import { clearSession, setSession } from '@/lib/session';
@@ -259,6 +259,86 @@ describe('T31: PeriodoReportViewer', () => {
       expect(screen.queryByRole('button', { name: /^confirmar$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^descartar$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^revisado$/i })).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * T39 (pedido del cliente, 2026-08-23, feature 3 de 3): clicking a
+   * "Posible Coincidencia" row opens a field-by-field comparison modal with
+   * its own Confirmar/Descartar — a second way to reach the same
+   * confirmarCoincidencia() action as the inline quick buttons above,
+   * which this whole describe block confirms are still there untouched.
+   */
+  describe('T39: modal de comparación al hacer click en la fila', () => {
+    it('opens a dialog with the field-by-field comparison when the row is clicked, and Confirmar inside it calls the same API', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => reportWithCoincidencia })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ ...coincidenciaRow, status: 'confirmado' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const row = await screen.findByRole('button', { name: /comparar posible coincidencia/i });
+
+      await userEvent.click(row);
+
+      const dialog = screen.getByRole('dialog', { name: /comparar posible coincidencia/i });
+      // numero differs (301 vs 300) — both values for that field show up inside the dialog.
+      expect(within(dialog).getByText('301')).toBeInTheDocument();
+      expect(within(dialog).getByText('300')).toBeInTheDocument();
+
+      const modalConfirmar = within(dialog).getByRole('button', { name: /^confirmar$/i });
+      await act(async () => {
+        await userEvent.click(modalConfirmar);
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+      expect(body).toEqual({ sistema_voucher_id: 's3', arca_voucher_id: 'a3', accion: 'confirmar' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('closes the dialog without calling the API when "Cerrar" is clicked', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithCoincidencia }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const row = await screen.findByRole('button', { name: /comparar posible coincidencia/i });
+      await userEvent.click(row);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /^cerrar$/i }));
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('cliente can open the comparison dialog but sees no Confirmar/Descartar inside it (read-only, RF-14)', async () => {
+      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithCoincidencia }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const row = await screen.findByRole('button', { name: /comparar posible coincidencia/i });
+      await userEvent.click(row);
+
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).queryByRole('button', { name: /^confirmar$/i })).not.toBeInTheDocument();
+      expect(within(dialog).queryByRole('button', { name: /^descartar$/i })).not.toBeInTheDocument();
+    });
+
+    it('clicking the inline Confirmar button does not also open the comparison dialog', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => reportWithCoincidencia })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ ...coincidenciaRow, status: 'confirmado' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const inlineConfirmar = await screen.findByRole('button', { name: /^confirmar$/i });
+      await act(async () => {
+        await userEvent.click(inlineConfirmar);
+      });
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 

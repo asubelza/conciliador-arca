@@ -6,7 +6,13 @@ import { CheckIcon, SpinnerIcon, WarningIcon } from './icons';
 
 export interface StatusPollerProps {
   jobId: string;
-  onCompleted: () => void;
+  /**
+   * T38 (pedido del cliente, 2026-08-23): forwards the job's classification
+   * counts (already computed by the worker — see job-status.ts) so the
+   * parent can feed them straight into UploadSummary without a second
+   * fetch. `undefined` if the completed response somehow carried none.
+   */
+  onCompleted: (counts?: StatusResponse['counts']) => void;
   pollIntervalMs?: number;
 }
 
@@ -33,7 +39,7 @@ export function StatusPoller({ jobId, onCompleted, pollIntervalMs = 1500 }: Stat
         if (cancelled) return;
         setStatus(res);
         if (res.status === 'completed') {
-          onCompleted();
+          onCompleted(res.counts);
           return;
         }
         if (res.status === 'error') {

@@ -45,9 +45,22 @@ export interface UploadResponse {
 
 export type ReconciliationStatus = 'pending' | 'processing' | 'completed' | 'error';
 
+/**
+ * Pantalla resumen (pedido del cliente, 2026-08-23): el backend ahora expone
+ * los 5 conteos por clasificación además de arca_rows/contabilidad_rows
+ * (ver job-status.ts) — insumo directo de UploadSummary.tsx.
+ */
 export interface StatusResponse {
   status: ReconciliationStatus;
-  counts?: { arca_rows: number; contabilidad_rows: number };
+  counts?: {
+    arca_rows: number;
+    contabilidad_rows: number;
+    matched: number;
+    'unmatched-arca': number;
+    'unmatched-contabilidad': number;
+    duplicates: number;
+    errors: number;
+  };
   detail?: string;
 }
 
@@ -135,6 +148,62 @@ export async function uploadReconciliation(params: {
   if (!res.ok) {
     handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Upload failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/**
+ * Previsualización de carga (pedido del cliente, 2026-08-23, feature 1 de
+ * 3): mismo shape que `PreviewResult`/`PreviewSide`/`PreviewRow` en
+ * reconciliation-preview.ts del lado del API — se llama a
+ * POST /api/reconciliations/preview con los mismos dos archivos que
+ * después se reenvían a uploadReconciliation() si el contador confirma.
+ */
+export interface PreviewRow {
+  /** false cuando no se pudo resolver el tipo de comprobante AFIP — la fila igual se muestra, marcada. */
+  ok: boolean;
+  cuit_emisor: string;
+  tipo_cbte: number;
+  punto_venta: number;
+  numero: number;
+  fecha_emision: string;
+  importe_total_ars: number;
+}
+
+export interface PreviewSide {
+  total: number;
+  ok: number;
+  errors: number;
+  rows: PreviewRow[];
+}
+
+export interface PreviewResult {
+  arca: PreviewSide;
+  contabilidad: PreviewSide;
+}
+
+export async function previewReconciliation(params: {
+  tenantId: string;
+  periodoId: string;
+  contabilidadSourceSystem: ContabilidadSourceSystem;
+  arcaFile: File;
+  contabilidadFile: File;
+}): Promise<PreviewResult> {
+  const form = new FormData();
+  form.append('tenant_id', params.tenantId);
+  form.append('periodo_id', params.periodoId);
+  form.append('contabilidad_source_system', params.contabilidadSourceSystem);
+  form.append('arca_file', params.arcaFile);
+  form.append('contabilidad_file', params.contabilidadFile);
+
+  const res = await fetch(`${API_BASE_URL}/api/reconciliations/preview`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Preview failed (${res.status})`));
   }
   return res.json();
 }

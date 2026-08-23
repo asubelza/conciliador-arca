@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type KeyboardEvent } from 'react';
 import {
   cerrarPeriodo,
   confirmarCoincidencia,
@@ -12,6 +12,7 @@ import {
   type PeriodoReportRow,
 } from '@/lib/api';
 import { useAuth } from '@/lib/session';
+import { CoincidenciaModal } from './CoincidenciaModal';
 import { CheckIcon, SpinnerIcon, XIcon } from './icons';
 
 export interface PeriodoReportViewerProps {
@@ -116,6 +117,12 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
   // for a per-row state map for this UI's scale).
   const [rowActionError, setRowActionError] = useState<string | null>(null);
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  // T39 (pedido del cliente, 2026-08-23): la fila de "Posible Coincidencia"
+  // que está abierta en el modal de comparación campo por campo, o null si
+  // ninguna. Independiente de pendingActionKey — el modal se cierra apenas
+  // se dispara la acción (igual que los botones rápidos inline no esperan
+  // a que termine el fetch para que la UI se sienta responsiva).
+  const [comparingRow, setComparingRow] = useState<PeriodoReportRow | null>(null);
   const canAct = user?.role !== 'cliente';
 
   const load = useCallback(async () => {
@@ -325,8 +332,31 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                   <tbody>
                     {rows.map((row) => {
                       const rowKey = row.composite_key + row.classification;
+                      // T39: sólo las filas de "Posible Coincidencia" con
+                      // ambos lados presentes son clickeables — son las
+                      // únicas que tienen algo que comparar campo a campo.
+                      const isCoincidenciaRow = key === 'posibles_coincidencias' && !!row.sistema && !!row.arca;
                       return (
-                        <tr key={rowKey} className="border-b border-slate-100 align-top last:border-0 dark:border-slate-800/60">
+                        <tr
+                          key={rowKey}
+                          className={`border-b border-slate-100 align-top last:border-0 dark:border-slate-800/60 ${
+                            isCoincidenciaRow ? 'cursor-pointer hover:bg-violet-50/60 dark:hover:bg-violet-950/20' : ''
+                          }`}
+                          {...(isCoincidenciaRow
+                            ? {
+                                role: 'button' as const,
+                                tabIndex: 0,
+                                'aria-label': 'Comparar posible coincidencia',
+                                onClick: () => setComparingRow(row),
+                                onKeyDown: (e: KeyboardEvent<HTMLTableRowElement>) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setComparingRow(row);
+                                  }
+                                },
+                              }
+                            : {})}
+                        >
                           <td className="px-3 py-2 text-slate-700 dark:text-slate-300">
                             {compositeKeyLabel(row)}
                             {row.feedback_previo && (
@@ -367,7 +397,10 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                   <div className="flex gap-3">
                                     <button
                                       type="button"
-                                      onClick={() => handleCoincidencia(row, 'confirmar')}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleCoincidencia(row, 'confirmar');
+                                      }}
                                       disabled={pendingActionKey === `${row.composite_key}:confirmar`}
                                       className="focus-ring inline-flex items-center gap-1 rounded text-xs font-medium text-emerald-600 hover:text-emerald-500 disabled:opacity-50 dark:text-emerald-400"
                                     >
@@ -380,7 +413,10 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => handleCoincidencia(row, 'descartar')}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleCoincidencia(row, 'descartar');
+                                      }}
                                       disabled={pendingActionKey === `${row.composite_key}:descartar`}
                                       className="focus-ring inline-flex items-center gap-1 rounded text-xs font-medium text-red-600 hover:text-red-500 disabled:opacity-50 dark:text-red-400"
                                     >
@@ -396,7 +432,10 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                 <div className="flex gap-3">
                                   <button
                                     type="button"
-                                    onClick={() => handleMark(row, 'revisado')}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleMark(row, 'revisado');
+                                    }}
                                     disabled={pendingActionKey === `${row.composite_key}:revisado`}
                                     className="focus-ring rounded text-xs font-medium text-indigo-600 hover:text-indigo-500 disabled:opacity-50 dark:text-indigo-400"
                                   >
@@ -404,7 +443,10 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => handleMark(row, 'explicado')}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleMark(row, 'explicado');
+                                    }}
                                     disabled={pendingActionKey === `${row.composite_key}:explicado`}
                                     className="focus-ring rounded text-xs font-medium text-indigo-600 hover:text-indigo-500 disabled:opacity-50 dark:text-indigo-400"
                                   >
@@ -424,6 +466,29 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
           </div>
         );
       })}
+
+      {comparingRow && (
+        <CoincidenciaModal
+          row={comparingRow}
+          onClose={() => setComparingRow(null)}
+          onConfirmar={
+            canAct
+              ? () => {
+                  handleCoincidencia(comparingRow, 'confirmar');
+                  setComparingRow(null);
+                }
+              : undefined
+          }
+          onDescartar={
+            canAct
+              ? () => {
+                  handleCoincidencia(comparingRow, 'descartar');
+                  setComparingRow(null);
+                }
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }
