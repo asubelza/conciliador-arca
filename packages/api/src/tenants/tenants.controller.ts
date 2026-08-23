@@ -11,6 +11,7 @@ import { validateTenantIdParam, validateUpdateTenantConfigBody } from './tenants
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
+import { fetchPendientesHistorico } from './pendientes-historico';
 
 export interface TenantConfigRow {
   id: string;
@@ -50,6 +51,35 @@ export class TenantsController {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
     }
     return rows[0];
+  }
+
+  /**
+   * 2026-08-23 (client request, feature 3 de 3): "pantalla que muestre el
+   * resumen de unmatch de arca... tomando como filtro desde el mes en que
+   * por primera vez el cliente empezo a usar el sistema" — read-only, same
+   * role posture as GET :id/config (open to all 3 roles, gated by
+   * assertTenantAccess only). See pendientes-historico.ts for the filter
+   * logic and the RNF-07 "never hide" reasoning behind the separate
+   * excluidos_previos_a_alta bucket.
+   */
+  @Get(':id/pendientes-historico')
+  async getPendientesHistorico(@Param('id') id: unknown, @Req() req: AuthenticatedRequest) {
+    const failure = validateTenantIdParam(id);
+    if (failure) {
+      throw new HttpException({ error: failure.error }, failure.status);
+    }
+
+    const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, id as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const result = await fetchPendientesHistorico(pool, id as string);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
   }
 
   @Put(':id/config')

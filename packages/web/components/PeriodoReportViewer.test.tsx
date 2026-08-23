@@ -411,4 +411,69 @@ describe('T31: PeriodoReportViewer', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial load — no POST fired
     });
   });
+
+  describe('2026-08-23 (feature 2 de 3): "Marcar como resuelto sin pareja"', () => {
+    it('resolves a pendiente_en_arca row after confirm + an optional nota', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'a2', estado: 'conciliado' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      jest.spyOn(window, 'confirm').mockReturnValue(true);
+      jest.spyOn(window, 'prompt').mockReturnValue('nunca va a matchear, cargado en arca hace meses');
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const resolverButton = await screen.findByRole('button', { name: /marcar como resuelto/i });
+      await act(async () => {
+        await userEvent.click(resolverButton);
+      });
+
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining(`/api/periodos/${PERIODO_ID}/pendientes-arca-resolver`),
+        expect.objectContaining({ method: 'POST' }),
+      );
+      const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+      expect(body).toEqual({ arca_voucher_id: 'a2', nota: 'nunca va a matchear, cargado en arca hace meses' });
+      expect(fetchMock).toHaveBeenCalledTimes(3); // initial load, POST, reload
+    });
+
+    it('does not call the API when the confirm dialog is cancelled', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      jest.spyOn(window, 'confirm').mockReturnValue(false);
+      const promptSpy = jest.spyOn(window, 'prompt');
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const resolverButton = await screen.findByRole('button', { name: /marcar como resuelto/i });
+      await userEvent.click(resolverButton);
+
+      expect(promptSpy).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial load — no POST fired
+    });
+
+    it('aborts when confirmed but the nota prompt is cancelled', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      jest.spyOn(window, 'confirm').mockReturnValue(true);
+      jest.spyOn(window, 'prompt').mockReturnValue(null);
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const resolverButton = await screen.findByRole('button', { name: /marcar como resuelto/i });
+      await userEvent.click(resolverButton);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial load — no POST fired
+    });
+
+    it('only shows "Marcar como resuelto" for pendientes_en_arca rows, not posibles_coincidencias', async () => {
+      // reportWithCoincidencia keeps openReportBody's single pendientes_en_arca row (a2)
+      // and adds one posibles_coincidencias row — the button count must stay at 1.
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithCoincidencia }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      expect(await screen.findByText(/posible coincidencia \(1\)/i)).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: /marcar como resuelto/i })).toHaveLength(1);
+    });
+  });
 });

@@ -7,6 +7,7 @@ import {
   createPeriodoMark,
   downloadPeriodoReport,
   getPeriodoReport,
+  resolverPendienteArca,
   type Periodo,
   type PeriodoReport,
   type PeriodoReportRow,
@@ -175,6 +176,39 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
       await load();
     } catch (err) {
       setRowActionError(err instanceof Error ? err.message : 'Mark failed');
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  /**
+   * 2026-08-23 (client request, feature 2 de 3): "Marcar como resuelto sin
+   * pareja" — solo aplica a filas de Pendientes en ARCA (row.arca siempre
+   * presente ahí). Pide una nota opcional, igual que 'explicado', porque es
+   * la misma clase de decisión (el contador está registrando un motivo).
+   */
+  async function handleResolverPendiente(row: PeriodoReportRow) {
+    if (!row.arca) return;
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm(
+        'Vas a marcar este comprobante de ARCA como resuelto sin ningún par en el sistema contable — no va a volver a aparecer como pendiente. ¿Confirmás?',
+      );
+      if (!confirmed) return;
+    }
+    let nota: string | undefined;
+    if (typeof window !== 'undefined') {
+      const entered = window.prompt('Motivo (opcional):');
+      if (entered === null) return;
+      nota = entered.trim() === '' ? undefined : entered.trim();
+    }
+    const key = `${row.composite_key}:resolver`;
+    setRowActionError(null);
+    setPendingActionKey(key);
+    try {
+      await resolverPendienteArca(periodoId, row.arca.id, nota);
+      await load();
+    } catch (err) {
+      setRowActionError(err instanceof Error ? err.message : 'Resolver pendiente failed');
     } finally {
       setPendingActionKey(null);
     }
@@ -452,6 +486,19 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                   >
                                     Explicado
                                   </button>
+                                  {key === 'pendientes_en_arca' && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleResolverPendiente(row);
+                                      }}
+                                      disabled={pendingActionKey === `${row.composite_key}:resolver`}
+                                      className="focus-ring rounded text-xs font-medium text-slate-600 hover:text-slate-500 disabled:opacity-50 dark:text-slate-400"
+                                    >
+                                      Marcar como resuelto
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </td>

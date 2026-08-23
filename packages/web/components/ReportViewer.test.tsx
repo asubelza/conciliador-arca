@@ -81,6 +81,51 @@ describe('T13: ReportViewer', () => {
     expect(window.URL.createObjectURL).toHaveBeenCalledWith(csvBlob);
   });
 
+  it('2026-08-23 ("Ver pendientes sistema"): toggles the table to only unmatched-contabilidad rows, and passes classification through on download', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          rows: [
+            { classification: 'matched', composite_key: 'k1', arca_importe: 100, contabilidad_importe: 100, delta: 0, iva_amount: 21, cae: null, fecha_emision: null },
+            { classification: 'unmatched-contabilidad', composite_key: 'k2', arca_importe: null, contabilidad_importe: 50, delta: null, iva_amount: 10, cae: null, fecha_emision: null },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'attachment; filename="reconciliation-job-1.csv"' },
+        blob: async () => ({ type: 'text/csv' }),
+      });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    window.URL.createObjectURL = jest.fn().mockReturnValue('blob:mock');
+    window.URL.revokeObjectURL = jest.fn();
+    jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<ReportViewer jobId="job-1" />);
+    expect(await screen.findByText('k1')).toBeInTheDocument();
+    expect(screen.getByText('k2')).toBeInTheDocument();
+
+    const toggleButton = screen.getByRole('button', { name: /ver pendientes sistema/i });
+    await act(async () => {
+      await userEvent.click(toggleButton);
+    });
+
+    expect(screen.queryByText('k1')).not.toBeInTheDocument();
+    expect(screen.getByText('k2')).toBeInTheDocument();
+
+    const csvButton = screen.getByRole('button', { name: /descargar csv/i });
+    await act(async () => {
+      await userEvent.click(csvButton);
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining('/api/reconciliations/job-1/report?format=csv&classification=unmatched-contabilidad'),
+      expect.anything(),
+    );
+  });
+
   it('shows an empty state when there are no diff rows', async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ rows: [] }) }) as unknown as typeof fetch;
 

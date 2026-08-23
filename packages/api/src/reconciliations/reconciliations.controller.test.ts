@@ -637,8 +637,71 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         [tenantId, jobId],
       );
       expect(rows).toHaveLength(1);
-      expect(rows[0].details).toEqual({ format: 'csv', rows: 2 });
+      expect(rows[0].details).toEqual({ format: 'csv', rows: 2, classification: null });
     }, 15000);
+
+    describe('classification filter (2026-08-23, "Ver pendientes sistema")', () => {
+      it('AC: returns 400 for an unrecognized classification value', async () => {
+        const jobId = await uploadAndWaitForCompletion();
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/report?classification=duplicates`)
+          .set('Authorization', adminAuth);
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/classification must be one of/);
+      }, 15000);
+
+      it('AC: format=json + classification=unmatched-arca returns only that section', async () => {
+        const jobId = await uploadAndWaitForCompletion();
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/report?format=json&classification=unmatched-arca`)
+          .set('Authorization', adminAuth);
+        expect(res.status).toBe(200);
+        expect(res.body.rows).toHaveLength(1);
+        expect(res.body.rows[0].classification).toBe('unmatched-arca');
+      }, 15000);
+
+      it('AC: format=csv + classification filters the CSV to that one section', async () => {
+        const jobId = await uploadAndWaitForCompletion();
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/report?format=csv&classification=matched`)
+          .set('Authorization', adminAuth);
+        expect(res.status).toBe(200);
+        const lines = res.text.trim().split('\n');
+        expect(lines).toHaveLength(2); // header + matched row only
+        expect(lines[1].startsWith('matched,')).toBe(true);
+      }, 15000);
+
+      it('AC: format=xlsx + classification builds a single sheet for that section, not all 4', async () => {
+        const jobId = await uploadAndWaitForCompletion();
+        const res = await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/report?format=xlsx&classification=unmatched-arca`)
+          .set('Authorization', adminAuth)
+          .buffer(true)
+          .parse((response, callback) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () => callback(null, Buffer.concat(chunks)));
+          });
+        expect(res.status).toBe(200);
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(res.body as unknown as ExcelJS.Buffer);
+        expect(workbook.worksheets.map((s) => s.name)).toEqual(['Unmatched ARCA']);
+        expect(workbook.getWorksheet('Unmatched ARCA')!.rowCount).toBe(2); // header + 1 row
+      }, 15000);
+
+      it('AC: logs the classification filter in the audit_trail details', async () => {
+        const jobId = await uploadAndWaitForCompletion();
+        await request(app.getHttpServer())
+          .get(`/api/reconciliations/${jobId}/report?format=csv&classification=unmatched-arca`)
+          .set('Authorization', adminAuth);
+
+        const { rows } = await pool.query(
+          "SELECT details FROM audit_trail WHERE tenant_id = $1 AND entity = 'reconciliation_job' AND entity_id = $2 AND action = 'export' ORDER BY created_at DESC LIMIT 1",
+          [tenantId, jobId],
+        );
+        expect(rows[0].details).toEqual({ format: 'csv', rows: 1, classification: 'unmatched-arca' });
+      }, 15000);
+    });
   });
 
   describe('T12: POST /api/reconciliations/:jobId/marks', () => {

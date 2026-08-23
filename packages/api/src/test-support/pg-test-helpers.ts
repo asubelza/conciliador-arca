@@ -9,9 +9,19 @@ import { hashPassword } from '../auth/password';
 import { signToken } from '../auth/jwt';
 import type { UserRole } from '../auth/users-types';
 
-export async function createTestTenant(pool: Pool, name = 'Test Tenant'): Promise<string> {
+/**
+ * `createdAt` (2026-08-23, feature 3 de 3): pendientes-historico.ts filters
+ * ARCA pendiente vouchers against the tenant's own `created_at` (alta
+ * date) — tests of that boundary need to control it directly rather than
+ * relying on whatever `now()` happens to be when the test runs.
+ */
+export async function createTestTenant(pool: Pool, name = 'Test Tenant', createdAt?: string): Promise<string> {
   const id = randomUUID();
-  await pool.query('INSERT INTO tenants (id, name) VALUES ($1, $2)', [id, name]);
+  if (createdAt) {
+    await pool.query('INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, $3)', [id, name, createdAt]);
+  } else {
+    await pool.query('INSERT INTO tenants (id, name) VALUES ($1, $2)', [id, name]);
+  }
   return id;
 }
 

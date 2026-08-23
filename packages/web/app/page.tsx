@@ -7,6 +7,7 @@ import { StatusPoller } from '@/components/StatusPoller';
 import { UploadSummary } from '@/components/UploadSummary';
 import { ReportViewer } from '@/components/ReportViewer';
 import { PeriodoReportViewer } from '@/components/PeriodoReportViewer';
+import { PendientesHistoricoViewer } from '@/components/PendientesHistoricoViewer';
 import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
@@ -51,6 +52,7 @@ export default function Home() {
   const [jobCounts, setJobCounts] = useState<StatusResponse['counts']>(undefined);
   const [showJobReport, setShowJobReport] = useState(false);
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
+  const [showPendientesHistorico, setShowPendientesHistorico] = useState(false);
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
   // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
@@ -68,6 +70,7 @@ export default function Home() {
     setJobCounts(undefined);
     setShowJobReport(false);
     setShowPeriodoReport(selectedPeriodo.estado === 'cerrado');
+    setShowPendientesHistorico(false);
   }
 
   function handleChangePeriodo() {
@@ -77,6 +80,7 @@ export default function Home() {
     setJobCounts(undefined);
     setShowJobReport(false);
     setShowPeriodoReport(false);
+    setShowPendientesHistorico(false);
   }
 
   function handleUploadAnother() {
@@ -157,6 +161,19 @@ export default function Home() {
                     {showPeriodoReport ? 'Ocultar reporte del período' : 'Ver reporte del período'}
                   </button>
                 )}
+                {/* 2026-08-23 (client request, feature 3 de 3): "luego de
+                    finalizar agregar 1 nueva pantalla..." — only reachable
+                    once este período fue finalizado (cerrado), i.e. after
+                    "Cerrar Conciliación del Mes". */}
+                {periodo.estado === 'cerrado' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPendientesHistorico((v) => !v)}
+                    className="focus-ring rounded text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                  >
+                    {showPendientesHistorico ? 'Ocultar histórico de pendientes ARCA' : 'Ver histórico de pendientes ARCA'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleChangePeriodo}
@@ -216,6 +233,10 @@ export default function Home() {
 
             {(showPeriodoReport || periodo.estado === 'cerrado') && (
               <PeriodoReportViewer periodoId={periodo.id} onClosed={(closed) => setPeriodo(closed)} />
+            )}
+
+            {periodo.estado === 'cerrado' && showPendientesHistorico && (
+              <PendientesHistoricoViewer tenantId={tenantId} />
             )}
           </div>
         )}

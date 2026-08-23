@@ -22,6 +22,12 @@ import type { Pool, PoolClient } from 'pg';
 // período when POST /api/periodos/:id/cerrar succeeds (periodo-cierre.ts).
 // RF-04/RF-13 adds 'confirm_similarity'/'discard_similarity' — logged once
 // per POST /api/periodos/:id/coincidencias decision (periodos.controller.ts).
+// 2026-08-23 (client request, feature 2 de 3) adds
+// 'resolve_pendiente_manual' — logged once per POST
+// /api/periodos/:id/pendientes-arca-resolver, for an ARCA pendiente the
+// contador knows will never have a real contabilidad pair (e.g. loaded in
+// ARCA many months before the system was in use) and settles individually,
+// without linking it to any sistema voucher.
 export type AuditAction =
   | 'upload'
   | 'staging'
@@ -32,7 +38,8 @@ export type AuditAction =
   | 'feedback_read'
   | 'close'
   | 'confirm_similarity'
-  | 'discard_similarity';
+  | 'discard_similarity'
+  | 'resolve_pendiente_manual';
 
 export interface AuditEvent {
   tenantId: string;

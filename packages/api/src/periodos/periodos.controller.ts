@@ -18,6 +18,7 @@ import { cerrarPeriodo } from './periodo-cierre';
 import { getPeriodoReport } from './periodo-report';
 import { buildPeriodoExportSections, toPeriodoReportCsv, toPeriodoReportXlsxBuffer } from './periodo-report-exporter';
 import { validateCoincidenciaRequest } from './coincidencia-validation';
+import { validatePendienteResolverRequest } from './pendiente-resolver-validation';
 import { validateMarkRequest } from '../reconciliations/marks-validation';
 import { insertFeedbackMark } from '../reconciliations/feedback-writer';
 import { logAuditEvent } from '../reconciliations/audit-logger';
@@ -405,6 +406,90 @@ export class PeriodosController {
     });
 
     return rows[0];
+  }
+
+  /**
+   * 2026-08-23 (client request, feature 2 de 3): "Marcar como resuelto sin
+   * pareja" — para un comprobante ARCA de la sección Pendientes en ARCA que
+   * el contador ya sabe que nunca va a tener su contraparte en el sistema
+   * contable (ej. cargado en ARCA muchos meses antes de que el cliente
+   * empezara a usar el sistema). A diferencia de `coincidencias`, que
+   * vincula DOS vouchers (sistema + arca), este resuelve UNO solo — pone su
+   * `estado` directamente en 'conciliado' sin ningún par del lado
+   * contabilidad, así deja de aparecer en `pendiente_en_arca` en cualquier
+   * período futuro (matchPeriodo filtra siempre `estado <> 'conciliado'`).
+   * No se reutiliza `fuzzy_match_confirmations` (esa tabla es para pares
+   * sistema+arca — este caso no tiene sistema del otro lado). Sin gate por
+   * período abierto/cerrado (a diferencia de `coincidencias`): esta acción
+   * cambia el voucher en sí, no el snapshot de ESTE período — el `id` de la
+   * URL es solo de dónde se disparó el botón en la UI.
+   */
+  @Post(':id/pendientes-arca-resolver')
+  @HttpCode(HttpStatus.OK)
+  async resolverPendienteArca(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validatePendienteResolverRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const tenantId = await resolvePeriodoTenantId(pool, id as string);
+    if (tenantId === undefined) {
+      throw new HttpException({ error: 'período not found' }, HttpStatus.NOT_FOUND);
+    }
+
+    const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const { arca_voucher_id: arcaVoucherId, nota } = validation.value;
+
+    const { rows: voucherRows } = await pool.query<{ id: string; file_source: string; estado: string }>(
+      'SELECT id, file_source, estado FROM vouchers_canonical WHERE tenant_id = $1 AND id = $2',
+      [tenantId, arcaVoucherId],
+    );
+    if (voucherRows.length === 0) {
+      throw new HttpException(
+        { error: 'arca_voucher_id must reference an existing voucher for this tenant' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    if (voucherRows[0].file_source !== 'arca') {
+      throw new HttpException(
+        { error: 'arca_voucher_id must be an ARCA-side voucher — only ARCA pendientes are resolved this way' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (voucherRows[0].estado === 'conciliado') {
+      throw new HttpException({ error: 'this voucher is already conciliado' }, HttpStatus.CONFLICT);
+    }
+
+    const { rows: updatedRows } = await pool.query<{ id: string; estado: string }>(
+      `UPDATE vouchers_canonical SET estado = 'conciliado' WHERE id = $1 RETURNING id, estado`,
+      [arcaVoucherId],
+    );
+
+    await logAuditEvent(pool, {
+      tenantId,
+      userId: req.user!.id,
+      action: 'resolve_pendiente_manual',
+      entity: 'vouchers_canonical',
+      entityId: arcaVoucherId,
+      details: { periodo_id: id as string, nota },
+    });
+
+    return updatedRows[0];
   }
 
   /**

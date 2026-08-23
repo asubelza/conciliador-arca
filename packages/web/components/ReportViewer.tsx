@@ -37,6 +37,12 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
   const [markError, setMarkError] = useState<string | null>(null);
   const [markedKeys, setMarkedKeys] = useState<Record<string, UserMarkClassification>>({});
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  // "Ver pendientes sistema" (pedido del cliente, 2026-08-23): filtra la
+  // tabla a solo los comprobantes del sistema contable sin match en ARCA
+  // (classification 'unmatched-contabilidad') — botón separado de "Cerrar
+  // Conciliación del Mes", no toca el período ni el motor de matching, solo
+  // filtra esta vista y su descarga.
+  const [showOnlyPendientesSistema, setShowOnlyPendientesSistema] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -54,7 +60,7 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
   async function handleDownload(format: 'csv' | 'xlsx') {
     setDownloadError(null);
     try {
-      await downloadReconciliationReport(jobId, format);
+      await downloadReconciliationReport(jobId, format, showOnlyPendientesSistema ? 'unmatched-contabilidad' : undefined);
     } catch (err) {
       setDownloadError(err instanceof Error ? err.message : 'Download failed');
     }
@@ -91,9 +97,13 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
     );
   }
 
+  const visibleRows = showOnlyPendientesSistema
+    ? rows.filter((row) => row.classification === 'unmatched-contabilidad')
+    : rows;
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           onClick={() => handleDownload('csv')}
@@ -107,6 +117,17 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
           className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
         >
           Descargar Excel
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowOnlyPendientesSistema((prev) => !prev)}
+          className={`focus-ring rounded-lg border px-3 py-1.5 text-sm font-medium shadow-card ${
+            showOnlyPendientesSistema
+              ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400'
+              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+          }`}
+        >
+          {showOnlyPendientesSistema ? 'Ver todo' : 'Ver pendientes sistema'}
         </button>
       </div>
 
@@ -122,9 +143,9 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
         </p>
       )}
 
-      {rows.length === 0 ? (
+      {visibleRows.length === 0 ? (
         <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500 shadow-card dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-          Sin diferencias: todo concilia.
+          {showOnlyPendientesSistema ? 'Sin pendientes del sistema contable.' : 'Sin diferencias: todo concilia.'}
         </p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
@@ -141,7 +162,7 @@ export function ReportViewer({ jobId }: ReportViewerProps) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {visibleRows.map((row) => (
                 <tr
                   key={row.composite_key}
                   className="border-b border-slate-100 last:border-0 dark:border-slate-800/60"

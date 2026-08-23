@@ -553,6 +553,143 @@ describe('T18: /api/periodos (integration)', () => {
   });
 
   /**
+   * 2026-08-23 (client request, feature 2 de 3) — integration coverage for
+   * POST /api/periodos/:id/pendientes-arca-resolver ("Marcar como resuelto
+   * sin pareja"): resolves a single ARCA pendiente without linking it to
+   * any sistema voucher, and it must then vanish from pendiente_en_arca on
+   * the next report read.
+   */
+  describe('POST /api/periodos/:id/pendientes-arca-resolver', () => {
+    it('resolves a pendiente ARCA voucher: 200, sets estado=conciliado, logs a resolve_pendiente_manual audit event', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-02-01' });
+      const periodoId = created.body.id;
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: arcaId, nota: 'nunca va a matchear, cargado antes de usar el sistema' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ id: arcaId, estado: 'conciliado' });
+
+      const { rows } = await pool.query('SELECT estado FROM vouchers_canonical WHERE id = $1', [arcaId]);
+      expect(rows[0].estado).toBe('conciliado');
+
+      const audit = await pool.query(
+        "SELECT entity, entity_id, details FROM audit_trail WHERE tenant_id = $1 AND action = 'resolve_pendiente_manual' ORDER BY created_at DESC LIMIT 1",
+        [tenantId],
+      );
+      expect(audit.rows[0]).toMatchObject({
+        entity: 'vouchers_canonical',
+        entity_id: arcaId,
+        details: { periodo_id: periodoId, nota: 'nunca va a matchear, cargado antes de usar el sistema' },
+      });
+    });
+
+    it('a resolved voucher no longer appears as pendiente_en_arca in a later período report', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-03-01' });
+      const periodoId = created.body.id;
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca', numero: 999888 });
+
+      await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: arcaId });
+
+      const laterPeriodo = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-04-01' });
+
+      const report = await request(app.getHttpServer())
+        .get(`/api/periodos/${laterPeriodo.body.id}/report`)
+        .set('Authorization', adminAuth);
+      expect(report.status).toBe(200);
+      const stillPendiente = report.body.sections.pendientes_en_arca.some(
+        (r: { arca: { id: string } | null }) => r.arca?.id === arcaId,
+      );
+      expect(stillPendiente).toBe(false);
+    });
+
+    it('returns 400 when the voucher is not ARCA-side', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-05-01' });
+      const periodoId = created.body.id;
+      const sistemaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: sistemaId });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 409 when the voucher is already conciliado', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-06-01' });
+      const periodoId = created.body.id;
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+
+      const first = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: arcaId });
+      expect(first.status).toBe(200);
+
+      const second = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: arcaId });
+      expect(second.status).toBe(409);
+    });
+
+    it('returns 400 for a malformed body (missing arca_voucher_id)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-07-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for an unknown período id', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/periodos/00000000-0000-0000-0000-000000000000/pendientes-arca-resolver')
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: randomUUID() });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 when arca_voucher_id does not reference an existing voucher for this tenant', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-01-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: randomUUID() });
+      expect(res.status).toBe(404);
+    });
+  });
+
+  /**
    * RF-09 — integration coverage for the actual HTTP wiring of
    * POST /api/periodos/:id/marks. feedback_loop's own persistence and
    * periodo-report.ts's attachFeedbackAndReprioritize consumption of it are
@@ -736,6 +873,26 @@ describe('T18: /api/periodos (integration)', () => {
         .post(`/api/periodos/${created.body.id}/marks`)
         .set('Authorization', authHeaderFor('cliente'))
         .send({ composite_key: '30111111112|1|1|100', classification: 'revisado' });
+      expect(res.status).toBe(403);
+    });
+
+    it('POST /api/periodos/:id/pendientes-arca-resolver with no Authorization header returns 401', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/periodos/00000000-0000-0000-0000-000000000000/pendientes-arca-resolver')
+        .send({ arca_voucher_id: randomUUID() });
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /api/periodos/:id/pendientes-arca-resolver as cliente returns 403 (admin/colaborador-only)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2027-09-01' });
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${created.body.id}/pendientes-arca-resolver`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({ arca_voucher_id: randomUUID() });
       expect(res.status).toBe(403);
     });
   });

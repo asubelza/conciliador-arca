@@ -70,6 +70,36 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     });
   });
 
+  describe('2026-08-23 (feature 3 de 3): GET /api/tenants/:id/pendientes-historico', () => {
+    it('returns 404 for an unknown tenant', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/tenants/00000000-0000-0000-0000-000000000000/pendientes-historico')
+        .set('Authorization', adminAuth);
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'tenant not found' });
+    });
+
+    it('returns 400 for a malformed tenant id', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/tenants/not-a-uuid/pendientes-historico')
+        .set('Authorization', adminAuth);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'tenant id must be a UUID' });
+    });
+
+    it('returns the tenant + empty pendientes/excluidos for a freshly created tenant with no vouchers', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/tenants/${tenantId}/pendientes-historico`)
+        .set('Authorization', adminAuth);
+      expect(res.status).toBe(200);
+      expect(res.body.tenant.id).toBe(tenantId);
+      expect(res.body.pendientes).toEqual([]);
+      expect(res.body.count_pendientes).toBe(0);
+      expect(res.body.excluidos_previos_a_alta).toEqual([]);
+      expect(res.body.count_excluidos_previos_a_alta).toBe(0);
+    });
+  });
+
   describe('PUT /api/tenants/:id/config', () => {
     it('updates the tolerance and persists it', async () => {
       const res = await request(app.getHttpServer())
@@ -182,6 +212,43 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
         const res = await request(app.getHttpServer())
           .get(`/api/tenants/${tenantId}/config`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+        expect(res.status).toBe(200);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('GET .../pendientes-historico with no Authorization header returns 401', async () => {
+      const res = await request(app.getHttpServer()).get(`/api/tenants/${tenantId}/pendientes-historico`);
+      expect(res.status).toBe(401);
+    });
+
+    it('GET .../pendientes-historico as colaborador is allowed (read access is open to all 3 roles)', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/api/tenants/${tenantId}/pendientes-historico`)
+        .set('Authorization', authHeaderFor('colaborador'));
+      expect(res.status).toBe(200);
+    });
+
+    it('GET .../pendientes-historico as a cliente WITHOUT user_tenant_access for this tenant returns 403', async () => {
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        const res = await request(app.getHttpServer())
+          .get(`/api/tenants/${tenantId}/pendientes-historico`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+        expect(res.status).toBe(403);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('GET .../pendientes-historico as a cliente WITH user_tenant_access for this tenant is allowed', async () => {
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
+        const res = await request(app.getHttpServer())
+          .get(`/api/tenants/${tenantId}/pendientes-historico`)
           .set('Authorization', authHeaderFor('cliente', { sub: userId }));
         expect(res.status).toBe(200);
       } finally {

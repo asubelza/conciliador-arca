@@ -229,8 +229,9 @@ export async function getReportRows(jobId: string): Promise<DiffReportRow[]> {
   return data.rows;
 }
 
-function reportUrl(jobId: string, format: 'csv' | 'xlsx'): string {
-  return `${API_BASE_URL}/api/reconciliations/${jobId}/report?format=${format}`;
+function reportUrl(jobId: string, format: 'csv' | 'xlsx', classification?: string): string {
+  const base = `${API_BASE_URL}/api/reconciliations/${jobId}/report?format=${format}`;
+  return classification ? `${base}&classification=${encodeURIComponent(classification)}` : base;
 }
 
 /**
@@ -268,9 +269,18 @@ async function downloadAuthenticated(url: string, fallbackFilename: string): Pro
   window.URL.revokeObjectURL(blobUrl);
 }
 
-/** T11/T13: downloads a single job's diff report (RF-10). */
-export async function downloadReconciliationReport(jobId: string, format: 'csv' | 'xlsx'): Promise<void> {
-  await downloadAuthenticated(reportUrl(jobId, format), `reconciliation-${jobId}.${format}`);
+/**
+ * T11/T13: downloads a single job's diff report (RF-10). `classification`
+ * (2026-08-23, "Ver pendientes sistema") narrows the download to one
+ * section — e.g. `unmatched-contabilidad` — matching the on-screen filtered
+ * table in ReportViewer.tsx instead of always exporting every section.
+ */
+export async function downloadReconciliationReport(
+  jobId: string,
+  format: 'csv' | 'xlsx',
+  classification?: string,
+): Promise<void> {
+  await downloadAuthenticated(reportUrl(jobId, format, classification), `reconciliation-${jobId}.${format}`);
 }
 
 export async function createMark(
@@ -446,6 +456,36 @@ export async function confirmarCoincidencia(
   return res.json();
 }
 
+export interface ResolverPendienteResponse {
+  id: string;
+  estado: 'conciliado';
+}
+
+/**
+ * 2026-08-23 (client request, feature 2 de 3): "Marcar como resuelto sin
+ * pareja" — para un comprobante de la sección Pendientes en ARCA que nunca
+ * va a tener su par en el sistema contable (ej. cargado en ARCA muchos
+ * meses antes de que el cliente empezara a usar el sistema). A diferencia
+ * de `confirmarCoincidencia`, esto resuelve un solo comprobante ARCA, sin
+ * vincularlo a ningún comprobante del sistema.
+ */
+export async function resolverPendienteArca(
+  periodoId: string,
+  arcaVoucherId: string,
+  nota?: string,
+): Promise<ResolverPendienteResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/pendientes-arca-resolver`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ arca_voucher_id: arcaVoucherId, nota: nota ?? null }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Resolver pendiente failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /**
  * RF-09: período-scoped mark (`revisado`/`explicado`), feeding
  * attachFeedbackAndReprioritize on the API side. The authenticated user id
@@ -491,6 +531,39 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   if (!res.ok) {
     handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Config fetch failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/**
+ * 2026-08-23 (client request, feature 3 de 3): "pantalla donde muestre el
+ * resumen de unmatch de arca... tomando como filtro desde el mes en que
+ * por primera vez el cliente empezo a usar el sistema" — tenant-wide, not
+ * scoped to any one período (see pendientes-historico.ts). `excluidos_previos_a_alta`
+ * is shown separately rather than dropped (RNF-07: "nunca ocultar") so a
+ * client who mistakenly uploads a historical ARCA file is visible here too,
+ * just not mixed into the "real" pendientes list.
+ */
+export interface PendientesHistoricoRow extends PeriodoVoucherRow {
+  /** Meses entre la fecha de emisión y hoy — mismo cálculo que antiguedad_meses (RF-19), pero contra la fecha actual, no contra el mes de un período. `null` si la fila no tiene fecha. */
+  antiguedad_meses: number | null;
+}
+
+export interface PendientesHistoricoResult {
+  tenant: { id: string; name: string; created_at: string };
+  pendientes: PendientesHistoricoRow[];
+  count_pendientes: number;
+  excluidos_previos_a_alta: PendientesHistoricoRow[];
+  count_excluidos_previos_a_alta: number;
+}
+
+export async function getPendientesHistorico(tenantId: string): Promise<PendientesHistoricoResult> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/pendientes-historico`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Pendientes histórico fetch failed (${res.status})`));
   }
   return res.json();
 }

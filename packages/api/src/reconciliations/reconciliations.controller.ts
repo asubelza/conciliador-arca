@@ -34,7 +34,8 @@ import { getReconciliationQueue } from './reconciliation.queue';
 import { mapJobToStatusResponse } from './job-status';
 import { getPgPool } from '../db/pg-pool';
 import { buildDiffReportRows, toCsv, toXlsxBuffer } from './report-generator';
-import type { PersistedResultRow } from './report-generator';
+import type { PersistedResultRow, ReportSection } from './report-generator';
+import { Classification } from 'shared-types';
 import { logAuditEvent } from './audit-logger';
 import { validateMarkRequest } from './marks-validation';
 import { insertFeedbackMark } from './feedback-writer';
@@ -225,10 +226,27 @@ export class ReconciliationsController {
    * Content-Disposition — this response is for the page to render, not to
    * save as a file).
    */
+  /**
+   * `classification` (2026-08-23, client request — "Ver pendientes
+   * sistema"): optional filter to a single section (e.g.
+   * `unmatched-contabilidad`, the comprobantes del sistema contable sin
+   * match en ARCA) — the frontend button of the same name filters the
+   * on-screen table client-side from the already-loaded `format=json` rows,
+   * and passes this same param through to csv/xlsx so the download matches
+   * what's on screen instead of always exporting every section.
+   */
+  private static readonly FILTERABLE_CLASSIFICATIONS: readonly ReportSection[] = [
+    Classification.Matched,
+    Classification.UnmatchedArca,
+    Classification.UnmatchedContabilidad,
+    Classification.Errors,
+  ];
+
   @Get(':jobId/report')
   async report(
     @Param('jobId') jobId: string,
     @Query('format') format: unknown,
+    @Query('classification') classification: unknown,
     @Res() res: Response,
     @Req() req: AuthenticatedRequest,
   ) {
@@ -237,6 +255,16 @@ export class ReconciliationsController {
     const resolvedFormat = format === undefined ? 'csv' : format;
     if (resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx' && resolvedFormat !== 'json') {
       throw new HttpException({ error: "format must be 'csv', 'xlsx', or 'json'" }, HttpStatus.BAD_REQUEST);
+    }
+
+    if (
+      classification !== undefined &&
+      !ReconciliationsController.FILTERABLE_CLASSIFICATIONS.includes(classification as ReportSection)
+    ) {
+      throw new HttpException(
+        { error: `classification must be one of: ${ReconciliationsController.FILTERABLE_CLASSIFICATIONS.join(', ')}` },
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const pool = getPgPool();
@@ -252,7 +280,10 @@ export class ReconciliationsController {
       [job.data.tenantId, jobId],
     );
 
-    const reportRows = buildDiffReportRows(rows);
+    let reportRows = buildDiffReportRows(rows);
+    if (classification !== undefined) {
+      reportRows = reportRows.filter((r) => r.classification === classification);
+    }
 
     // T12 (RF-11): every export is logged. Awaited before the response is
     // sent so a logging failure surfaces as an error rather than a silently
@@ -262,7 +293,7 @@ export class ReconciliationsController {
       action: 'export',
       entity: 'reconciliation_job',
       entityId: jobId,
-      details: { format: resolvedFormat, rows: reportRows.length },
+      details: { format: resolvedFormat, rows: reportRows.length, classification: classification ?? null },
     });
 
     if (resolvedFormat === 'json') {
@@ -271,7 +302,8 @@ export class ReconciliationsController {
     }
 
     if (resolvedFormat === 'xlsx') {
-      const buffer = await toXlsxBuffer(reportRows);
+      const sections = classification === undefined ? undefined : [classification as ReportSection];
+      const buffer = sections ? await toXlsxBuffer(reportRows, sections) : await toXlsxBuffer(reportRows);
       res
         .set({
           'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

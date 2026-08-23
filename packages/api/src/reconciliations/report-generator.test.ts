@@ -131,4 +131,19 @@ describe('T11 RF-10: toXlsxBuffer', () => {
     expect(matchedSheet.rowCount).toBe(2); // header + 1 data row
     expect(matchedSheet.getRow(2).getCell(2).value).toBe('k1');
   });
+
+  it('2026-08-23 ("Ver pendientes sistema"): a narrowed `sections` list builds only that one sheet', async () => {
+    const buffer = await toXlsxBuffer(
+      [
+        { classification: 'matched', composite_key: 'k1', arca_importe: 100, contabilidad_importe: 100, delta: 0, iva_amount: 21, cae: null, fecha_emision: null },
+        { classification: 'unmatched-contabilidad', composite_key: 'k2', arca_importe: null, contabilidad_importe: 50, delta: null, iva_amount: 10, cae: null, fecha_emision: null },
+      ],
+      ['unmatched-contabilidad'],
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+    expect(workbook.worksheets.map((s) => s.name)).toEqual(['Unmatched Contabilidad']);
+    expect(workbook.getWorksheet('Unmatched Contabilidad')!.rowCount).toBe(2); // header + 1 row
+  });
 });

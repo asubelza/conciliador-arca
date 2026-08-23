@@ -38,6 +38,9 @@ const REPORT_SECTIONS = [
   Classification.Errors,
 ] as const;
 
+/** The 4 classifications this report ever surfaces — excludes 'duplicates' (see module doc). */
+export type ReportSection = (typeof REPORT_SECTIONS)[number];
+
 function toNumberOrNull(value: string | number | null): number | null {
   if (value === null || value === undefined) return null;
   const n = typeof value === 'number' ? value : Number(value);
@@ -117,11 +120,20 @@ const SHEET_TITLES: Record<(typeof REPORT_SECTIONS)[number], string> = {
   [Classification.Errors]: 'Errors',
 };
 
-/** RF-10 "Download as Excel": one sheet per section, per the spec's scenario. */
-export async function toXlsxBuffer(rows: DiffReportRow[]): Promise<Buffer> {
+/**
+ * RF-10 "Download as Excel": one sheet per section, per the spec's
+ * scenario. `sections` narrows which sheets get built — used by the
+ * "Ver pendientes sistema" filtered download (2026-08-23, client request)
+ * so filtering to `unmatched-contabilidad` produces one sheet with data
+ * instead of one full sheet plus three empty ones.
+ */
+export async function toXlsxBuffer(
+  rows: DiffReportRow[],
+  sections: readonly ReportSection[] = REPORT_SECTIONS,
+): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
 
-  for (const section of REPORT_SECTIONS) {
+  for (const section of sections) {
     const sheet = workbook.addWorksheet(SHEET_TITLES[section]);
     sheet.addRow(CSV_HEADERS);
     for (const row of rows.filter((r) => r.classification === section)) {
