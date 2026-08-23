@@ -257,3 +257,29 @@ export async function getPeriodoReport(
 
   return { periodo, live: true, sections };
 }
+
+/**
+ * "Ver pendientes sistema" (client request, 2026-08-23): filters every
+ * section down to rows of one raw `classification` — used for
+ * `no_existe_en_arca` (comprobantes del sistema contable sin match en
+ * ARCA), the système-side counterpart of the per-job report's
+ * `unmatched-contabilidad` filter (reconciliations.controller.ts). Kept
+ * generic over any `PeriodoClassification` rather than hardcoded to
+ * `no_existe_en_arca` so the same helper/endpoint param can serve other
+ * filters later without another round of backend changes. Filtering the
+ * already-built `sections` object (not re-running the query) keeps this
+ * consistent with `pushInto`'s open/cerrado section-assignment rules above
+ * — e.g. a `con_divergencia` row already landed in `conciliados_ok` for a
+ * cerrado período, and filtering afterwards preserves that.
+ */
+export function filterSectionsByClassification(
+  sections: PeriodoReportSections,
+  classification: PeriodoClassification,
+): PeriodoReportSections {
+  return {
+    conciliados_ok: sections.conciliados_ok.filter((r) => r.classification === classification),
+    discrepancias_y_alertas: sections.discrepancias_y_alertas.filter((r) => r.classification === classification),
+    pendientes_en_arca: sections.pendientes_en_arca.filter((r) => r.classification === classification),
+    posibles_coincidencias: sections.posibles_coincidencias.filter((r) => r.classification === classification),
+  };
+}

@@ -81,6 +81,22 @@ const reportWithCoincidencia = {
   sections: { ...openReportBody.sections, posibles_coincidencias: [coincidenciaRow] },
 };
 
+const noExisteRow = {
+  classification: 'no_existe_en_arca',
+  composite_key: '30111111112|1|1|500',
+  sistema: { id: 's5', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 500, importe_total: 900, iva: null, fecha: null, file_source: 'contabilidad', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
+  arca: null,
+  divergencia_ars: null,
+  antiguedad_meses: null,
+  similarity_reason: null,
+  feedback_previo: null,
+};
+
+const reportWithNoExiste = {
+  ...openReportBody,
+  sections: { ...openReportBody.sections, discrepancias_y_alertas: [noExisteRow] },
+};
+
 /**
  * T39 (Fase 3, autenticacion-roles): CSV/Excel are buttons now (an `<a
  * href>` can't carry the Authorization header every report endpoint has
@@ -475,5 +491,75 @@ describe('T31: PeriodoReportViewer', () => {
       expect(await screen.findByText(/posible coincidencia \(1\)/i)).toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: /marcar como resuelto/i })).toHaveLength(1);
     });
+  });
+});
+
+/**
+ * 2026-08-23 (client request, feature 1 de 3, corregido): "Ver pendientes
+ * sistema" was originally built in ReportViewer.tsx (the per-job report),
+ * but the client's own screenshots — the ones that triggered the earlier
+ * design question "¿el botón tiene relación con 'Cerrar Conciliación del
+ * Mes'?" — were of THIS screen (PeriodoReportViewer, the only one with both
+ * Descargar CSV/Excel and Cerrar Conciliación del Mes together), so the
+ * button belongs here too. Filters every section to `no_existe_en_arca`
+ * rows only (comprobantes del sistema contable sin match en ARCA).
+ */
+describe('2026-08-23 (feature 1 de 3, corregido): "Ver pendientes sistema" in PeriodoReportViewer', () => {
+  beforeEach(() => {
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('filters all sections to no_existe_en_arca rows on click, and restores on toggle-off', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithNoExiste }) as unknown as typeof fetch;
+
+    render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+    expect(await screen.findByText(/conciliados ok \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/discrepancias y alertas \(1\)/i)).toBeInTheDocument();
+
+    const toggle = screen.getByRole('button', { name: /ver pendientes sistema/i });
+    await userEvent.click(toggle);
+
+    // conciliados_ok's row isn't no_existe_en_arca -> that section empties out.
+    expect(await screen.findByText(/conciliados ok \(0\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/discrepancias y alertas \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^ver todo$/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^ver todo$/i }));
+
+    expect(await screen.findByText(/conciliados ok \(1\)/i)).toBeInTheDocument();
+  });
+
+  it('passes classification=no_existe_en_arca through to the download when the filter is active', async () => {
+    const csvBlob = { type: 'text/csv' };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => reportWithNoExiste })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => `attachment; filename="periodo-2026-04-01-${PERIODO_ID}.csv"` },
+        blob: async () => csvBlob,
+      });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    window.URL.createObjectURL = jest.fn().mockReturnValue('blob:mock');
+    window.URL.revokeObjectURL = jest.fn();
+    jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+    await userEvent.click(await screen.findByRole('button', { name: /ver pendientes sistema/i }));
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /descargar csv/i }));
+    });
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining(
+        `/api/periodos/${PERIODO_ID}/report?format=csv&classification=no_existe_en_arca`,
+      ),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token' }) }),
+    );
   });
 });

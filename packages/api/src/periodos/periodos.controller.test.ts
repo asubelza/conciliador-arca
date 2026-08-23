@@ -340,6 +340,79 @@ describe('T18: /api/periodos (integration)', () => {
       expect(bad.status).toBe(400);
     });
 
+    /**
+     * "Ver pendientes sistema" (client request, 2026-08-23, corregido —
+     * originally built only in reconciliations.controller.ts's per-job
+     * report, moved/added here since this is the screen the client's own
+     * screenshots were actually of). `no_existe_en_arca` is what a lone
+     * 'contabilidad' voucher with no ARCA counterpart classifies as (same
+     * fixture shape periodo-report.test.ts's own tenant-isolation test
+     * relies on).
+     */
+    it('classification=no_existe_en_arca filters format=json to just those rows, across sections', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2030-01-01' });
+      const periodoId = created.body.id;
+
+      // Two DISTINCT CUITs, unique to this test:
+      //  - cuit A gets an exact matched pair -> conciliado_ok.
+      //  - cuit B gets a single lone contabilidad voucher with NO other
+      //    voucher sharing its cuit+tipo at all -> no_existe_en_arca, with
+      //    nothing around for RF-04's fuzzy fallback to pair it with (that
+      //    fallback's 2nd tier frees `numero` entirely once fecha+importe
+      //    are within tolerance, so a lone arca-side voucher on the SAME
+      //    cuit — even a wildly different `numero` — would still have
+      //    fuzzy-matched it here, since insertVoucher hardcodes the same
+      //    fecha/importe for every row; a separate CUIT sidesteps that
+      //    instead of trying to out-guess the tolerance window).
+      //  Matching (exact and fuzzy) is always scoped to one tenant's whole
+      //  historic stock across every período, and `tenantId` is shared
+      //  across this entire file's ~50 tests, so both CUITs also need to be
+      //  unique file-wide, not just within this test.
+      const cuitMatched = '30199990001';
+      const cuitLone = '30199990002';
+      await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad', cuitEmisor: cuitMatched, numero: 1 });
+      await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca', cuitEmisor: cuitMatched, numero: 1 }); // matches -> conciliado_ok
+      await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad', cuitEmisor: cuitLone, numero: 1 }); // no arca counterpart anywhere -> no_existe_en_arca
+
+      const filtered = await request(app.getHttpServer())
+        .get(`/api/periodos/${periodoId}/report?classification=no_existe_en_arca`)
+        .set('Authorization', adminAuth);
+      expect(filtered.status).toBe(200);
+      expect(filtered.body.sections.conciliados_ok).toHaveLength(0);
+      expect(filtered.body.sections.discrepancias_y_alertas).toHaveLength(1);
+      expect(filtered.body.sections.discrepancias_y_alertas[0].classification).toBe('no_existe_en_arca');
+      expect(filtered.body.sections.discrepancias_y_alertas[0].sistema.cuit_emisor).toBe(cuitLone);
+      expect(filtered.body.sections.pendientes_en_arca).toHaveLength(0);
+    });
+
+    it('classification filter also narrows the csv/xlsx download, and rejects an unknown value with 400', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2030-02-01' });
+      const periodoId = created.body.id;
+
+      // Unique CUIT (file-wide, not just within this test — see the
+      // previous test's comment on why) with nothing else sharing it.
+      await insertVoucher(pool, tenantId, periodoId, { fileSource: 'contabilidad', cuitEmisor: '30199990003', numero: 1 });
+
+      const csv = await request(app.getHttpServer())
+        .get(`/api/periodos/${periodoId}/report?format=csv&classification=no_existe_en_arca`)
+        .set('Authorization', adminAuth);
+      expect(csv.status).toBe(200);
+      const csvLines = csv.text.trim().split('\n');
+      expect(csvLines).toHaveLength(2); // header + the 1 no_existe_en_arca row
+      expect(csvLines[1]).toContain('No existe en ARCA'); // periodo-report-exporter.ts's CLASSIFICATION_LABELS
+
+      const bad = await request(app.getHttpServer())
+        .get(`/api/periodos/${periodoId}/report?classification=not-a-real-classification`)
+        .set('Authorization', adminAuth);
+      expect(bad.status).toBe(400);
+    });
+
     it('rejects closing an already-cerrado período with 409', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/periodos')

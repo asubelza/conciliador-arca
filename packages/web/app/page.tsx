@@ -231,7 +231,20 @@ export default function Home() {
               </>
             )}
 
-            {(showPeriodoReport || periodo.estado === 'cerrado') && (
+            {/* 2026-08-23 fix: when cerrado, showPendientesHistorico now
+                SWAPS the period report for the histórico view instead of
+                stacking below it — the period report can easily run to
+                hundreds of rows (Conciliados OK alone), so the histórico
+                section landing after it was effectively invisible without
+                scrolling past the whole report first (reported by the
+                client: clicked "Ver histórico de pendientes ARCA" and
+                "no pasó nada visible" — it DID toggle, just far below the
+                fold). `showPeriodoReport` is set true on selection for a
+                cerrado período (see handlePeriodoSelected) and is only
+                otherwise meaningful for the 'abierto' toggle — an `||` here
+                would always win regardless of showPendientesHistorico, so
+                the visibility is branched by estado instead. */}
+            {(periodo.estado === 'abierto' ? showPeriodoReport : !showPendientesHistorico) && (
               <PeriodoReportViewer periodoId={periodo.id} onClosed={(closed) => setPeriodo(closed)} />
             )}
 

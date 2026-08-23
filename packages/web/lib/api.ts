@@ -510,13 +510,24 @@ export async function createPeriodoMark(
   return res.json();
 }
 
-function periodoReportUrl(periodoId: string, format: 'csv' | 'xlsx'): string {
-  return `${API_BASE_URL}/api/periodos/${periodoId}/report?format=${format}`;
+function periodoReportUrl(periodoId: string, format: 'csv' | 'xlsx', classification?: string): string {
+  const base = `${API_BASE_URL}/api/periodos/${periodoId}/report?format=${format}`;
+  return classification === undefined ? base : `${base}&classification=${encodeURIComponent(classification)}`;
 }
 
-/** Client-requested (2026-08-22): CSV/XLSX download for the período report — same authenticated-blob pattern as downloadReconciliationReport. */
-export async function downloadPeriodoReport(periodoId: string, mes: string, format: 'csv' | 'xlsx'): Promise<void> {
-  await downloadAuthenticated(periodoReportUrl(periodoId, format), `periodo-${mes}-${periodoId}.${format}`);
+/**
+ * Client-requested (2026-08-22): CSV/XLSX download for the período report —
+ * same authenticated-blob pattern as downloadReconciliationReport.
+ * `classification` (2026-08-23, "Ver pendientes sistema") is optional so the
+ * download matches whatever's currently on screen in PeriodoReportViewer.
+ */
+export async function downloadPeriodoReport(
+  periodoId: string,
+  mes: string,
+  format: 'csv' | 'xlsx',
+  classification?: string,
+): Promise<void> {
+  await downloadAuthenticated(periodoReportUrl(periodoId, format, classification), `periodo-${mes}-${periodoId}.${format}`);
 }
 
 export interface TenantConfig {

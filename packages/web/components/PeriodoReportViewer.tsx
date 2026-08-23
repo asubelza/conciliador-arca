@@ -125,6 +125,14 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
   // a que termine el fetch para que la UI se sienta responsiva).
   const [comparingRow, setComparingRow] = useState<PeriodoReportRow | null>(null);
   const canAct = user?.role !== 'cliente';
+  // "Ver pendientes sistema" (pedido del cliente, 2026-08-23): filtra las 4
+  // secciones a solo los comprobantes del sistema contable sin match en
+  // ARCA (classification 'no_existe_en_arca') — botón separado de "Cerrar
+  // Conciliación del Mes", no toca el período ni el motor de matching, solo
+  // filtra esta vista y su descarga. Filtrado client-side (mismo patrón que
+  // ReportViewer.tsx) sobre las filas ya cargadas, así que no hace falta un
+  // segundo fetch al togglear.
+  const [showOnlyPendientesSistema, setShowOnlyPendientesSistema] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -218,7 +226,12 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
     if (!report) return;
     setDownloadError(null);
     try {
-      await downloadPeriodoReport(periodoId, report.periodo.mes, format);
+      await downloadPeriodoReport(
+        periodoId,
+        report.periodo.mes,
+        format,
+        showOnlyPendientesSistema ? 'no_existe_en_arca' : undefined,
+      );
     } catch (err) {
       setDownloadError(err instanceof Error ? err.message : 'Download failed');
     }
@@ -295,6 +308,17 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
             >
               Descargar Excel
             </button>
+            <button
+              type="button"
+              onClick={() => setShowOnlyPendientesSistema((prev) => !prev)}
+              className={`focus-ring rounded-lg border px-3 py-1.5 text-sm font-medium shadow-card ${
+                showOnlyPendientesSistema
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-400'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+              }`}
+            >
+              {showOnlyPendientesSistema ? 'Ver todo' : 'Ver pendientes sistema'}
+            </button>
           </div>
         </div>
         {/* T39 (Fase 3): cliente is read-only (RF-14) — closing a período is an
@@ -332,7 +356,9 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
       )}
 
       {SECTION_TITLES.map(({ key, title }) => {
-        const rows = report.sections[key];
+        const rows = showOnlyPendientesSistema
+          ? report.sections[key].filter((r) => r.classification === 'no_existe_en_arca')
+          : report.sections[key];
         const showDivergencia = key === 'discrepancias_y_alertas';
         const showAntiguedad = key === 'pendientes_en_arca';
         const showMotivo = key === 'posibles_coincidencias';

@@ -15,7 +15,8 @@ import {
   validateTenantIdQuery,
 } from './periodos-validation';
 import { cerrarPeriodo } from './periodo-cierre';
-import { getPeriodoReport } from './periodo-report';
+import { getPeriodoReport, filterSectionsByClassification } from './periodo-report';
+import type { PeriodoClassification } from '../reconciliations/periodo-matching-engine';
 import { buildPeriodoExportSections, toPeriodoReportCsv, toPeriodoReportXlsxBuffer } from './periodo-report-exporter';
 import { validateCoincidenciaRequest } from './coincidencia-validation';
 import { validatePendienteResolverRequest } from './pendiente-resolver-validation';
@@ -65,6 +66,25 @@ async function resolvePeriodoTenantId(pool: ReturnType<typeof getPgPool>, id: st
 @Controller('api/periodos')
 @UseGuards(AuthGuard)
 export class PeriodosController {
+  /**
+   * "Ver pendientes sistema" (client request, 2026-08-23): valid values for
+   * the report endpoint's `classification` query param — every raw
+   * `PeriodoClassification`, same "accept the full set, frontend only ever
+   * sends one" posture as reconciliations.controller.ts's own
+   * FILTERABLE_CLASSIFICATIONS. `no_existe_en_arca` is the one the client
+   * actually asked for (comprobantes del sistema contable sin match en
+   * ARCA); the rest are exposed for free since filterSectionsByClassification
+   * is generic over the type anyway.
+   */
+  private static readonly FILTERABLE_CLASSIFICATIONS: readonly PeriodoClassification[] = [
+    'conciliado_ok',
+    'con_divergencia',
+    'posible_duplicado_en_sistema',
+    'no_existe_en_arca',
+    'pendiente_en_arca',
+    'posible_coincidencia',
+  ];
+
   /**
    * RF-12: creates a período for a tenant + calendar month. `mes` is
    * normalized to the 1st of the month so "2026-04-01", "2026-04-15", and
@@ -236,6 +256,7 @@ export class PeriodosController {
   async report(
     @Param('id') id: unknown,
     @Query('format') format: unknown,
+    @Query('classification') classification: unknown,
     @Res() res: Response,
     @Req() req: AuthenticatedRequest,
   ) {
@@ -247,6 +268,16 @@ export class PeriodosController {
     const resolvedFormat = format === undefined ? 'json' : format;
     if (resolvedFormat !== 'json' && resolvedFormat !== 'csv' && resolvedFormat !== 'xlsx') {
       throw new HttpException({ error: "format must be 'json', 'csv', or 'xlsx'" }, HttpStatus.BAD_REQUEST);
+    }
+
+    if (
+      classification !== undefined &&
+      !PeriodosController.FILTERABLE_CLASSIFICATIONS.includes(classification as PeriodoClassification)
+    ) {
+      throw new HttpException(
+        { error: `classification must be one of: ${PeriodosController.FILTERABLE_CLASSIFICATIONS.join(', ')}` },
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const pool = getPgPool();
@@ -269,20 +300,29 @@ export class PeriodosController {
       throw new HttpException({ error: result.error }, result.status);
     }
 
+    // "Ver pendientes sistema": applied AFTER getPeriodoReport builds the
+    // full report (not pushed into the query) so it reuses the exact same
+    // open/cerrado section-assignment + feedback-reprioritization rules —
+    // see filterSectionsByClassification's own doc in periodo-report.ts.
+    const sections =
+      classification === undefined
+        ? result.sections
+        : filterSectionsByClassification(result.sections, classification as PeriodoClassification);
+
     await logAuditEvent(pool, {
       tenantId: result.periodo.tenant_id,
       action: 'export',
       entity: 'periodo',
       entityId: id as string,
-      details: { format: resolvedFormat, live: result.live },
+      details: { format: resolvedFormat, live: result.live, classification: (classification as string) ?? null },
     });
 
     if (resolvedFormat === 'json') {
-      res.json(result);
+      res.json({ ...result, sections });
       return;
     }
 
-    const exportSections = buildPeriodoExportSections(result.sections);
+    const exportSections = buildPeriodoExportSections(sections);
 
     if (resolvedFormat === 'xlsx') {
       const buffer = await toPeriodoReportXlsxBuffer(exportSections, result.periodo, result.live);
