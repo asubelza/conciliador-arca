@@ -470,10 +470,22 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         await new Promise((r) => setTimeout(r, 100));
       }
 
-      expect(statusBody).toEqual({
+      // toMatchObject (not toEqual): this test's own scope is the row
+      // counts (RF-04's original AC) — the per-classification breakdown
+      // added for the "resumen" screen (job-status.ts) is covered by its
+      // own unit tests in job-status.test.ts, so this only pins down that
+      // it's present and shaped like a number per key, not its exact value
+      // for this particular fixture.
+      expect(statusBody).toMatchObject({
         status: 'completed',
         counts: { arca_rows: 2, contabilidad_rows: 1 },
       });
+      const counts = (statusBody as { counts: Record<string, unknown> }).counts;
+      expect(typeof counts.matched).toBe('number');
+      expect(typeof counts['unmatched-arca']).toBe('number');
+      expect(typeof counts['unmatched-contabilidad']).toBe('number');
+      expect(typeof counts.duplicates).toBe('number');
+      expect(typeof counts.errors).toBe('number');
     }, 15000);
 
     it('AC: returns {status: "error", detail} when the job fails (corrupt file)', async () => {
@@ -721,6 +733,178 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         classification: 'explicado',
       });
     }, 15000);
+  });
+
+  /**
+   * Previsualización de datos al cargar (pedido del cliente, 2026-08-23,
+   * rediseño UI/UX): mismo contrato de request que POST /api/reconciliations
+   * (mismos campos + archivos), pero de solo lectura — nunca encola un job
+   * ni escribe nada. Reutiliza la misma cadena de validación (T19's
+   * periodo_id checks incluidos), así que solo se prueban acá el camino
+   * feliz y las diferencias respecto de `upload` (no persiste nada, no
+   * devuelve job_id).
+   */
+  describe('POST /api/reconciliations/preview', () => {
+    it('returns parsed rows for both files, in file order, without creating a job', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .set('Authorization', adminAuth)
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach(
+          'arca_file',
+          Buffer.from(
+            'Nro. Doc. Receptor,Tipo de Comprobante,Punto de Venta,Número de Comprobante,Fecha de Emisión,Imp. Total\n' +
+              '30111111112,1,1,100,01/04/2026,"1.500,00"\n' +
+              '30222222223,1,1,101,02/04/2026,"2.000,00"',
+          ),
+          'arca.csv',
+        )
+        .attach(
+          'contabilidad_file',
+          Buffer.from('CUIT,Tipo,Punto de Venta,Número,Fecha,Importe\n30111111112,Factura A,1,100,01/04/2026,1500'),
+          'contabilidad.csv',
+        );
+
+      expect(res.status).toBe(200);
+      expect(res.body.job_id).toBeUndefined();
+
+      expect(res.body.arca).toEqual({
+        total: 2,
+        ok: 2,
+        errors: 0,
+        rows: [
+          {
+            ok: true,
+            cuit_emisor: '30111111112',
+            tipo_cbte: 1,
+            punto_venta: 1,
+            numero: 100,
+            fecha_emision: '2026-04-01',
+            importe_total_ars: 1500,
+          },
+          {
+            ok: true,
+            cuit_emisor: '30222222223',
+            tipo_cbte: 1,
+            punto_venta: 1,
+            numero: 101,
+            fecha_emision: '2026-04-02',
+            importe_total_ars: 2000,
+          },
+        ],
+      });
+      expect(res.body.contabilidad).toEqual({
+        total: 1,
+        ok: 1,
+        errors: 0,
+        rows: [
+          {
+            ok: true,
+            cuit_emisor: '30111111112',
+            tipo_cbte: 1,
+            punto_venta: 1,
+            numero: 100,
+            fecha_emision: '2026-04-01',
+            importe_total_ars: 1500,
+          },
+        ],
+      });
+    });
+
+    it('flags a row with an unresolvable tipo_cbte as ok:false without dropping it', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .set('Authorization', adminAuth)
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('Nro. Doc. Receptor\n30111111112'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
+
+      expect(res.status).toBe(200);
+      expect(res.body.arca).toMatchObject({ total: 1, ok: 0, errors: 1 });
+      expect(res.body.arca.rows[0].ok).toBe(false);
+      expect(res.body.contabilidad).toMatchObject({ total: 1, ok: 1, errors: 0 });
+    });
+
+    it('returns 400 when a required field is missing (same validation as upload)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .set('Authorization', adminAuth)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit\n1'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit\n1'), 'contabilidad.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/tenant_id/);
+    });
+
+    it('returns 400 when the período is cerrado (never previews for an upload that would be rejected)', async () => {
+      const closedPeriodoId = await createTestPeriodo(pool, tenantId, '2026-06-01');
+      await pool.query("UPDATE periodos SET estado = 'cerrado' WHERE id = $1", [closedPeriodoId]);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .set('Authorization', adminAuth)
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', closedPeriodoId)
+        .attach('arca_file', Buffer.from('cuit,tipo\n30111111112,001'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit,tipo\n30111111112,001'), 'contabilidad.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('período is closed — uploads are only accepted while abierto');
+    });
+
+    it('returns 401 with no Authorization header (same guard as upload)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit\n1'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit\n1'), 'contabilidad.csv');
+
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 403 for a cliente (preview is admin/colaborador-only, same as upload)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .set('Authorization', authHeaderFor('cliente'))
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('cuit\n1'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('cuit\n1'), 'contabilidad.csv');
+
+      expect(res.status).toBe(403);
+    });
+
+    it('does not create a vouchers_staging row or a BullMQ job for a previewed upload', async () => {
+      const { rows: beforeStaging } = await pool.query(
+        'SELECT count(*)::int AS n FROM vouchers_staging WHERE tenant_id = $1',
+        [tenantId],
+      );
+
+      await request(app.getHttpServer())
+        .post('/api/reconciliations/preview')
+        .set('Authorization', adminAuth)
+        .field('tenant_id', tenantId)
+        .field('contabilidad_source_system', 'tango')
+        .field('periodo_id', periodoId)
+        .attach('arca_file', Buffer.from('Nro. Doc. Receptor,Tipo de Comprobante\n30111111112,1'), 'arca.csv')
+        .attach('contabilidad_file', Buffer.from('CUIT,Tipo\n30111111112,Factura A'), 'contabilidad.csv');
+
+      const { rows: afterStaging } = await pool.query(
+        'SELECT count(*)::int AS n FROM vouchers_staging WHERE tenant_id = $1',
+        [tenantId],
+      );
+      expect(afterStaging[0].n).toBe(beforeStaging[0].n);
+    });
   });
 
   describe('auth (T38, autenticacion-roles)', () => {

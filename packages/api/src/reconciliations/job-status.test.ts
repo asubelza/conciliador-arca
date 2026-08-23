@@ -27,10 +27,28 @@ describe('T06 RF-04: mapJobToStatusResponse', () => {
   });
 
   it('maps "completed" to completed with counts from returnvalue', () => {
-    const job = { returnvalue: { arca_rows: 1000, contabilidad_rows: 950 } };
+    const job = {
+      returnvalue: {
+        arca_rows: 1000,
+        contabilidad_rows: 950,
+        matched: 900,
+        'unmatched-arca': 80,
+        'unmatched-contabilidad': 30,
+        duplicates: 15,
+        errors: 5,
+      },
+    };
     expect(mapJobToStatusResponse('completed', job)).toEqual({
       status: 'completed',
-      counts: { arca_rows: 1000, contabilidad_rows: 950 },
+      counts: {
+        arca_rows: 1000,
+        contabilidad_rows: 950,
+        matched: 900,
+        'unmatched-arca': 80,
+        'unmatched-contabilidad': 30,
+        duplicates: 15,
+        errors: 5,
+      },
     });
   });
 

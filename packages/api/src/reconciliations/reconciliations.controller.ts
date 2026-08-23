@@ -40,8 +40,10 @@ import { validateMarkRequest } from './marks-validation';
 import { insertFeedbackMark } from './feedback-writer';
 import { assertPeriodoOpenForUpload } from '../periodos/periodo-upload-guard';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
+import type { AuthenticatedUser } from '../auth/users-types';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
+import { buildReconciliationPreview, cleanupPreviewFiles } from './reconciliation-preview';
 
 /**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
@@ -85,52 +87,7 @@ export class ReconciliationsController {
     @Body('periodo_id') periodoId: unknown,
     @Req() req: AuthenticatedRequest,
   ) {
-    const filesFailure = validateUploadFiles(files ?? {});
-    if (filesFailure) {
-      const body = 'error' in filesFailure ? { error: filesFailure.error } : {};
-      throw new HttpException(body, filesFailure.status);
-    }
-
-    const tenantFailure = validateTenantId(tenantId);
-    if (tenantFailure) {
-      const body = 'error' in tenantFailure ? { error: tenantFailure.error } : {};
-      throw new HttpException(body, tenantFailure.status);
-    }
-
-    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
-    if (roleFailure) {
-      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
-    }
-
-    const authFailure = await assertTenantAccess(getPgPool(), req.user!, tenantId as string);
-    if (authFailure) {
-      throw new HttpException({ error: authFailure.error }, authFailure.status);
-    }
-
-    const sourceSystemFailure = validateContabilidadSourceSystem(contabilidadSourceSystem);
-    if (sourceSystemFailure) {
-      const body = 'error' in sourceSystemFailure ? { error: sourceSystemFailure.error } : {};
-      throw new HttpException(body, sourceSystemFailure.status);
-    }
-
-    // T19 (RF-13): periodo_id is required and must reference an existing,
-    // open período for this tenant. Format checked first (pure, cheap);
-    // the DB-backed existence/estado check only runs once the id is at
-    // least well-formed.
-    const periodoFormatFailure = validatePeriodoIdFormat(periodoId);
-    if (periodoFormatFailure) {
-      const body = 'error' in periodoFormatFailure ? { error: periodoFormatFailure.error } : {};
-      throw new HttpException(body, periodoFormatFailure.status);
-    }
-
-    const periodoGuardFailure = await assertPeriodoOpenForUpload(
-      getPgPool(),
-      tenantId as string,
-      periodoId as string,
-    );
-    if (periodoGuardFailure) {
-      throw new HttpException({ error: periodoGuardFailure.error }, periodoGuardFailure.status);
-    }
+    await this.validateUploadRequest(files, tenantId, contabilidadSourceSystem, periodoId, req.user!);
 
     const arcaFile = files.arca_file![0] as Express.Multer.File;
     const contabilidadFile = files.contabilidad_file![0] as Express.Multer.File;
@@ -162,6 +119,70 @@ export class ReconciliationsController {
       job_id: jobId,
       status_url: `/api/reconciliations/${jobId}/status`,
     };
+  }
+
+  /**
+   * Previsualización de datos al cargar (pedido del cliente, 2026-08-23,
+   * rediseño UI/UX): mismo contrato de request que `POST
+   * /api/reconciliations` (mismos dos archivos + campos), pero de solo
+   * lectura — parsea ambos archivos con el mismo adaptador/normalizador
+   * que el worker real usa (ver reconciliation-preview.ts) y devuelve las
+   * filas interpretadas para que el contador las revise antes de conciliar
+   * de verdad. No escribe en `vouchers_staging` ni en ninguna otra tabla,
+   * no encola ningún job, y borra los dos archivos temporales de multer
+   * antes de responder — a diferencia de `upload` arriba, que se los deja
+   * al worker para que los borre al terminar el job real.
+   *
+   * Reutiliza exactamente la misma cadena de validación que `upload`
+   * (incluido el chequeo de que el período esté abierto) para que una
+   * previsualización nunca prometa algo que la carga real después
+   * rechazaría.
+   */
+  @Post('preview')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'arca_file', maxCount: 1 },
+        { name: 'contabilidad_file', maxCount: 1 },
+      ],
+      {
+        limits: { fileSize: MAX_FILE_SIZE_BYTES },
+        storage: diskStorage({
+          destination: (_req, _file, cb) => {
+            const dir = path.join(os.tmpdir(), 'conciliador-uploads');
+            fs.mkdirSync(dir, { recursive: true });
+            cb(null, dir);
+          },
+          filename: (_req, file, cb) => cb(null, `${randomUUID()}-${file.originalname}`),
+        }),
+      },
+    ),
+  )
+  async preview(
+    @UploadedFiles() files: { arca_file?: Express.Multer.File[]; contabilidad_file?: Express.Multer.File[] },
+    @Body('tenant_id') tenantId: unknown,
+    @Body('contabilidad_source_system') contabilidadSourceSystem: unknown,
+    @Body('periodo_id') periodoId: unknown,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    await this.validateUploadRequest(files, tenantId, contabilidadSourceSystem, periodoId, req.user!);
+
+    const arcaFile = files.arca_file![0] as Express.Multer.File;
+    const contabilidadFile = files.contabilidad_file![0] as Express.Multer.File;
+
+    try {
+      return await buildReconciliationPreview({
+        arca: { filePath: arcaFile.path, extension: getAllowedExtension(arcaFile.originalname) },
+        contabilidad: {
+          filePath: contabilidadFile.path,
+          extension: getAllowedExtension(contabilidadFile.originalname),
+        },
+        contabilidadSourceSystem: contabilidadSourceSystem as ContabilidadSourceSystem,
+      });
+    } finally {
+      await cleanupPreviewFiles([arcaFile.path, contabilidadFile.path]);
+    }
   }
 
   /**
@@ -308,6 +329,70 @@ export class ReconciliationsController {
     });
 
     return mark;
+  }
+
+  /**
+   * Shared by `upload` and `preview` — identical request contract, same
+   * checks in the same order (files -> tenant_id -> rol -> acceso al
+   * tenant -> sistema contable -> período abierto). Extracted so the
+   * previsualización nunca pueda aceptar algo que la carga real después
+   * rechazaría, sin duplicar la cadena de validación en los dos métodos.
+   * Throws an `HttpException` itself (matching this file's existing style)
+   * rather than returning a failure — both callers just `await` it.
+   */
+  private async validateUploadRequest(
+    files: { arca_file?: Express.Multer.File[]; contabilidad_file?: Express.Multer.File[] } | undefined,
+    tenantId: unknown,
+    contabilidadSourceSystem: unknown,
+    periodoId: unknown,
+    user: AuthenticatedUser,
+  ): Promise<void> {
+    const filesFailure = validateUploadFiles(files ?? {});
+    if (filesFailure) {
+      const body = 'error' in filesFailure ? { error: filesFailure.error } : {};
+      throw new HttpException(body, filesFailure.status);
+    }
+
+    const tenantFailure = validateTenantId(tenantId);
+    if (tenantFailure) {
+      const body = 'error' in tenantFailure ? { error: tenantFailure.error } : {};
+      throw new HttpException(body, tenantFailure.status);
+    }
+
+    const roleFailure = assertRole(user, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const authFailure = await assertTenantAccess(getPgPool(), user, tenantId as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const sourceSystemFailure = validateContabilidadSourceSystem(contabilidadSourceSystem);
+    if (sourceSystemFailure) {
+      const body = 'error' in sourceSystemFailure ? { error: sourceSystemFailure.error } : {};
+      throw new HttpException(body, sourceSystemFailure.status);
+    }
+
+    // T19 (RF-13): periodo_id is required and must reference an existing,
+    // open período for this tenant. Format checked first (pure, cheap);
+    // the DB-backed existence/estado check only runs once the id is at
+    // least well-formed.
+    const periodoFormatFailure = validatePeriodoIdFormat(periodoId);
+    if (periodoFormatFailure) {
+      const body = 'error' in periodoFormatFailure ? { error: periodoFormatFailure.error } : {};
+      throw new HttpException(body, periodoFormatFailure.status);
+    }
+
+    const periodoGuardFailure = await assertPeriodoOpenForUpload(
+      getPgPool(),
+      tenantId as string,
+      periodoId as string,
+    );
+    if (periodoGuardFailure) {
+      throw new HttpException({ error: periodoGuardFailure.error }, periodoGuardFailure.status);
+    }
   }
 
   private async getCompletedJobOrThrow(jobId: string) {

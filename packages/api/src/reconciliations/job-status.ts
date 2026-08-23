@@ -8,9 +8,26 @@
  */
 export type ReconciliationStatus = 'pending' | 'processing' | 'completed' | 'error';
 
+/**
+ * Pantalla resumen (pedido del cliente, 2026-08-23, rediseño UI/UX): además
+ * de arca_rows/contabilidad_rows (lo único que este endpoint exponía antes),
+ * ahora también viajan los 5 conteos por clasificación — ya los calculaba
+ * `classifyVouchers` en el worker y quedaban en `job.returnvalue` (ver
+ * `ReconciliationJobResult`, reconciliation.queue.ts) sin llegar nunca al
+ * frontend. No hay ninguna consulta nueva a la base: es el mismo resultado
+ * del job, simplemente ya no se descarta acá.
+ */
 export interface StatusResponse {
   status: ReconciliationStatus;
-  counts?: { arca_rows: number; contabilidad_rows: number };
+  counts?: {
+    arca_rows: number;
+    contabilidad_rows: number;
+    matched: number;
+    'unmatched-arca': number;
+    'unmatched-contabilidad': number;
+    duplicates: number;
+    errors: number;
+  };
   detail?: string;
 }
 
@@ -21,7 +38,17 @@ export interface StatusResponse {
  * tests can pass a plain object.
  */
 export interface JobLike {
-  returnvalue?: { arca_rows: number; contabilidad_rows: number } | null;
+  returnvalue?:
+    | {
+        arca_rows: number;
+        contabilidad_rows: number;
+        matched: number;
+        'unmatched-arca': number;
+        'unmatched-contabilidad': number;
+        duplicates: number;
+        errors: number;
+      }
+    | null;
   failedReason?: string | null;
 }
 
@@ -37,7 +64,15 @@ export function mapJobToStatusResponse(state: string, job: JobLike): StatusRespo
     if (result) {
       return {
         status: 'completed',
-        counts: { arca_rows: result.arca_rows, contabilidad_rows: result.contabilidad_rows },
+        counts: {
+          arca_rows: result.arca_rows,
+          contabilidad_rows: result.contabilidad_rows,
+          matched: result.matched,
+          'unmatched-arca': result['unmatched-arca'],
+          'unmatched-contabilidad': result['unmatched-contabilidad'],
+          duplicates: result.duplicates,
+          errors: result.errors,
+        },
       };
     }
     return { status: 'completed' };
