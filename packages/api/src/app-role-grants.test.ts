@@ -1,6 +1,7 @@
 /**
- * app-role-grants.test.ts — verifies migration
- * 017_grant_app_role_remaining_tables.sql against real PostgreSQL.
+ * app-role-grants.test.ts — verifies migrations
+ * 017_grant_app_role_remaining_tables.sql and (dashboard-principal, RF-40)
+ * 023_grant_app_role_delete_periodos.sql against real PostgreSQL.
  *
  * Closes the gap flagged since PR-3's 011_grant_app_role_audit_feedback.sql:
  * every table besides audit_trail/feedback_loop had zero GRANTs for
@@ -14,9 +15,11 @@
  *
  * Every statement below mirrors an actual statement the running app code
  * issues (see 017's own module comment for the file:line justification per
- * grant) — this test proves both halves of least-privilege: the intended
- * grants work, AND everything not explicitly granted is genuinely denied
- * with "permission denied", not merely absent from the migration text.
+ * grant; 023's two DELETE grants are justified by reabrirPeriodo()'s
+ * snapshot DELETE and eliminarPeriodo()'s row DELETE) — this test proves
+ * both halves of least-privilege: the intended grants work, AND everything
+ * not explicitly granted is genuinely denied with "permission denied", not
+ * merely absent from the migration text.
  */
 import { Pool } from 'pg';
 import { createTestPeriodo, createTestTenant, deleteTestTenant } from './test-support/pg-test-helpers';
@@ -160,7 +163,7 @@ describe('017_grant_app_role_remaining_tables: real privilege checks', () => {
     });
   });
 
-  describe('periodos: SELECT, INSERT, UPDATE granted; no DELETE', () => {
+  describe('periodos: SELECT, INSERT, UPDATE granted (017); DELETE granted by 023 (RF-40)', () => {
     it('app_role can SELECT, INSERT, and SELECT ... FOR UPDATE (row-lock read requires UPDATE privilege)', async () => {
       await expect(runAsAppRole('SELECT id FROM periodos WHERE id = $1', [periodoId])).resolves.toBeTruthy();
       await expect(
@@ -175,12 +178,20 @@ describe('017_grant_app_role_remaining_tables: real privilege checks', () => {
       ).resolves.toBeTruthy();
     });
 
-    it('app_role cannot DELETE periodos', async () => {
-      await expect(runAsAppRole('DELETE FROM periodos WHERE id = $1', [periodoId])).rejects.toThrow(/permission denied/i);
+    it('app_role can DELETE periodos — exactly eliminarPeriodo()\'s own statement (023, RF-36)', async () => {
+      // A fresh período with nothing referencing it — the same precondition
+      // eliminarPeriodo()'s zero-reference guard establishes before issuing
+      // this exact DELETE (deleting the shared fixture row would rightly
+      // trip vouchers_canonical's FK instead).
+      const { rows: emptyRows } = await pool.query<{ id: string }>(
+        "INSERT INTO periodos (tenant_id, mes) VALUES ($1, '2026-04-01'::date) RETURNING id",
+        [tenantId],
+      );
+      await expect(runAsAppRole('DELETE FROM periodos WHERE id = $1', [emptyRows[0].id])).resolves.toBeTruthy();
     });
   });
 
-  describe('periodo_resultados: SELECT, INSERT granted; UPDATE/DELETE already revoked by 016', () => {
+  describe('periodo_resultados: SELECT, INSERT granted (017); DELETE granted by 023, UPDATE stays revoked (RF-40)', () => {
     it('app_role can SELECT and INSERT the frozen snapshot', async () => {
       await expect(
         runAsAppRole(
@@ -192,7 +203,7 @@ describe('017_grant_app_role_remaining_tables: real privilege checks', () => {
       await expect(runAsAppRole('SELECT id FROM periodo_resultados WHERE periodo_id = $1', [periodoId])).resolves.toBeTruthy();
     });
 
-    it('app_role still cannot UPDATE or DELETE periodo_resultados (016s REVOKE, unaffected by this migration)', async () => {
+    it('app_role still cannot UPDATE periodo_resultados (016\'s REVOKE is unchanged — the append-only guarantee keeps its one audited exception: reopen deletes whole rows, never rewrites them)', async () => {
       const { rows } = await pool.query<{ id: string }>(
         `INSERT INTO periodo_resultados (tenant_id, periodo_id, classification, composite_key)
          VALUES ($1, $2, 'conciliado_ok', 'k1') RETURNING id`,
@@ -202,7 +213,19 @@ describe('017_grant_app_role_remaining_tables: real privilege checks', () => {
       await expect(
         runAsAppRole("UPDATE periodo_resultados SET classification = 'con_divergencia' WHERE id = $1", [resultadoId]),
       ).rejects.toThrow(/permission denied/i);
-      await expect(runAsAppRole('DELETE FROM periodo_resultados WHERE id = $1', [resultadoId])).rejects.toThrow(/permission denied/i);
+    });
+
+    it('app_role can DELETE periodo_resultados rows — exactly reabrirPeriodo()\'s own statement (023, RF-33)', async () => {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO periodo_resultados (tenant_id, periodo_id, classification, composite_key)
+         VALUES ($1, $2, 'conciliado_ok', 'k1') RETURNING id`,
+        [tenantId, periodoId],
+      );
+      const resultadoId = rows[0].id;
+      // The reopen path's exact statement (periodo-reapertura.ts scopes it
+      // by periodo_id; the privilege being proven is table-level anyway).
+      await expect(runAsAppRole('DELETE FROM periodo_resultados WHERE id = $1', [resultadoId])).resolves.toBeTruthy();
+      await expect(runAsAppRole('DELETE FROM periodo_resultados WHERE periodo_id = $1', [periodoId])).resolves.toBeTruthy();
     });
   });
 
