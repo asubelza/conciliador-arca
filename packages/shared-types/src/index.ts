@@ -131,3 +131,37 @@ export interface ReconciliationResult {
   iva_impacto: number;
   created_at: Date;
 }
+
+/**
+ * Success body of `POST /api/periodos/:id/reabrir` (dashboard-principal,
+ * RF-33 / design §Interfaces): the reopened período row with cierre's
+ * column set reset to NULL, plus how much of cierre's write set was
+ * undone — vouchers returned to `pendiente` with their
+ * `periodo_cierre_id` stamp cleared, and frozen snapshot rows deleted.
+ * Failures stay house-shape `{ error: string }` (400/403/404/409).
+ */
+export interface PeriodoReabrirResponse {
+  periodo: {
+    id: string;
+    tenant_id: string;
+    mes: string;
+    estado: 'abierto';
+    tolerancia_ars: null;
+    cerrado_at: null;
+    cerrado_por: null;
+  };
+  counts: {
+    vouchers_reabiertos: number;
+    resultados_eliminados: number;
+  };
+}
+
+/**
+ * Success body of `DELETE /api/periodos/:id` (RF-35): the período was
+ * physically deleted (only possible when nothing referenced it — otherwise
+ * a plain-language 409 names the blockers).
+ */
+export interface PeriodoDeleteResponse {
+  deleted: true;
+  periodo_id: string;
+}
