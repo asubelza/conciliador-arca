@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { setSession, clearSession } from '@/lib/session';
 import Home from './page';
-import { clearSession, setSession } from '@/lib/session';
 
 const TENANT_ID = '33333333-3333-3333-3333-333333333333';
 const PERIODO_ID = '44444444-4444-4444-4444-444444444444';
@@ -13,6 +13,16 @@ const cerradoPeriodo = {
   estado: 'cerrado',
   tolerancia_ars: null,
   cerrado_at: '2026-08-23T00:00:00Z',
+  cerrado_por: null,
+};
+
+const abiertoPeriodo = {
+  id: '55555555-5555-5555-5555-555555555555',
+  tenant_id: TENANT_ID,
+  mes: '2026-08-01',
+  estado: 'abierto',
+  tolerancia_ars: null,
+  cerrado_at: null,
   cerrado_por: null,
 };
 
@@ -46,11 +56,21 @@ const pendientesHistoricoBody = {
   count_excluidos_previos_a_alta: 0,
 };
 
-function mockFetchByUrl() {
-  return jest.fn((input: RequestInfo | URL) => {
+type MockPeriodo = {
+  id: string;
+  tenant_id: string;
+  mes: string;
+  estado: string;
+  tolerancia_ars: null | string;
+  cerrado_at: string | null;
+  cerrado_por: null | string;
+};
+
+function mockFetchByUrl(periodos: MockPeriodo[] = [cerradoPeriodo]) {
+  return jest.fn((input) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.includes('/api/periodos?tenant_id=')) {
-      return Promise.resolve({ ok: true, json: async () => ({ periodos: [cerradoPeriodo] }) });
+      return Promise.resolve({ ok: true, json: async () => ({ periodos }) });
     }
     if (url.includes(`/api/periodos/${PERIODO_ID}/report`)) {
       return Promise.resolve({ ok: true, json: async () => periodoReportBody });
@@ -71,7 +91,7 @@ function mockFetchByUrl() {
  */
 describe('T39: app/page.tsx (auth gate)', () => {
   afterEach(() => {
-    clearSession();
+    jest.restoreAllMocks();
   });
 
   it('shows the login form when there is no session', () => {
@@ -82,6 +102,7 @@ describe('T39: app/page.tsx (auth gate)', () => {
   });
 
   it('shows the main app + user info + logout once a session exists', () => {
+    global.fetch = mockFetchByUrl();
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
     render(<Home />);
 
@@ -91,6 +112,19 @@ describe('T39: app/page.tsx (auth gate)', () => {
     expect(screen.getByRole('button', { name: /cerrar sesión/i })).toBeInTheDocument();
   });
 });
+
+/**
+ * AD-6 (dashboard-principal): PeriodoSelector now only yields a tenantId —
+ * período selection happens through Dashboard's own sections A/B. This
+ * helper walks: paste UUID -> Ingresar -> Continuar al dashboard, landing
+ * on the Dashboard shell (RF-24's "UUID paste step MUST remain exactly as
+ * today").
+ */
+async function enterTenant() {
+  await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+  await userEvent.click(screen.getByRole('button', { name: /ingresar/i }));
+  await userEvent.click(await screen.findByRole('button', { name: /continuar al dashboard/i }));
+}
 
 /**
  * 2026-08-23: regression test for a real bug the client hit testing on
@@ -105,18 +139,18 @@ describe('T39: app/page.tsx (auth gate)', () => {
 describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period report, not stacks below it', () => {
   afterEach(() => {
     jest.restoreAllMocks();
-    clearSession();
   });
 
   it('replaces the período report with PendientesHistoricoViewer on click, and restores it on toggle-off', async () => {
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
     global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
 
     render(<Home />);
 
-    await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
-    await userEvent.click(screen.getByRole('button', { name: /buscar períodos/i }));
-    await userEvent.click(await screen.findByRole('button', { name: /2026-08-01/i }));
+    await enterTenant();
+    // "Ver reporte" (Dashboard Section B) round-trips straight into the
+    // circuit view for a cerrado período (RF-26) — no extra tab click needed.
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
 
     // cerrado período: the report shows by default, no scrolling needed.
     expect(await screen.findByText(/conciliados ok \(1\)/i)).toBeInTheDocument();
@@ -136,5 +170,180 @@ describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period repor
 
     expect(await screen.findByText(/conciliados ok \(1\)/i)).toBeInTheDocument();
     expect(screen.queryByText(/histórico de pendientes en arca/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Regression test for the view state machine: 'dashboard' | 'circuit' | 'report' | 'pendientes-historico'.
+ * Ensures each view renders correctly and the navigation between views works.
+ */
+describe('view state machine: dashboard | circuit | report | pendientes-historico', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('renders dashboard view after selecting a tenant', async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+
+    // Should be in dashboard view by default (Section B lists the cerrado período).
+    expect(screen.getByRole('heading', { name: /Conciliador Inteligente de Comprobantes/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Histórico/i })).toBeInTheDocument();
+  });
+
+  it('navigates to circuit view via "Ver reporte" (RF-24/RF-26 round-trip)', async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
+
+    // Circuit view should render
+    const circuitView = screen.getByText(/Período 2026-08/);
+    expect(circuitView).toBeInTheDocument();
+  });
+
+  it('navigates to report view via the nav tab', async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
+
+    // The nav button is exactly "Reporte" — the Dashboard's own SectionB
+    // "Ver reporte" button also matches /Reporte/i, so use an exact match.
+    await userEvent.click(screen.getByRole('button', { name: 'Reporte' }));
+
+    // Report view should render
+    expect(await screen.findByText(/conciliados ok \(1\)/i)).toBeInTheDocument();
+  });
+
+  it('navigates to pendientes-historico view', async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
+
+    // Navigate to pendientes-historico view. Exact match: the circuit
+    // header's own "Ver histórico de pendientes ARCA" toggle (cerrado
+    // período) also matches /Histórico/i loosely.
+    await userEvent.click(screen.getByRole('button', { name: 'Histórico' }));
+
+    // Histórico view should render
+    expect(await screen.findByText(/histórico de pendientes en arca/i)).toBeInTheDocument();
+  });
+
+  it('cycles through all views and returns to dashboard', async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
+
+    // Start at circuit (just navigated there), cycle through all views.
+    // Exact matches: the circuit header's own toggles ("Ver reporte del
+    // período" / "Ver histórico de pendientes ARCA") also loosely match.
+    await userEvent.click(screen.getByRole('button', { name: 'Circuito' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reporte' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Histórico' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
+
+    // Should be back at dashboard
+    expect(screen.getByRole('heading', { name: /Conciliador Inteligente de Comprobantes/i })).toBeInTheDocument();
+  });
+
+  it('navigating back to Dashboard remounts it with a fresh listPeriodos fetch (RF-24)', async () => {
+    const fetchMock = mockFetchByUrl();
+    global.fetch = fetchMock;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+
+    const periodosCallCount = () =>
+      (fetchMock as jest.Mock).mock.calls.filter(([input]: [unknown]) =>
+        String(input).includes('/api/periodos?tenant_id='),
+      ).length;
+
+    expect(periodosCallCount()).toBe(1); // the fetch from entering the dashboard
+
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
+
+    // Dashboard unmounted (view left 'dashboard') then remounted -> its
+    // useEffect re-ran listPeriodos, a SECOND independent call.
+    await waitFor(() => expect(periodosCallCount()).toBe(2));
+  });
+});
+
+/**
+ * Role-based access control tests for the app.
+ * Ensures cliente sees read-only UI, admin/colaborador see full UI.
+ */
+describe('role-based access control', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // The nav buttons (Dashboard/Circuito/Reporte/Histórico) only appear after
+  // a período is selected, so roles must go through the same flow the app
+  // actually requires: paste tenant id -> Ingresar -> Continuar al dashboard
+  // -> Abrir the (single, abierto) período from the Dashboard.
+  async function searchAndSelectPeriodo() {
+    await enterTenant();
+    await userEvent.click(await screen.findByRole('button', { name: 'Abrir' }));
+  }
+
+  it('cliente is read-only: no upload form in circuito view', async () => {
+    global.fetch = mockFetchByUrl([abiertoPeriodo]);
+    setSession('tok-1', { id: 'u1', email: 'cliente@test.com', role: 'cliente', display_name: 'Cliente' });
+
+    render(<Home />);
+    await searchAndSelectPeriodo();
+
+    // Cliente still gets the navigation, but the upload form is hidden.
+    // The UploadForm renders a file input labelled "Archivo Contabilidad",
+    // so assert on its absence (the read-only message also contains the
+    // phrase "subir comprobantes", which would match a text query spuriously).
+    await userEvent.click(screen.getByRole('button', { name: /Circuito/i }));
+    expect(screen.getByText(/Tu usuario es de solo lectura/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/archivo contabilidad/i)).not.toBeInTheDocument();
+  });
+
+  it('admin sees full navigation after selecting a período', async () => {
+    global.fetch = mockFetchByUrl([abiertoPeriodo]);
+    setSession('tok-1', { id: 'u1', email: 'admin@test.com', role: 'admin', display_name: 'Admin' });
+
+    render(<Home />);
+    await searchAndSelectPeriodo();
+
+    // Admin should see all navigation buttons. "Abrir" lands directly in
+    // circuit view (RF-24) — use an exact match for the nav tab, since the
+    // circuit header's own "Ver reporte del período" toggle also matches
+    // /Reporte/i loosely.
+    expect(screen.getByRole('button', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Circuito' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reporte' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Histórico' })).toBeInTheDocument();
+  });
+
+  it('colaborador sees full navigation after selecting a período', async () => {
+    global.fetch = mockFetchByUrl([abiertoPeriodo]);
+    setSession('tok-1', { id: 'u1', email: 'colab@test.com', role: 'colaborador', display_name: 'Colaborador' });
+
+    render(<Home />);
+    await searchAndSelectPeriodo();
+
+    // Colaborador should see navigation
+    expect(screen.getByRole('button', { name: 'Circuito' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reporte' })).toBeInTheDocument();
   });
 });
