@@ -1,0 +1,131 @@
+import { render, screen } from '@testing-library/react';
+import {
+  PendientesArcaChartComponent,
+  processData,
+} from './PendientesArcaChart';
+import type { PendientesHistoricoResult } from '@/lib/api';
+
+const mockResultWithData: PendientesHistoricoResult = {
+  tenant: { id: 'T1', name: 'Tenant', created_at: '2026-01-01T00:00:00Z' },
+  pendientes: [
+    {
+      id: 'p1',
+      cuit_emisor: '30682503750',
+      tipo_cbte: 1,
+      punto_venta: 1,
+      numero: 100,
+      importe_total: 500,
+      iva: null,
+      fecha: '2026-07-15',
+      file_source: 'arca',
+      estado: 'conciliado',
+      periodo_alta_id: '',
+      antiguedad_meses: 0,
+    },
+    {
+      id: 'p2',
+      cuit_emisor: '30682503751',
+      tipo_cbte: 1,
+      punto_venta: 2,
+      numero: 200,
+      importe_total: 750,
+      iva: null,
+      fecha: '2026-07-20',
+      file_source: 'arca',
+      estado: 'conciliado',
+      periodo_alta_id: '',
+      antiguedad_meses: 0,
+    },
+    {
+      id: 'p3',
+      cuit_emisor: '30682503752',
+      tipo_cbte: 2,
+      punto_venta: 1,
+      numero: 300,
+      importe_total: 250,
+      iva: null,
+      fecha: '2026-06-10',
+      file_source: 'arca',
+      estado: 'conciliado',
+      periodo_alta_id: '',
+      antiguedad_meses: 0,
+    },
+  ],
+  count_pendientes: 3,
+  excluidos_previos_a_alta: [],
+  count_excluidos_previos_a_alta: 0,
+};
+
+const emptyResult = {
+  ...mockResultWithData,
+  count_pendientes: 0,
+  pendientes: [],
+};
+
+describe('PendientesArcaChart - processData (pure utility)', () => {
+  it('buckets dates correctly by month', () => {
+    const processed = processData(mockResultWithData);
+
+    // Should have last 12 buckets including Jul 2026 and Jun 2026
+    expect(processed.buckets.length).toBe(12);
+    expect(processed.bucketValues['2026-07']).toBe(1250); // 500 + 750
+    expect(processed.bucketValues['2026-06']).toBe(250);
+    expect(processed.totals).toBe(1500); // 500 + 750 + 250
+  });
+
+  it('returns zero totals for empty pendientes', () => {
+    const processed = processData(emptyResult);
+
+    expect(processed.buckets.length).toBe(12);
+    expect(processed.totals).toBe(0);
+    // All bucket values should be 0
+    expect(processed.bucketValues['2026-07']).toBe(0);
+    expect(processed.bucketValues['2026-06']).toBe(0);
+  });
+});
+
+describe('PendientesArcaChartComponent', () => {
+  it('shows "Sin pendientes ARCA" when count_pendientes is 0', () => {
+    const { unmount } = render(
+      <PendientesArcaChartComponent result={emptyResult} />
+    );
+
+    // Component checks count_pendientes === 0 BEFORE loading state,
+    // so it shows the empty state immediately
+    expect(screen.getByText('Sin pendientes ARCA')).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('renders without crashing', () => {
+    const { unmount } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+
+    // Component should render without throwing
+    expect(unmount).toBeDefined();
+    unmount();
+  });
+
+  it('renders a native <title> tooltip per bar and zero bars for an empty result (RF-27)', () => {
+    const { container, unmount } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+
+    // 12 month buckets -> 12 <rect> bars, each with its own native <title>.
+    const bars = container.querySelectorAll('svg rect');
+    const titles = container.querySelectorAll('svg title');
+    expect(bars.length).toBe(12);
+    expect(titles.length).toBe(12);
+    expect(titles[0].textContent).toMatch(/^\d{4}-\d{2}: \$/);
+
+    unmount();
+
+    const { container: emptyContainer, unmount: unmountEmpty } = render(
+      <PendientesArcaChartComponent result={emptyResult} />
+    );
+    // count_pendientes === 0 shows the empty-state card, no <svg> at all.
+    expect(emptyContainer.querySelectorAll('svg rect').length).toBe(0);
+    unmountEmpty();
+  });
+});
