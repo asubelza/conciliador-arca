@@ -65,3 +65,51 @@ Combined diff across `packages/web` for this slice: 5 modified files (~894 chang
 
 - T67 (Phase 3, cross-verification): run both suites + builds together, walk the RF-24..RF-40 traceability map, optional Playwright smoke — not part of this frontend-only slice.
 - T68 (optional, explicitly deferred by AD-8): migrate `PeriodoReportViewer`'s legacy `window.confirm`/`prompt` calls to `ConfirmDialog` — marked "NO requerido para este cambio" in the design.
+
+## Review fixes (2026-09-26)
+
+Fixed 11 review findings against PR-9 (2 BLOCKER, 8 SHOULD-FIX, 1 NIT), strict TDD (RED→GREEN) throughout, no new dependencies, changes scoped to the flagged files only.
+
+### Findings status
+
+| # | Severity | File | Finding | Status |
+|---|----------|------|---------|--------|
+| 1 | BLOCKER | `Dashboard.tsx` SectionC | `getPendientesHistorico` failure never rendered — stuck on "Cargando…" | Fixed — renders `SectionErrorBanner` with retry; error checked before the `!result` loading branches |
+| 2 | BLOCKER | `PendientesArcaChart.tsx` / `Dashboard.tsx` | Chart rendered its own dead "Ver histórico completo" `<p>` + duplicate card, nested inside SectionC's real card/button | Fixed — chart no longer renders its own card wrapper or link; SectionC's card + button are the only ones |
+| 3 | SHOULD-FIX | `Dashboard.tsx:277` | Literal `$` before an integer count (`count_excluidos_previos_a_alta`) | Fixed — `$` removed |
+| 4 | SHOULD-FIX | `PendientesArcaChart.tsx` | `maxBucketValue` could be `0` → `barHeight = NaN` | Fixed — guarded to `1` when the real max is `0` |
+| 5 | SHOULD-FIX | `PendientesArcaChart.tsx` | `last12MonthBuckets()` used `setMonth` on today's day-of-month → collisions on days 29-31 | Fixed — buckets built from day 1 of each month; `now` made injectable |
+| 6 | SHOULD-FIX | `ConfirmDialog.tsx` | `focus-rounded-lg` typo class | Fixed — `focus-ring rounded-lg` |
+| 7 | SHOULD-FIX | `ConfirmDialog.tsx` | `aria-modal="true"` with no initial focus / Tab trap / focus restore | Fixed — focus moves to Cancel (or Confirm if no Cancel) on open, Tab/Shift+Tab trapped, focus restored to the previously focused element on close |
+| 8 | SHOULD-FIX | `Dashboard.tsx` refresh/afterMutation | Concurrent `listPeriodos` calls unsequenced — stale response could resurrect a deleted período | Fixed — `requestIdRef` guard ignores stale responses |
+| 9 | SHOULD-FIX | `app/page.test.tsx` | Diff dropped `clearSession()` from two `afterEach` blocks | Fixed — restored, plus a regression test proving the leak |
+| 10 | NIT | `PendientesArcaChart.tsx:223` | `viewBox="0 0 {chartWidth} {chartHeight}"` literal string | Fixed — template literal |
+| 11 | NIT | `Dashboard.tsx:12-21` | `Periodo` type duplicated from `lib/api.ts` | Fixed — imported instead |
+
+### TDD Cycle Evidence
+
+| Finding(s) | Test File | RED (confirmed failing for the right reason) | GREEN | Notes |
+|---|---|---|---|---|
+| 6, 7 | `ConfirmDialog.test.tsx` | 6 new tests failed: typo class present, no `toHaveFocus()` on open, no Tab wrap, no focus restore | 15/15 passed | Added `useRef`-based dialog/button refs + keydown handler for trap + restore |
+| 5 | `PendientesArcaChart.test.tsx` | `last12MonthBuckets is not a function` (not yet exported) | 9/9 passed | Fixed with fake timers, fixed "now" = 2026-03-31, asserts 12 distinct consecutive keys |
+| 2, 10 | `PendientesArcaChart.test.tsx` | dead `<p>Ver histórico completo</p>` found in DOM; `viewBox` literal `"0 0 {chartWidth} {chartHeight}"` | same run, 9/9 passed | |
+| 4 | `PendientesArcaChart.test.tsx` | `Number.isNaN(Number(value))` was `true` for rect attrs with all-out-of-window pendientes | same run, 9/9 passed | |
+| 1, 3, 8 | `Dashboard.test.tsx` | `findByText('3')` not found (`$3` rendered instead); `findByRole('alert')` timed out (stuck on spinner); newer refresh + stale older resolution both landed unguarded | 18/18 passed | Race test forces 2 overlapping `listPeriodos` via `rerender` with a changed `tenantId`, resolves the newer promise first, the older (stale) one last |
+| 2 (Dashboard-level) | `Dashboard.test.tsx` | New non-empty-data "exactly one control" test — passed immediately once finding #2's chart-side fix landed first | 18/18 passed | Confirms no duplicate card/button reachable from the real Dashboard tree |
+| 9 | `app/page.test.tsx` | Reverted the fix, added leak-regression test → failed: main app rendered instead of login form (stale session from prior test) | 13/13 passed after restoring `clearSession()` | |
+| 11 | n/a (type-only change) | No dedicated test; verified via `tsc --noEmit` (no other file imported `Periodo` from `Dashboard.tsx`) | clean | |
+
+### Final verification
+
+- **`npx jest --config jest.web.config.js`**: 134/134 passing, 17 suites (baseline was 119/119, 17 suites; +15 tests from this review pass).
+- **`npx tsc --noEmit`**: clean.
+- **`npx next build`**: `✓ Compiled successfully`, `/` at 15.8 kB / 103 kB First Load JS.
+- **Dependencies**: zero new.
+
+### Commits
+
+- `fix(web): add focus trap and fix focus-ring typo in ConfirmDialog`
+- `fix(web): remove duplicate card/dead link and fix NaN/date bugs in PendientesArcaChart`
+- `fix(web): surface SectionC fetch errors, fix currency literal, and sequence refresh calls`
+- `test(web): restore clearSession() cleanup in page.test.tsx afterEach`
+- `docs(openspec): add review fixes section to PR-9 progress` (this entry)
