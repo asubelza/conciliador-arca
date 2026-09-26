@@ -1,24 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { getPendientesHistorico, type PendientesHistoricoResult } from '@/lib/api';
-import { listPeriodos } from '@/lib/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { getPendientesHistorico, listPeriodos, type PendientesHistoricoResult, type Periodo } from '@/lib/api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { PendientesArcaChart } from './PendientesArcaChart';
 import { PeriodoReportViewer } from './PeriodoReportViewer';
 import { PendientesHistoricoViewer } from './PendientesHistoricoViewer';
 import { SpinnerIcon, WarningIcon } from './icons';
 
-export interface Periodo {
-  id: string;
-  tenant_id: string;
-  mes: string;
-  estado: 'abierto' | 'cerrado';
-  tolerancia_ars: string | null;
-  cerrado_at: string | null;
-  cerrado_por: string | null;
-  created_at?: string;
-}
+export type { Periodo };
 
 /** Section A: Período en curso */
 interface SectionAProps {
@@ -237,17 +227,33 @@ function SectionC({ tenantId, userRole, onViewHistoricoCompleto }: SectionCProps
   const [result, setResult] = useState<PendientesHistoricoResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const data = await getPendientesHistorico(tenantId);
-        setResult(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
-      }
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const data = await getPendientesHistorico(tenantId);
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
     }
-    load();
   }, [tenantId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // RF-29: a failed fetch must stop showing the loading spinner and surface
+  // the shared error banner with retry (same pattern as Sections A/B),
+  // checked BEFORE the `!result` loading branches below.
+  if (error) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50 mb-4">
+          Pendientes ARCA
+        </h2>
+        <SectionErrorBanner error={error} onRetry={load} />
+      </div>
+    );
+  }
 
   // Cliente role: read-only, show totals only, no chart editing
   if (userRole === 'cliente') {
@@ -274,7 +280,7 @@ function SectionC({ tenantId, userRole, onViewHistoricoCompleto }: SectionCProps
           </div>
           <div>
             <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
-              ${result.count_excluidos_previos_a_alta > 0 ? result.count_excluidos_previos_a_alta.toLocaleString('es-AR') : '0'}
+              {result.count_excluidos_previos_a_alta > 0 ? result.count_excluidos_previos_a_alta.toLocaleString('es-AR') : '0'}
             </p>
             <p className="text-slate-500 dark:text-slate-400">
               excluidos previos a alta
@@ -339,16 +345,26 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   // RF-25/RF-29: Sections A+B share ONE listPeriodos call (partitioned
   // client-side by estado) — so its own loading/error state is per-fetch,
   // independent from Section C's separate pendientes-historico fetch.
+  //
+  // requestIdRef guards against concurrent, unsequenced refreshes: if two
+  // calls overlap (e.g. a mutation firing before the initial fetch settles)
+  // and the OLDER one resolves LAST, its stale response is ignored instead
+  // of overwriting the newer, more accurate state (which could otherwise
+  // resurrect a période that was just deleted/reopened).
+  const requestIdRef = useRef(0);
   const refresh = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await listPeriodos(tenantId);
+      if (requestIdRef.current !== requestId) return; // stale response — ignore
       setPeriodos(data);
     } catch (err) {
+      if (requestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : 'Períodos fetch failed');
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [tenantId]);
 

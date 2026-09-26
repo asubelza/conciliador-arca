@@ -43,6 +43,29 @@ const historicoVacio: PendientesHistoricoResult = {
   count_excluidos_previos_a_alta: 0,
 };
 
+const historicoConDatos: PendientesHistoricoResult = {
+  tenant: { id: TENANT_ID, name: 'Tenant de prueba', created_at: '2026-01-01T00:00:00Z' },
+  pendientes: [
+    {
+      id: 'p1',
+      cuit_emisor: '30682503750',
+      tipo_cbte: 1,
+      punto_venta: 1,
+      numero: 100,
+      importe_total: 500,
+      iva: null,
+      fecha: '2026-07-15',
+      file_source: 'arca',
+      estado: 'conciliado',
+      periodo_alta_id: '',
+      antiguedad_meses: 0,
+    },
+  ],
+  count_pendientes: 1,
+  excluidos_previos_a_alta: [],
+  count_excluidos_previos_a_alta: 3,
+};
+
 function renderDashboard(overrides: Partial<Parameters<typeof DashboardShell>[0]> = {}) {
   const props = {
     tenantId: TENANT_ID,
@@ -236,5 +259,83 @@ describe('DashboardShell', () => {
     renderDashboard({ userRole: 'cliente' });
 
     expect(await screen.findByRole('heading', { name: /Pendientes ARCA/i })).toBeInTheDocument();
+  });
+
+  it('Section C para cliente no antepone "$" al conteo de excluidos previos a alta', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoConDatos);
+    renderDashboard({ userRole: 'cliente' });
+
+    // count_excluidos_previos_a_alta is an integer COUNT, not a currency
+    // amount — it must render as a plain number, no leading "$".
+    const value = await screen.findByText('3');
+    expect(value).toBeInTheDocument();
+    expect(screen.queryByText('$3')).not.toBeInTheDocument();
+  });
+
+  it('Section C: si getPendientesHistorico falla, muestra error con reintentar y deja de mostrar "Cargando" (RF-29)', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockRejectedValueOnce(new Error('Pendientes fetch failed (500)'));
+    renderDashboard();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Pendientes fetch failed (500)');
+    expect(screen.queryByText(/Cargando gráfico de pendientes ARCA/i)).not.toBeInTheDocument();
+
+    mockedGetPendientesHistorico.mockResolvedValueOnce(historicoVacio);
+    await userEvent.click(screen.getByRole('button', { name: /Reintentar/i }));
+
+    expect(await screen.findByText(/Sin pendientes ARCA/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('con datos no vacíos, "Ver histórico completo" aparece una sola vez y abre el overlay (sin tarjeta/link duplicados)', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoConDatos);
+    renderDashboard();
+
+    const buttons = await screen.findAllByRole('button', { name: /Ver histórico completo/i });
+    expect(buttons.length).toBe(1);
+
+    await userEvent.click(buttons[0]);
+    expect(await screen.findByRole('heading', { name: /Histórico de Pendientes en ARCA/i })).toBeInTheDocument();
+  });
+
+  it('ignora una respuesta stale de listPeriodos cuando dos refreshes se solapan (race condition)', async () => {
+    let resolveFirst: (value: unknown) => void = () => {};
+    let resolveSecond: (value: unknown) => void = () => {};
+    const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
+    const secondPromise = new Promise((resolve) => { resolveSecond = resolve; });
+    mockedListPeriodos
+      .mockReturnValueOnce(firstPromise)
+      .mockReturnValueOnce(secondPromise);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+
+    const baseProps = {
+      userRole: 'admin' as const,
+      onOpenPeriodo: jest.fn(),
+      onCreatePeriodo: jest.fn(),
+      onReopenPeriodo: jest.fn(),
+      onDeletePeriodo: jest.fn(),
+      onViewReport: jest.fn(),
+    };
+    const { rerender } = render(<DashboardShell tenantId={TENANT_ID} {...baseProps} />);
+
+    // Force a second, independent refresh while the first is still in
+    // flight (e.g. a tenant switch, or a mutation firing before the
+    // initial fetch settles) — the OLDER request resolves LAST below,
+    // simulating a deleted período reappearing if responses aren't
+    // sequenced by request id.
+    rerender(<DashboardShell tenantId={`${TENANT_ID}-other`} {...baseProps} />);
+
+    resolveSecond([abiertoPeriodo]);
+    expect(await screen.findByText('2026-08')).toBeInTheDocument();
+
+    resolveFirst([cerradoPeriodo]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.getByText('2026-08')).toBeInTheDocument();
+    expect(screen.queryByText('2026-07')).not.toBeInTheDocument();
   });
 });
