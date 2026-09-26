@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { XIcon } from './icons';
+
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export interface ConfirmDialogProps {
   title: string;
@@ -23,10 +26,10 @@ const contentClass = 'text-slate-700 dark:text-slate-300 mb-6';
 const buttonRowClass = 'flex gap-3 w-full justify-end';
 
 const cancelButtonBaseClass =
-  'focus-rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800';
+  'focus-ring rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800';
 
 const confirmButtonBaseClass =
-  'focus-rounded-lg px-4 py-2 text-sm font-medium text-white bg-emerald-600 shadow-card hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60';
+  'focus-ring rounded-lg px-4 py-2 text-sm font-medium text-white bg-emerald-600 shadow-card hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60';
 
 export function ConfirmDialog({
   title,
@@ -36,17 +39,53 @@ export function ConfirmDialog({
   isLoading = false,
   showCancel = true,
 }: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const confirmButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Focus management (WAI-ARIA dialog pattern): move focus into the dialog
+  // on open (prefer the cancel button — the safer default for destructive
+  // confirmations), trap Tab/Shift+Tab within it, and restore focus to
+  // whatever was focused before the dialog opened once it closes.
   useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const initialFocusTarget = cancelButtonRef.current ?? confirmButtonRef.current;
+    initialFocusTarget?.focus();
+
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onCancel?.();
+      if (event.key === 'Escape') {
+        onCancel?.();
+        return;
+      }
+
+      if (event.key === 'Tab') {
+        const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+        if (!focusable || focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     }
+
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus();
+    };
   }, [onCancel]);
 
   return (
     <div className={baseDialogClass} onClick={() => onCancel?.()}>
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Confirmación"
@@ -60,6 +99,7 @@ export function ConfirmDialog({
         <div className={buttonRowClass}>
           {showCancel && onCancel && (
             <button
+              ref={cancelButtonRef}
               type="button"
               onClick={onCancel}
               disabled={isLoading}
@@ -76,6 +116,7 @@ export function ConfirmDialog({
             </button>
           )}
           <button
+            ref={confirmButtonRef}
             type="button"
             onClick={onConfirm}
             disabled={isLoading}

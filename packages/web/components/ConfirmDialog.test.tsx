@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { useState } from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -121,6 +122,96 @@ describe('ConfirmDialog', () => {
 
     await userEvent.click(screen.getByText('¿Continuar?'));
     expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('uses the shared focus-ring utility plus rounded-lg on both buttons (not the "focus-rounded-lg" typo)', () => {
+    render(
+      <ConfirmDialog title="Confirmar" text="¿Continuar?" onConfirm={() => {}} onCancel={() => {}} />
+    );
+
+    const confirmBtn = screen.getByRole('button', { name: 'Confirmar' });
+    const cancelBtn = screen.getByRole('button', { name: 'Cancelar' });
+    for (const btn of [confirmBtn, cancelBtn]) {
+      expect(btn.className).not.toMatch(/focus-rounded-lg/);
+      expect(btn.className).toMatch(/\bfocus-ring\b/);
+      expect(btn.className).toMatch(/\brounded-lg\b/);
+    }
+  });
+
+  it('moves initial focus to the cancel button when the dialog opens', () => {
+    render(
+      <ConfirmDialog title="Confirmar" text="¿Continuar?" onConfirm={() => {}} onCancel={() => {}} />
+    );
+
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveFocus();
+  });
+
+  it('moves initial focus to the confirm button when there is no cancel button', () => {
+    render(
+      <ConfirmDialog title="Eliminar" text="¿Seguro?" onConfirm={() => {}} showCancel={false} />
+    );
+
+    expect(screen.getByRole('button', { name: 'Confirmar' })).toHaveFocus();
+  });
+
+  it('traps Tab focus within the dialog, wrapping from the last to the first control and back', async () => {
+    render(
+      <ConfirmDialog title="Confirmar" text="¿Continuar?" onConfirm={() => {}} onCancel={() => {}} />
+    );
+
+    const cancelBtn = screen.getByRole('button', { name: 'Cancelar' });
+    const confirmBtn = screen.getByRole('button', { name: 'Confirmar' });
+    expect(cancelBtn).toHaveFocus();
+
+    await userEvent.tab();
+    expect(confirmBtn).toHaveFocus();
+
+    await userEvent.tab();
+    expect(cancelBtn).toHaveFocus();
+
+    await userEvent.tab({ shift: true });
+    expect(confirmBtn).toHaveFocus();
+  });
+
+  it('keeps focus on the confirm button when it is the only focusable control', async () => {
+    render(
+      <ConfirmDialog title="Eliminar" text="¿Seguro?" onConfirm={() => {}} showCancel={false} />
+    );
+
+    const confirmBtn = screen.getByRole('button', { name: 'Confirmar' });
+    expect(confirmBtn).toHaveFocus();
+
+    await userEvent.tab();
+    expect(confirmBtn).toHaveFocus();
+  });
+
+  it('restores focus to the previously focused element once the dialog closes', async () => {
+    function Wrapper() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button onClick={() => setOpen(true)}>Abrir dialogo</button>
+          {open && (
+            <ConfirmDialog
+              title="Confirmar"
+              text="¿Continuar?"
+              onConfirm={() => {}}
+              onCancel={() => setOpen(false)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    render(<Wrapper />);
+    const trigger = screen.getByRole('button', { name: 'Abrir dialogo' });
+    trigger.focus();
+    await userEvent.click(trigger);
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it('renders with loading state - confirm button is present, disabled, and has accessible name', () => {
