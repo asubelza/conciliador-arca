@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import {
   PendientesArcaChartComponent,
   processData,
+  last12MonthBuckets,
 } from './PendientesArcaChart';
 import type { PendientesHistoricoResult } from '@/lib/api';
 
@@ -84,6 +85,26 @@ describe('PendientesArcaChart - processData (pure utility)', () => {
   });
 });
 
+describe('last12MonthBuckets (day-of-month collision bug)', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('returns 12 distinct consecutive month keys even when "now" is on day 29-31', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 2, 31)); // 2026-03-31
+
+    const buckets = last12MonthBuckets();
+
+    expect(buckets.length).toBe(12);
+    expect(new Set(buckets).size).toBe(12); // no duplicates from month-rollover
+    expect(buckets).toEqual([
+      '2025-04', '2025-05', '2025-06', '2025-07', '2025-08', '2025-09',
+      '2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03',
+    ]);
+  });
+});
+
 describe('PendientesArcaChartComponent', () => {
   it('shows "Sin pendientes ARCA" when count_pendientes is 0', () => {
     const { unmount } = render(
@@ -127,5 +148,45 @@ describe('PendientesArcaChartComponent', () => {
     // count_pendientes === 0 shows the empty-state card, no <svg> at all.
     expect(emptyContainer.querySelectorAll('svg rect').length).toBe(0);
     unmountEmpty();
+  });
+
+  it('does not render its own "Ver histórico completo" link (that control lives once, in the caller)', () => {
+    render(<PendientesArcaChartComponent result={mockResultWithData} />);
+    expect(screen.queryByText(/Ver histórico completo/i)).not.toBeInTheDocument();
+  });
+
+  it('interpolates the viewBox with real dimensions, not a literal template string', () => {
+    const { container } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+    const svg = container.querySelector('svg');
+    expect(svg).toHaveAttribute('viewBox', '0 0 400 200');
+  });
+
+  it('never produces NaN bar attributes when every pendiente falls outside the last-12-months window', () => {
+    const outOfWindowResult: PendientesHistoricoResult = {
+      ...mockResultWithData,
+      count_pendientes: 1,
+      pendientes: [
+        {
+          ...mockResultWithData.pendientes[0],
+          fecha: '2000-01-15', // always outside the rolling 12-month window
+        },
+      ],
+    };
+
+    const { container } = render(
+      <PendientesArcaChartComponent result={outOfWindowResult} />
+    );
+
+    const rects = container.querySelectorAll('svg rect');
+    expect(rects.length).toBe(12);
+    rects.forEach((rect) => {
+      ['x', 'y', 'width', 'height'].forEach((attr) => {
+        const value = rect.getAttribute(attr);
+        expect(value).not.toBeNull();
+        expect(Number.isNaN(Number(value))).toBe(false);
+      });
+    });
   });
 });
