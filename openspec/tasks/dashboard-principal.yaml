@@ -1,0 +1,58 @@
+# Tasks: dashboard-principal
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~850–1150 total (tests dominate: real-PG api harness + RTL) |
+| — Slice 1 backend (PR-8) | ~450–550 |
+| — Slice 2 frontend (PR-9) | ~400–600 |
+| 400-line budget risk | High overall; Medium-High per slice |
+| Chained PRs recommended | Yes |
+| Suggested split | PR-8 backend período lifecycle → PR-9 Dashboard UI |
+| Delivery strategy | ask-always |
+| Chain strategy | pending (user picks stacked-to-main vs feature-branch-chain) |
+
+Decision needed before apply: Yes
+Chained PRs recommended: Yes
+Chain strategy: pending
+400-line budget risk: High
+
+Slices are independent: PR-8 touches only `packages/api` + `packages/shared-types`; PR-9 only `packages/web`. Sole cross-touchpoint: PR-9 imports PR-8's additive shared-types → ship order 8→9. Fallback if reviewers enforce ≤400/PR strictly: split PR-8 into PR-8a (reabrir) + PR-8b (eliminar + migración 023).
+
+### Suggested Work Units
+
+| Unit | Goal | Likely PR | Base boundary |
+|------|------|-----------|---------------|
+| 1 | Período lifecycle: reabrir + eliminar + privileges 023 | PR-8 | main |
+| 2 | Dashboard shell + secciones A/B/C + ConfirmDialog + SVG chart | PR-9 | PR-8 branch (stacked) o main tras merge de PR-8 |
+
+## Phase 1: Backend — Período Lifecycle (PR-8)
+
+- [x] T52 (RED): escribir `packages/api/src/periodos/periodo-reapertura.test.ts` con el harness real-PG de `periodo-cierre.test.ts`: close→reopen devuelve vouchers sellados a pendiente+stamps NULL (`counts.vouchers_reabiertos`), borra snapshot (`resultados_eliminados`), resetea `tolerancia_ars/cerrado_at/cerrado_por`, marca manual resolver sobrevive, rollover ARCA intacto, audit 'reopen' in-tx y sin fila si falla, 409 ALREADY_ABIERTO, 404, close→reopen→re-close reproduce snapshot equivalente (RF-31..RF-34)
+- [x] T53 (GREEN): crear `packages/api/src/periodos/periodo-reapertura.ts` — `reabrirPeriodo()`: una tx, `SELECT … FOR UPDATE`, fallos tipados `NOT_FOUND|ALREADY_ABIERTO` espejando `PeriodoCierreFailure`, undo por sello `periodo_cierre_id`, DELETE snapshot, reset de columnas, `logAuditEvent('reopen')` in-tx (RF-31..RF-34). Dep: T52
+- [x] T54 (RED): escribir `packages/api/src/periodos/periodo-eliminacion.test.ts`: vacío→`200 {deleted:true}` fila fuera; vouchers alta/cierre→409 con mensaje que nombra c1/c2; cerrado-sin-matches→409 vía c2; desconocido→404; carrera upload: gana upload→409 con datos íntegros, gana delete→FK violación revierte todo el job tx (RF-36..RF-38)
+- [x] T55 (GREEN): crear `packages/api/src/periodos/periodo-eliminacion.ts` — `eliminarPeriodo()`: FOR UPDATE + 2 COUNTs en una tx, 409 house-shape `{error}` con conteos, DELETE físico sin soft-delete, audit 'delete' in-tx (RF-35..RF-38). Dep: T54
+- [x] T56: tipos aditivos en `packages/shared-types/src/index.ts`: `PeriodoReabrirResponse`, `PeriodoDeleteResponse` (contratos del design §Interfaces)
+- [x] T57 (RED): extender `packages/api/src/periodos/periodos.controller.test.ts`: rutas `POST :id/reabrir` y `DELETE :id` — orden handler (400 id inválido), cliente→403 en reabrir, colaborador Y cliente→403 en delete, 404 desconocido, cuerpos de éxito según shared-types (RF-30, RF-35). Dep: T56
+- [x] T58 (GREEN): cablear ambas rutas en `packages/api/src/periodos/periodos.controller.ts` espejando orden de `cerrar`: `validatePeriodoIdParam` → `assertRole(['admin','colaborador'])` / `assertRole(['admin'])` → `resolvePeriodoTenantId`+`assertTenantAccess` → dominio (RF-30, RF-35, AD-5). Dep: T53, T55, T57
+- [x] T59: crear `packages/api/prisma/migrations/023_grant_app_role_delete_periodos.sql` (GRANT DELETE ON periodos, periodo_resultados TO app_role, cada GRANT comentado con la sentencia que lo necesita) y voltear SOLO esas dos denegaciones en `packages/api/src/app-role-grants.test.ts` (línea ~178 DELETE periodos; bloque ~195 separar UPDATE-denegado de DELETE-permitido); resto de denegaciones intactas (RF-39, RF-40, AD-4)
+
+AC Phase 1: `npx jest --config jest.api.json` verde; suite preexistente pasa sin modificación (escenario RF-39 "Existing períodos contracts are untouched").
+
+## Phase 2: Frontend — Dashboard (PR-9)
+
+- [x] T60 (test-first): crear `packages/web/components/ConfirmDialog.tsx` + test RTL: título/cuerpo/confirmar-cancelar, callback solo al aceptar, cancel con Escape/backdrop, estilos heredados de CoincidenciaModal (RF-28 gate destructivas, AD-8)
+- [x] T61 (test-first): crear `packages/web/components/PendientesArcaChart.tsx` + test Jest de funciones puras exportadas: bucketing `fecha.slice(0,7)` últimos 12 meses, Σ importes/count totales, `<title>` nativo por barra, sin barras cuando count=0, SVG inline sin dependencias (RF-27)
+- [x] T62: agregar fetchers `reabrirPeriodo()`/`eliminarPeriodo()` en `packages/web/lib/api.ts` consumiendo shared-types de T56 (wiring RF-30/RF-35). Dep: T56
+- [x] T63 (RED): escribir `packages/web/components/Dashboard.test.tsx` (mock `lib/api`): partición A/B desde UNA llamada `listPeriodos` (dos abiertos mes DESC; copys vacías exactas), C desde un solo fetch histórico, rol: cliente sin affordances+"solo lectura", colaborador Reabrir sin Eliminar, admin ambos, loading/error/retry por sección independientes (RF-25, RF-26, RF-27, RF-28, RF-29). Dep: T62
+- [x] T64 (GREEN): crear `packages/web/components/Dashboard.tsx` — shell 3 secciones, handlers Abrir/Crear/Ver reporte/Reabrir/Eliminar (destructivas vía ConfirmDialog), refetch de lista tras acción, estados por sección (RF-24..RF-29). Dep: T60, T61, T63
+- [x] T65 (RED): actualizar `packages/web/app/page.test.tsx`: máquina `view` `'dashboard'|'circuit'|'report'|'pendientes-historico'`, paso UUID intacto, Abrir renderiza circuito existente verbatim y volver remonta Dashboard con fetch fresco, viewer histórico como overlay swap sin salir de la ruta (RF-24)
+- [x] T66 (GREEN): modificar `packages/web/app/page.tsx` (unión view, montar `<Dashboard>`) y adelgazar `packages/web/components/PeriodoSelector.tsx` a entrada de tenant (TenantConfigPanel permanece); actualizar `PeriodoSelector.test.tsx` (RF-24, AD-6). Dep: T64, T65
+
+AC Phase 2: `npx jest` (web) verde (119/119); build `npm run build` ok; sin dependencias nuevas. ✅ Verified.
+
+## Phase 3: Verificación cruzada
+
+- [ ] T67: correr ambas suites completas (api + web) + builds; recorrer mapa RF-24..RF-40 contra escenarios de specs; smoke E2E opcional Playwright del flujo 3 secciones
+- [ ] T68 (opcional, puede posponerse): migrar prompts legacy de `PeriodoReportViewer` a ConfirmDialog (AD-8 lo marca cleanup opcional; NO requerido para este cambio)
