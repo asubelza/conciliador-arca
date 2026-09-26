@@ -92,6 +92,7 @@ function mockFetchByUrl(periodos: MockPeriodo[] = [cerradoPeriodo]) {
 describe('T39: app/page.tsx (auth gate)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    clearSession();
   });
 
   it('shows the login form when there is no session', () => {
@@ -110,6 +111,16 @@ describe('T39: app/page.tsx (auth gate)', () => {
     expect(screen.getByText('Ana')).toBeInTheDocument();
     expect(screen.getByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /cerrar sesión/i })).toBeInTheDocument();
+  });
+
+  it('does not leak the session from the previous test into a fresh render', () => {
+    // Regression: afterEach must clear the session set by the previous
+    // test — session state lives in a module-level variable + localStorage
+    // (lib/session.ts), neither of which Jest resets automatically between
+    // tests in the same file.
+    render(<Home />);
+    expect(screen.getByRole('heading', { name: /conciliador inteligente de comprobantes/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
   });
 });
 
@@ -139,6 +150,7 @@ async function enterTenant() {
 describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period report, not stacks below it', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    clearSession();
   });
 
   it('replaces the período report with PendientesHistoricoViewer on click, and restores it on toggle-off', async () => {
