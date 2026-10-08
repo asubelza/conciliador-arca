@@ -113,3 +113,12 @@ Fixed 11 review findings against PR-9 (2 BLOCKER, 8 SHOULD-FIX, 1 NIT), strict T
 - `fix(web): surface SectionC fetch errors, fix currency literal, and sequence refresh calls`
 - `test(web): restore clearSession() cleanup in page.test.tsx afterEach`
 - `docs(openspec): add review fixes section to PR-9 progress` (this entry)
+
+## Archive Phase Complete (2026-10-08)
+
+- Frontend slice PR-9 fully archived
+- T67 verified PASS (both suites green: web 134/134, api 502/503 — 2 pre-existing unrelated Windows teardown flakes)
+- T68 deferred by design (not a gap — explicitly marked optional in AD-8)
+- Archive folder path: `openspec/changes/archive/2026-10-08-dashboard-principal-pr9/`
+- 11 commits archived (T60–T66 complete, review fixes applied)
+- All RF-24..RF-40 requirements verified compliant at runtime
