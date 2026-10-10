@@ -163,6 +163,55 @@ describe('PendientesArcaChartComponent', () => {
     expect(svg).toHaveAttribute('viewBox', '0 0 400 200');
   });
 
+  it('every bar sits on the axis (local y + height === usableHeight), including the tallest bar', () => {
+    // usableHeight = chartHeight(200) - topMargin(20) - bottomMargin(40) = 140.
+    // The <g> wrapper already translates by topMargin, so bars must be
+    // positioned in that LOCAL frame — using chartHeight instead of
+    // usableHeight double-counts the translate and pushes every bar's
+    // bottom edge past the axis (and the tallest bar's top past the top margin).
+    const { container } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+    const usableHeight = 140;
+
+    const rects = container.querySelectorAll('svg rect');
+    expect(rects.length).toBe(12);
+    rects.forEach((rect) => {
+      const y = Number(rect.getAttribute('y'));
+      const height = Number(rect.getAttribute('height'));
+      expect(y + height).toBeCloseTo(usableHeight, 5);
+    });
+  });
+
+  it('centers each bar group and its label on the slot computed with barWidthAdjusted, not the stale barWidth constant', () => {
+    // leftMargin=40, usableWidth=340, barGap=10, bucketCount=12 ->
+    // barWidthAdjusted = (340 - 11*10) / 12 = 230/12.
+    const { container } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+    const leftMargin = 40;
+    const barGap = 10;
+    const bucketCount = 12;
+    const usableWidth = 340;
+    const barWidthAdjusted = (usableWidth - (bucketCount - 1) * barGap) / bucketCount;
+
+    const barGroups = Array.from(container.querySelectorAll('svg g[transform]'));
+    expect(barGroups.length).toBe(12);
+
+    // First bar's slot starts at x = leftMargin; its group should be
+    // centered at leftMargin + barWidthAdjusted / 2, not leftMargin + 15
+    // (half of the old fixed barWidth=30 constant).
+    const firstTransform = barGroups[0].getAttribute('transform') ?? '';
+    const match = firstTransform.match(/translate\(([-\d.]+),/);
+    expect(match).not.toBeNull();
+    const translateX = Number(match![1]);
+    expect(translateX).toBeCloseTo(leftMargin + barWidthAdjusted / 2, 3);
+
+    const firstText = barGroups[0].querySelector('text');
+    expect(firstText).not.toBeNull();
+    expect(Number(firstText!.getAttribute('x'))).toBeCloseTo(barWidthAdjusted / 2, 3);
+  });
+
   it('never produces NaN bar attributes when every pendiente falls outside the last-12-months window', () => {
     const outOfWindowResult: PendientesHistoricoResult = {
       ...mockResultWithData,

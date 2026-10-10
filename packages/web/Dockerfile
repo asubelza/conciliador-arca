@@ -19,11 +19,11 @@ RUN npm install --no-audit --no-fund
 FROM deps AS build
 COPY packages/web packages/web
 COPY tsconfig.json ./
-# NEXT_PUBLIC_API_BASE_URL is baked into the client bundle at build time (any
+# NEXT_PUBLIC_API_URL is baked into the client bundle at build time (any
 # NEXT_PUBLIC_* var is inlined by `next build`, not read at container start),
 # so it has to be a build arg, not a runtime env var.
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
-ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ARG NEXT_PUBLIC_API_URL=http://localhost:3002
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build --workspace=web
 
 # output: 'standalone' (next.config.js) traces the exact node_modules subset

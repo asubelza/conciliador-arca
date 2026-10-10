@@ -67,6 +67,7 @@ export default function Home() {
   const [view, setView] = useState<View>('dashboard');
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
   const [showPendientesHistorico, setShowPendientesHistorico] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
   // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
@@ -87,6 +88,7 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
+    setDashboardError(null);
     setView('dashboard');
   }
 
@@ -104,7 +106,6 @@ export default function Home() {
   }
 
   function handleChangePeriodo() {
-    setTenantId(null);
     setPeriodo(null);
     setJobId(null);
     setJobCounts(undefined);
@@ -114,8 +115,9 @@ export default function Home() {
     setView('dashboard');
   }
 
-  function setViewFunc(newView: View) {
-    setView(newView);
+  function handleChangeTenant() {
+    setTenantId(null);
+    handleChangePeriodo();
   }
 
   function handleUploadAnother() {
@@ -231,11 +233,11 @@ export default function Home() {
             scrolling past the whole report first (reported by the
             client: clicked "Ver histórico de pendientes ARCA" and
             "no pasó nada visible" — it DID toggle, just far below the
-            fold). `showPeriodoReport` is set true on selection for a
-            cerrado período (see handlePeriodoSelected) and is only
-            otherwise meaningful for the 'abierto' toggle — an `||` here
-            would always win regardless of showPendientesHistorico, so
-            the visibility is branched by estado instead. */}
+            fold). `handleOpenPeriodo` always resets `showPeriodoReport` to
+            false on selection, regardless of estado — it's a per-toggle
+            flag now only meaningful for the 'abierto' branch below; an
+            `||` here would always win regardless of showPendientesHistorico,
+            so the visibility is branched by estado instead. */}
         {(periodo.estado === 'abierto' ? showPeriodoReport : !showPendientesHistorico) && (
           <PeriodoReportViewer periodoId={periodo.id} onClosed={(closed) => setPeriodo(closed)} />
         )}
@@ -307,40 +309,52 @@ export default function Home() {
         {tenantId && (
           <div className="flex flex-col gap-6">
             {/* Section A: Período en curso (Dashboard) */}
+            {view === 'dashboard' && dashboardError && (
+              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
+                {dashboardError}
+              </p>
+            )}
             {view === 'dashboard' && (
               <Dashboard
                 tenantId={tenantId}
                 userRole={user.role as 'admin' | 'colaborador' | 'cliente'}
                 onOpenPeriodo={handleOpenPeriodo}
-                onCreatePeriodo={async () => {
+                onChangeTenant={handleChangeTenant}
+                onCreatePeriodo={async (mes) => {
                   try {
-                    const newPeriodo = await createPeriodo(tenantId, new Date().toISOString().slice(0, 7));
+                    setDashboardError(null);
+                    const newPeriodo = await createPeriodo(tenantId, mes);
                     handleOpenPeriodo(newPeriodo);
                   } catch (err) {
                     console.error('Error creating período:', err);
-                    alert('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
+                    setDashboardError('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
+                    throw err;
                   }
                 }}
                 onReopenPeriodo={async (p) => {
                   // La confirmación ya la hace el ConfirmDialog interno del
                   // Dashboard (SectionB); acá solo ejecutamos la operación.
                   try {
+                    setDashboardError(null);
                     const { periodo: reopened } = await reabrirPeriodo(p.id);
                     if (periodo?.id === p.id) setPeriodo(reopened);
                   } catch (err) {
                     console.error('Error reopening período:', err);
-                    alert('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
+                    setDashboardError('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
+                    throw err;
                   }
                 }}
                 onDeletePeriodo={async (p) => {
                   // La confirmación ya la hace el ConfirmDialog interno del
                   // Dashboard (SectionA).
                   try {
+                    setDashboardError(null);
                     await eliminarPeriodo(p.id);
                     if (periodo?.id === p.id) setPeriodo(null);
                   } catch (err) {
                     console.error('Error deleting período:', err);
-                    alert('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
+                    setDashboardError('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
+                    throw err;
                   }
                 }}
                 // RF-26: "Ver reporte" on a closed período (Section B) also
@@ -357,28 +371,28 @@ export default function Home() {
               <div className="flex gap-4 mt-4">
                 <button
                   type="button"
-                  onClick={() => setViewFunc('dashboard')}
+                  onClick={() => setView('dashboard')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'dashboard' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Dashboard
                 </button>
                 <button
                   type="button"
-                  onClick={() => setViewFunc('circuit')}
+                  onClick={() => setView('circuit')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'circuit' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Circuito
                 </button>
                 <button
                   type="button"
-                  onClick={() => setViewFunc('report')}
+                  onClick={() => setView('report')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'report' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Reporte
                 </button>
                 <button
                   type="button"
-                  onClick={() => setViewFunc('pendientes-historico')}
+                  onClick={() => setView('pendientes-historico')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'pendientes-historico' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Histórico

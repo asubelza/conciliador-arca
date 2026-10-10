@@ -127,7 +127,7 @@ services:
         # from the user's browser on the host, not the Docker network, so
         # this is localhost:3000 (the api service's published port), not
         # http://api:3000 (which only resolves between containers).
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:3002
+        NEXT_PUBLIC_API_URL: http://localhost:3002
     container_name: conciliador-web
     ports:
       - "3001:3001"

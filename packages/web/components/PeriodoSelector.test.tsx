@@ -10,6 +10,10 @@ const TENANT_ID = '11111111-1111-1111-1111-111111111111';
  * down to pure tenant-entry — período list/create moved into Dashboard
  * (see Dashboard.test.tsx). `onSelected` now yields ONLY the tenantId; the
  * admin-only tolerance config panel stays here (design §AD-6).
+ *
+ * No tenant-existence round-trip: `GET /api/periodos` doesn't check a
+ * `tenants` table for admin/colaborador, so a client-side validation call
+ * here would have validated nothing — see PeriodoSelector.tsx's comment.
  */
 describe('T30/AD-6: PeriodoSelector (tenant entry only)', () => {
   beforeEach(() => {
@@ -21,7 +25,9 @@ describe('T30/AD-6: PeriodoSelector (tenant entry only)', () => {
     clearSession();
   });
 
-  it('rejects a non-UUID tenant_id and does not confirm a tenant', async () => {
+  it('rejects a non-UUID tenant_id, does not confirm a tenant, and never hits the network', async () => {
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
     const onSelected = jest.fn();
     render(<PeriodoSelector onSelected={onSelected} />);
 
@@ -30,9 +36,12 @@ describe('T30/AD-6: PeriodoSelector (tenant entry only)', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('tenant_id is required and must be a UUID');
     expect(screen.queryByRole('button', { name: /continuar al dashboard/i })).not.toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('confirms a valid UUID and calls onSelected with ONLY the tenantId on continue', async () => {
+  it('confirms a valid UUID synchronously (no network round-trip) and calls onSelected with ONLY the tenantId on continue', async () => {
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
     const onSelected = jest.fn();
     render(<PeriodoSelector onSelected={onSelected} />);
 
@@ -40,6 +49,7 @@ describe('T30/AD-6: PeriodoSelector (tenant entry only)', () => {
     await userEvent.click(screen.getByRole('button', { name: /ingresar/i }));
 
     expect(await screen.findByText(new RegExp(TENANT_ID))).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: /continuar al dashboard/i }));
 
     expect(onSelected).toHaveBeenCalledWith(TENANT_ID);

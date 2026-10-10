@@ -214,6 +214,28 @@ describe('ConfirmDialog', () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
+  it('does not steal focus back on a re-render that merely passes a new onCancel closure identity (regression: focus-trap effect depended on onCancel)', () => {
+    const { rerender } = render(
+      <ConfirmDialog title="Confirmar" text="¿Continuar?" onConfirm={() => {}} onCancel={() => {}} />
+    );
+    const confirmBtn = screen.getByRole('button', { name: 'Confirmar' });
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveFocus();
+
+    // Simulate the user navigating focus away from the initial target.
+    confirmBtn.focus();
+    expect(confirmBtn).toHaveFocus();
+
+    // Re-render with a BRAND NEW onCancel closure (identical props
+    // otherwise) — e.g. Dashboard's useConfirmAction recreates its `close`
+    // callback on every render. This must not re-run the mount/focus-trap
+    // effect and re-steal focus back to the cancel button.
+    rerender(
+      <ConfirmDialog title="Confirmar" text="¿Continuar?" onConfirm={() => {}} onCancel={() => {}} />
+    );
+
+    expect(confirmBtn).toHaveFocus();
+  });
+
   it('renders with loading state - confirm button is present, disabled, and has accessible name', () => {
     render(
       <ConfirmDialog

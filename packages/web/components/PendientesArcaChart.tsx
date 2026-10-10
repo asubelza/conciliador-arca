@@ -115,7 +115,7 @@ export function PendientesArcaChartComponent({
     );
   }
 
-  const { buckets, bucketValues, totals } = chartData;
+  const { buckets: orderedBuckets, bucketValues, totals } = chartData;
   const totalImporte = totals;
 
   // Determine max value for scaling. `Math.max` of an all-zero bucket set
@@ -127,12 +127,8 @@ export function PendientesArcaChartComponent({
     : 0;
   const maxBucketValue = rawMaxBucketValue > 0 ? rawMaxBucketValue : 1;
 
-  // Get the last 12 month buckets in order (most recent first)
-  const orderedBuckets = last12MonthBuckets();
-
   const chartWidth = 400;
   const chartHeight = 200;
-  const barWidth = 30;
   const barGap = 10;
   const leftMargin = 40;
   const rightMargin = 20;
@@ -174,11 +170,11 @@ export function PendientesArcaChartComponent({
     svgParts.push(
       <g
         key={`bar-${bucket}`}
-        transform={`translate(${x + barWidth / 2}, ${topMargin})`}
+        transform={`translate(${x + barWidthAdjusted / 2}, ${topMargin})`}
       >
         <rect
           x={0}
-          y={chartHeight - barHeight}
+          y={usableHeight - barHeight}
           width={barWidthAdjusted}
           height={barHeight}
           fill="url(#indigo-gradient)"
@@ -189,8 +185,8 @@ export function PendientesArcaChartComponent({
           {monthLabel}: ${value.toLocaleString('es-AR')}
         </title>
         <text
-          x={barWidth / 2}
-          y={barHeight > 20 ? chartHeight - barHeight + 10 : chartHeight - 5}
+          x={barWidthAdjusted / 2}
+          y={barHeight > 20 ? usableHeight - barHeight + 10 : usableHeight - 5}
           textAnchor="middle"
           fontSize={10}
           fill={value > 0 ? '#3182ce' : '#6b7280'}

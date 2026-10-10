@@ -42,11 +42,23 @@ export function ConfirmDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const onCancelRef = useRef(onCancel);
+
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
 
   // Focus management (WAI-ARIA dialog pattern): move focus into the dialog
   // on open (prefer the cancel button — the safer default for destructive
   // confirmations), trap Tab/Shift+Tab within it, and restore focus to
   // whatever was focused before the dialog opened once it closes.
+  //
+  // Mount-only effect (no `onCancel` in the dependency array): callers
+  // like Dashboard's `useConfirmAction` pass a new `onCancel` closure on
+  // every render, which would otherwise re-run this whole effect on every
+  // re-render — including during an `isLoading` transition, where
+  // `.focus()` on the now-disabled cancel button is a no-op, stranding
+  // focus outside the modal. `onCancelRef` always has the latest callback.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const initialFocusTarget = cancelButtonRef.current ?? confirmButtonRef.current;
@@ -54,7 +66,7 @@ export function ConfirmDialog({
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        onCancel?.();
+        onCancelRef.current?.();
         return;
       }
 
@@ -80,7 +92,7 @@ export function ConfirmDialog({
       document.removeEventListener('keydown', handleKeyDown);
       previouslyFocused?.focus();
     };
-  }, [onCancel]);
+  }, []); // mount-only — onCancelRef.current always has the latest callback
 
   return (
     <div className={baseDialogClass} onClick={() => onCancel?.()}>

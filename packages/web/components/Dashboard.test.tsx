@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DashboardShell } from './Dashboard';
 import { listPeriodos, getPendientesHistorico } from '../lib/api';
@@ -75,10 +75,11 @@ function renderDashboard(overrides: Partial<Parameters<typeof DashboardShell>[0]
     onReopenPeriodo: jest.fn(),
     onDeletePeriodo: jest.fn(),
     onViewReport: jest.fn(),
+    onChangeTenant: jest.fn(),
     ...overrides,
   };
-  render(<DashboardShell {...props} />);
-  return props;
+  const renderResult = render(<DashboardShell {...props} />);
+  return { ...props, ...renderResult };
 }
 
 beforeEach(() => {
@@ -318,6 +319,7 @@ describe('DashboardShell', () => {
       onReopenPeriodo: jest.fn(),
       onDeletePeriodo: jest.fn(),
       onViewReport: jest.fn(),
+      onChangeTenant: jest.fn(),
     };
     const { rerender } = render(<DashboardShell tenantId={TENANT_ID} {...baseProps} />);
 
@@ -337,5 +339,215 @@ describe('DashboardShell', () => {
 
     expect(screen.getByText('2026-08')).toBeInTheDocument();
     expect(screen.queryByText('2026-07')).not.toBeInTheDocument();
+  });
+
+  it('Section C ignora una respuesta stale de getPendientesHistorico cuando el tenantId cambia (race condition)', async () => {
+    let resolveFirst: (value: unknown) => void = () => {};
+    let resolveSecond: (value: unknown) => void = () => {};
+    const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
+    const secondPromise = new Promise((resolve) => { resolveSecond = resolve; });
+    mockedGetPendientesHistorico
+      .mockReturnValueOnce(firstPromise)
+      .mockReturnValueOnce(secondPromise);
+    mockedListPeriodos.mockResolvedValue([]);
+
+    const baseProps = {
+      userRole: 'admin' as const,
+      onOpenPeriodo: jest.fn(),
+      onCreatePeriodo: jest.fn(),
+      onReopenPeriodo: jest.fn(),
+      onDeletePeriodo: jest.fn(),
+      onViewReport: jest.fn(),
+      onChangeTenant: jest.fn(),
+    };
+    const { rerender } = render(<DashboardShell tenantId={TENANT_ID} {...baseProps} />);
+
+    // Force a second, independent fetch while the first is still in flight
+    // (e.g. a tenant switch) — the OLDER request (TENANT_ID) resolves LAST
+    // below, simulating stale data overwriting the newer tenant's result
+    // if responses aren't sequenced by request id.
+    rerender(<DashboardShell tenantId={`${TENANT_ID}-other`} {...baseProps} />);
+
+    resolveSecond(historicoVacio);
+    expect(await screen.findByText(/Sin pendientes ARCA/i)).toBeInTheDocument();
+
+    resolveFirst(historicoConDatos);
+    // Flush enough micro+macrotasks for the stale `load()` call's `await
+    // getPendientesHistorico(tenantId)` continuation (setResult) to run,
+    // if nothing guards against it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText(/Sin pendientes ARCA/i)).toBeInTheDocument();
+    // Stronger check: the stale response's distinguishing content
+    // ("total importe", only rendered by the non-empty chart) must never
+    // appear — a weaker check could pass vacuously before React flushes.
+    expect(screen.queryByText(/total importe/i)).not.toBeInTheDocument();
+  });
+
+  it('siempre ofrece un control para cambiar de tenant, incluso con cero períodos (evita el dead-end de las nav tabs)', async () => {
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    const props = renderDashboard();
+
+    await screen.findByText(/todavía no tiene períodos/i);
+    const changeTenantBtn = screen.getByRole('button', { name: /Cambiar tenant/i });
+    await userEvent.click(changeTenantBtn);
+    expect(props.onChangeTenant).toHaveBeenCalledTimes(1);
+  });
+
+  it('deshabilita el botón Confirmar mientras la eliminación está en curso, evitando una segunda mutación concurrente (race condition)', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    let resolveDelete: () => void = () => {};
+    const onDeletePeriodo = jest.fn(
+      () => new Promise<void>((resolve) => { resolveDelete = resolve; }),
+    );
+    renderDashboard({ onDeletePeriodo });
+
+    await userEvent.click(await screen.findByRole('button', { name: /Eliminar/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+
+    // Still mid-flight: the confirm button must stay disabled so a second
+    // click can't fire a concurrent mutation against an already-mutated período.
+    expect(screen.getByRole('button', { name: /Confirmar/i })).toBeDisabled();
+    expect(onDeletePeriodo).toHaveBeenCalledTimes(1);
+
+    resolveDelete();
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: /Eliminar período/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('Section B: deshabilita el botón Confirmar de "Reabrir" mientras la reapertura está en curso', async () => {
+    mockedListPeriodos.mockResolvedValue([cerradoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    let resolveReopen: () => void = () => {};
+    const onReopenPeriodo = jest.fn(
+      () => new Promise<void>((resolve) => { resolveReopen = resolve; }),
+    );
+    renderDashboard({ onReopenPeriodo });
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Reabrir$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+
+    expect(screen.getByRole('button', { name: /Confirmar/i })).toBeDisabled();
+    expect(onReopenPeriodo).toHaveBeenCalledTimes(1);
+
+    resolveReopen();
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: /Reabrir período/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('no lanza ni deja una mutación en el aire si se desmonta durante el refresh posterior a crear un período (memory-leak guard)', async () => {
+    // NOTE: React 18 already silently no-ops a setState call made after
+    // unmount (no thrown error, no console warning in this exact scenario —
+    // confirmed empirically: this assertion alone doesn't discriminate
+    // before/after the isMountedRef guard). This test is kept as a
+    // crash/smoke guard for the unmount-during-refresh sequence itself;
+    // the isMountedRef guard in Dashboard.tsx's refresh() is the actual
+    // fix and is intentionally defensive — matches this repo's precedent
+    // for signature-only/defensive changes where RED/GREEN triangulation
+    // is skipped (see PR-9.md's T62 note).
+    mockedListPeriodos.mockResolvedValueOnce([]); // initial mount fetch
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+
+    let resolveCreate: () => void = () => {};
+    const onCreatePeriodo = jest.fn(
+      () => new Promise<void>((resolve) => { resolveCreate = resolve; }),
+    );
+    const { unmount } = renderDashboard({ onCreatePeriodo });
+
+    await screen.findByText(/todavía no tiene períodos/i);
+
+    mockedListPeriodos.mockResolvedValueOnce([abiertoPeriodo]); // the post-mutation refresh
+    await userEvent.click(screen.getByRole('button', { name: /Crear nuevo período/i }));
+
+    // Simulate page.tsx navigating away (unmounting DashboardShell) the
+    // instant onCreatePeriodo's action resolves — exactly what
+    // handleOpenPeriodo does in the real app.
+    expect(() => {
+      unmount();
+      resolveCreate();
+    }).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('"Crear nuevo período" permite elegir el mes en vez de quedar fijo al mes actual (regresión vs. PeriodoSelector pre-Dashboard)', async () => {
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    const props = renderDashboard();
+
+    const monthInput = await screen.findByLabelText(/mes del nuevo per[ií]odo/i);
+    fireEvent.change(monthInput, { target: { value: '2025-11' } });
+
+    await userEvent.click(screen.getByRole('button', { name: /Crear nuevo período/i }));
+    expect(props.onCreatePeriodo).toHaveBeenCalledWith('2025-11');
+  });
+
+  it('deshabilita "Crear nuevo período" si el mes queda vacío (regresión: faltaba el guard al mover crear a Dashboard)', async () => {
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    const props = renderDashboard();
+
+    const monthInput = await screen.findByLabelText(/mes del nuevo per[ií]odo/i);
+    fireEvent.change(monthInput, { target: { value: '' } });
+
+    expect(screen.getByRole('button', { name: /Crear nuevo período/i })).toBeDisabled();
+    expect(props.onCreatePeriodo).not.toHaveBeenCalled();
+  });
+
+  it('el mes por defecto usa la fecha LOCAL, no UTC (regresión: toISOString() rueda al mes siguiente cerca de medianoche en Argentina)', async () => {
+    const originalTZ = process.env.TZ;
+    process.env.TZ = 'America/Argentina/Buenos_Aires'; // UTC-3, sin DST
+    jest.useFakeTimers();
+    // Local 2026-01-31 23:00 ART = UTC 2026-02-01 02:00 — toISOString() diría "2026-02".
+    jest.setSystemTime(new Date(2026, 0, 31, 23, 0, 0));
+    try {
+      mockedListPeriodos.mockResolvedValue([]);
+      mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+      renderDashboard();
+
+      const monthInput = await screen.findByLabelText(/mes del nuevo per[ií]odo/i);
+      expect(monthInput).toHaveValue('2026-01');
+    } finally {
+      jest.useRealTimers();
+      process.env.TZ = originalTZ;
+    }
+  });
+
+  it('un reabrir exitoso también refresca pendientes-histórico de Sección C (regresión: afterMutation solo refrescaba la lista)', async () => {
+    mockedListPeriodos.mockResolvedValue([cerradoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    const onReopenPeriodo = jest.fn().mockResolvedValue(undefined);
+    renderDashboard({ onReopenPeriodo });
+
+    await screen.findByRole('button', { name: /^Reabrir$/i });
+    expect(mockedGetPendientesHistorico).toHaveBeenCalledTimes(1); // initial mount fetch
+
+    await userEvent.click(screen.getByRole('button', { name: /^Reabrir$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+
+    await waitFor(() => expect(mockedGetPendientesHistorico).toHaveBeenCalledTimes(2));
+  });
+
+  it('una mutación fallida NO dispara un refresh de listPeriodos (regresión: afterMutation refrescaba igual aunque la acción rechazara)', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    const onDeletePeriodo = jest.fn().mockRejectedValue(new Error('boom'));
+    renderDashboard({ onDeletePeriodo });
+
+    await screen.findByRole('button', { name: /Eliminar/i });
+    expect(mockedListPeriodos).toHaveBeenCalledTimes(1); // initial mount fetch
+
+    await userEvent.click(screen.getByRole('button', { name: /Eliminar/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: /Eliminar período/i })).not.toBeInTheDocument(),
+    );
+    expect(mockedListPeriodos).toHaveBeenCalledTimes(1); // no wasted refetch after the failure
   });
 });
