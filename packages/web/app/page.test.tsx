@@ -115,7 +115,8 @@ describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period repor
     render(<Home />);
 
     await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
-    await userEvent.click(screen.getByRole('button', { name: /buscar períodos/i }));
+    await userEvent.click(screen.getByRole('button', { name: /ingresar/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /continuar al dashboard/i }));
     await userEvent.click(await screen.findByRole('button', { name: /2026-08-01/i }));
 
     // cerrado período: the report shows by default, no scrolling needed.
@@ -136,5 +137,37 @@ describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period repor
 
     expect(await screen.findByText(/conciliados ok \(1\)/i)).toBeInTheDocument();
     expect(screen.queryByText(/histórico de pendientes en arca/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * 2026-10-11: review fix for a dead-end introduced by AD-6's período-list
+ * restructuring — if `listPeriodos` fails (or the tenant has zero
+ * períodos), the user was stuck on that screen with no way back to tenant
+ * entry, since `PeriodoSelector` only remounts once `tenantId` is cleared.
+ * "Cambiar tenant" gives that escape hatch regardless of fetch outcome.
+ */
+describe('2026-10-11: períodos screen has a way back to tenant entry on fetch error', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('shows "Cambiar tenant" on a listPeriodos failure and returns to PeriodoSelector on click', async () => {
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'db down' }) })) as unknown as typeof fetch;
+
+    render(<Home />);
+
+    await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+    await userEvent.click(screen.getByRole('button', { name: /ingresar/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /continuar al dashboard/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/db down/i);
+
+    await userEvent.click(screen.getByRole('button', { name: /cambiar tenant/i }));
+
+    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

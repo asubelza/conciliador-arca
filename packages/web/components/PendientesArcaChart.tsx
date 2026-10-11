@@ -24,6 +24,10 @@ function last12MonthBuckets(): string[] {
   const buckets = new Set<string>();
   for (let i = 0; i < 12; i++) {
     const d = new Date();
+    // Pin the day to 1 BEFORE subtracting months — otherwise, on days 29-31,
+    // rolling back to a shorter month overflows into the following month
+    // (e.g. Mar 31 minus 1 month would land on Mar 3, not Feb).
+    d.setDate(1);
     d.setMonth(now.getMonth() - i);
     const bucket = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     buckets.add(bucket);
@@ -170,7 +174,7 @@ export function PendientesArcaChartComponent({
       >
         <rect
           x={0}
-          y={chartHeight - barHeight}
+          y={usableHeight - barHeight}
           width={barWidthAdjusted}
           height={barHeight}
           fill="url(#indigo-gradient)"
@@ -182,7 +186,7 @@ export function PendientesArcaChartComponent({
         </title>
         <text
           x={barWidth / 2}
-          y={barHeight > 20 ? chartHeight - barHeight + 10 : chartHeight - 5}
+          y={barHeight > 20 ? usableHeight - barHeight + 10 : usableHeight - 5}
           textAnchor="middle"
           fontSize={10}
           fill={value > 0 ? '#3182ce' : '#6b7280'}
@@ -220,7 +224,7 @@ export function PendientesArcaChartComponent({
         <svg
           width={chartWidth}
           height={chartHeight}
-          viewBox="0 0 {chartWidth} {chartHeight}"
+          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
           className="overflow-hidden"
         >
           {svgParts}
