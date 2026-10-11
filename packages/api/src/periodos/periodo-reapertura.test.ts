@@ -1,7 +1,12 @@
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 import { cerrarPeriodo } from './periodo-cierre';
 import { reabrirPeriodo } from './periodo-reapertura';
 import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+
+// No FK on audit_trail.user_id — a bare UUID is enough to assert the acting
+// user is actually threaded through to the audit row (see RF-34 test below).
+const TEST_USER_ID = randomUUID();
 
 /**
  * T52 — RF-31..RF-34
@@ -83,7 +88,7 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
     const closed = await cerrarPeriodo(pool, p1, null);
     if ('code' in closed) throw new Error('expected the initial cierre to succeed');
 
-    const result = await reabrirPeriodo(pool, p1);
+    const result = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     if ('code' in result) throw new Error(`expected success, got failure: ${result.error}`);
 
     expect(result.counts.vouchers_reabiertos).toBe(4);
@@ -115,7 +120,7 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
     const closedAtBefore = closed.periodo.cerrado_at;
     expect(closedAtBefore).toBeTruthy();
 
-    const result = await reabrirPeriodo(pool, p1);
+    const result = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     if ('code' in result) throw new Error('expected success');
 
     expect(result.periodo).toEqual({
@@ -154,7 +159,7 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
     const closed = await cerrarPeriodo(pool, p1, null);
     if ('code' in closed) throw new Error('expected the initial cierre to succeed');
 
-    const result = await reabrirPeriodo(pool, p1);
+    const result = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     if ('code' in result) throw new Error('expected success');
     // Only the stamped pair was undone; the manual mark is not counted.
     expect(result.counts.vouchers_reabiertos).toBe(2);
@@ -185,7 +190,7 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
     if ('code' in closed) throw new Error('expected the initial cierre to succeed');
     expect(closed.counts.pendiente_en_arca).toBe(5);
 
-    const result = await reabrirPeriodo(pool, p1);
+    const result = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     if ('code' in result) throw new Error('expected success');
 
     const { rows } = await pool.query<{ id: string; estado: string; periodo_alta_id: string; periodo_cierre_id: string | null }>(
@@ -218,7 +223,7 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
       [p1],
     );
 
-    const reopened = await reabrirPeriodo(pool, p1);
+    const reopened = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     if ('code' in reopened) throw new Error('expected the reopen to succeed');
 
     const secondClose = await cerrarPeriodo(pool, p1, null);
@@ -238,21 +243,22 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
     const closed = await cerrarPeriodo(pool, p1, null);
     if ('code' in closed) throw new Error('expected the initial cierre to succeed');
 
-    const result = await reabrirPeriodo(pool, p1);
+    const result = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     if ('code' in result) throw new Error('expected success');
 
-    const { rows } = await pool.query<{ details: Record<string, unknown> }>(
-      "SELECT details FROM audit_trail WHERE tenant_id = $1 AND action = 'reopen' AND entity = 'periodo' AND entity_id = $2",
+    const { rows } = await pool.query<{ details: Record<string, unknown>; user_id: string }>(
+      "SELECT details, user_id FROM audit_trail WHERE tenant_id = $1 AND action = 'reopen' AND entity = 'periodo' AND entity_id = $2",
       [tenantId, p1],
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].details).toEqual({ vouchers_reabiertos: 2, resultados_eliminados: 1 });
+    expect(rows[0].user_id).toBe(TEST_USER_ID);
   });
 
   it('RF-31/RF-34 Scenario: reopening an already-abierto período fails typed 409 ALREADY_ABIERTO and leaves no audit row', async () => {
     const p1 = await createTestPeriodo(pool, tenantId, '2026-06-01');
 
-    const result = await reabrirPeriodo(pool, p1);
+    const result = await reabrirPeriodo(pool, p1, TEST_USER_ID);
     expect(result).toEqual({ code: 'ALREADY_ABIERTO', status: 409, error: 'período is already abierto' });
 
     const { rows } = await pool.query(
@@ -263,7 +269,7 @@ describe('T52/T53: reabrirPeriodo (RF-31, RF-32, RF-33, RF-34)', () => {
   });
 
   it('RF-31 Scenario: returns a typed 404 NOT_FOUND failure for an unknown período id', async () => {
-    const result = await reabrirPeriodo(pool, '00000000-0000-0000-0000-000000000000');
+    const result = await reabrirPeriodo(pool, '00000000-0000-0000-0000-000000000000', TEST_USER_ID);
     expect(result).toEqual({ code: 'NOT_FOUND', status: 404, error: 'período not found' });
   });
 });

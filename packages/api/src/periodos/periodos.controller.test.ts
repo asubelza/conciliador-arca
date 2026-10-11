@@ -836,6 +836,12 @@ describe('T18: /api/periodos (integration)', () => {
           },
           counts: { vouchers_reabiertos: 0, resultados_eliminados: 0 },
         });
+
+        const { rows: auditRows } = await pool.query<{ user_id: string }>(
+          "SELECT user_id FROM audit_trail WHERE action = 'reopen' AND entity = 'periodo' AND entity_id = $1",
+          [periodoId],
+        );
+        expect(auditRows).toEqual([{ user_id: userId }]);
       } finally {
         await deleteTestUser(pool, userId);
       }
@@ -868,16 +874,17 @@ describe('T18: /api/periodos (integration)', () => {
       }
     });
 
-    it('RF-35 Scenario: an admin deletes an empty período — 200 {deleted:true, periodo_id}, row gone', async () => {
+    it('RF-35 Scenario: an admin deletes an empty período — 200 {deleted:true, periodo_id}, row gone, audited with the acting admin', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/periodos')
         .set('Authorization', adminAuth)
         .send({ tenant_id: pr8TenantId, mes: '2026-03-01' });
       const periodoId = created.body.id;
 
+      const deletingAdminId = randomUUID();
       const res = await request(app.getHttpServer())
         .delete(`/api/periodos/${periodoId}`)
-        .set('Authorization', adminAuth);
+        .set('Authorization', authHeaderFor('admin', { sub: deletingAdminId }));
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ deleted: true, periodo_id: periodoId });
 
@@ -885,6 +892,12 @@ describe('T18: /api/periodos (integration)', () => {
         .get(`/api/periodos/${periodoId}`)
         .set('Authorization', adminAuth);
       expect(detail.status).toBe(404);
+
+      const { rows: auditRows } = await pool.query<{ user_id: string }>(
+        "SELECT user_id FROM audit_trail WHERE action = 'delete' AND entity = 'periodo' AND entity_id = $1",
+        [periodoId],
+      );
+      expect(auditRows).toEqual([{ user_id: deletingAdminId }]);
     });
 
     it('RF-35 Scenario: colaborador AND cliente are rejected with 403 on DELETE (admin-only)', async () => {

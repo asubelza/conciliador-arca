@@ -52,7 +52,7 @@ interface PeriodoRowForEliminacion {
  * map it to the right HTTP status, same style as periodo-cierre.ts /
  * periodo-reapertura.ts.
  */
-export async function eliminarPeriodo(pool: Pool, periodoId: string): Promise<PeriodoEliminacionResult | PeriodoEliminacionFailure> {
+export async function eliminarPeriodo(pool: Pool, periodoId: string, userId: string): Promise<PeriodoEliminacionResult | PeriodoEliminacionFailure> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -99,6 +99,7 @@ export async function eliminarPeriodo(pool: Pool, periodoId: string): Promise<Pe
     // leaves an audit row behind.
     await logAuditEvent(client, {
       tenantId: periodo.tenant_id,
+      userId,
       action: 'delete',
       entity: 'periodo',
       entityId: periodoId,

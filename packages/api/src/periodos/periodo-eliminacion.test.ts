@@ -1,6 +1,11 @@
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 import { eliminarPeriodo } from './periodo-eliminacion';
 import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+
+// No FK on audit_trail.user_id — a bare UUID is enough to assert the acting
+// user is actually threaded through to the audit row (see the delete-sequence test below).
+const TEST_USER_ID = randomUUID();
 
 /**
  * T54 — RF-36..RF-38
@@ -69,7 +74,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
   it('RF-35 Scenario: deleting a truly empty período returns {deleted:true} and physically removes the row', async () => {
     const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
 
-    const result = await eliminarPeriodo(pool, p1);
+    const result = await eliminarPeriodo(pool, p1, TEST_USER_ID);
     expect(result).toEqual({ deleted: true, periodo_id: p1 });
 
     const { rows } = await pool.query('SELECT id FROM periodos WHERE id = $1', [p1]);
@@ -79,7 +84,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
   it('RF-38 Scenario: the freed (tenant_id, mes) slot becomes recreatable after a successful delete', async () => {
     const p1 = await createTestPeriodo(pool, tenantId, '2026-07-01');
 
-    const result = await eliminarPeriodo(pool, p1);
+    const result = await eliminarPeriodo(pool, p1, TEST_USER_ID);
     expect(result).toEqual({ deleted: true, periodo_id: p1 });
 
     // UNIQUE (tenant_id, mes) must accept a new período for the same month.
@@ -91,20 +96,20 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
   it('design delete-sequence: a successful delete is audited in-transaction; a blocked one leaves no audit row', async () => {
     const p1 = await createTestPeriodo(pool, tenantId, '2026-02-01');
 
-    const result = await eliminarPeriodo(pool, p1);
+    const result = await eliminarPeriodo(pool, p1, TEST_USER_ID);
     expect(result).toEqual({ deleted: true, periodo_id: p1 });
 
-    const { rows } = await pool.query<{ entity: string | null; entity_id: string | null }>(
-      "SELECT entity, entity_id FROM audit_trail WHERE tenant_id = $1 AND action = 'delete'",
+    const { rows } = await pool.query<{ entity: string | null; entity_id: string | null; user_id: string | null }>(
+      "SELECT entity, entity_id, user_id FROM audit_trail WHERE tenant_id = $1 AND action = 'delete'",
       [tenantId],
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ entity: 'periodo', entity_id: p1 });
+    expect(rows[0]).toMatchObject({ entity: 'periodo', entity_id: p1, user_id: TEST_USER_ID });
 
     // Now a BLOCKED attempt must not add a second 'delete' row.
     const p2 = await createTestPeriodo(pool, tenantId, '2026-02-01'); // same mes is free again after p1's delete
     const blocked = await insertVoucher(pool, tenantId, { fileSource: 'arca', periodoAltaId: p2, numero: 777 });
-    const secondAttempt = await eliminarPeriodo(pool, p2);
+    const secondAttempt = await eliminarPeriodo(pool, p2, TEST_USER_ID);
     if (!('code' in secondAttempt)) throw new Error('expected the guarded delete to be blocked');
     expect(secondAttempt.status).toBe(409);
 
@@ -142,7 +147,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
       [tenantId, p2],
     );
 
-    const blocked = await eliminarPeriodo(pool, p2);
+    const blocked = await eliminarPeriodo(pool, p2, TEST_USER_ID);
     if (!('code' in blocked)) throw new Error('expected the guarded delete to be blocked');
     expect(blocked.code).toBe('BLOCKED');
     expect(blocked.status).toBe(409);
@@ -167,7 +172,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
       [tenantId, p1],
     );
 
-    const blocked = await eliminarPeriodo(pool, p1);
+    const blocked = await eliminarPeriodo(pool, p1, TEST_USER_ID);
     if (!('code' in blocked)) throw new Error('expected the guarded delete to be blocked');
     expect(blocked.status).toBe(409);
     expect(blocked.error).toBe(
@@ -179,7 +184,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
   });
 
   it('RF-36 Scenario: returns a typed 404 NOT_FOUND failure for an unknown período id', async () => {
-    const result = await eliminarPeriodo(pool, '00000000-0000-0000-0000-000000000000');
+    const result = await eliminarPeriodo(pool, '00000000-0000-0000-0000-000000000000', TEST_USER_ID);
     expect(result).toEqual({ code: 'NOT_FOUND', status: 404, error: 'período not found' });
   });
 
@@ -203,7 +208,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
 
       // Start the delete while the worker tx is still open: it MUST block
       // until the worker commits, then observe c1 > 0.
-      const deletePromise = eliminarPeriodo(pool, p1);
+      const deletePromise = eliminarPeriodo(pool, p1, TEST_USER_ID);
       let settled = false;
       const probe = deletePromise.then(
         () => {
@@ -240,7 +245,7 @@ describe('T54/T55: eliminarPeriodo (RF-35, RF-36, RF-37, RF-38)', () => {
     // Delete FIRST, commit, and only then run the worker-style tx against
     // the now-missing período: the INSERT hits an immediate FK violation
     // and nothing of the job survives.
-    const result = await eliminarPeriodo(pool, p1);
+    const result = await eliminarPeriodo(pool, p1, TEST_USER_ID);
     expect(result).toEqual({ deleted: true, periodo_id: p1 });
 
     const clientB = await pool.connect();

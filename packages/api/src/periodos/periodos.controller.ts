@@ -276,7 +276,7 @@ export class PeriodosController {
       }
     }
 
-    const result = await reabrirPeriodo(pool, id as string);
+    const result = await reabrirPeriodo(pool, id as string, req.user!.id);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }
@@ -313,7 +313,7 @@ export class PeriodosController {
       }
     }
 
-    const result = await eliminarPeriodo(pool, id as string);
+    const result = await eliminarPeriodo(pool, id as string, req.user!.id);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }

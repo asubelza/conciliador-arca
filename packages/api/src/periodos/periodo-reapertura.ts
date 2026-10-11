@@ -66,7 +66,7 @@ interface PeriodoRowForReapertura {
  * throws for the expected not-found/already-open cases) so the controller
  * can map it to the right HTTP status, same style as periodo-cierre.ts.
  */
-export async function reabrirPeriodo(pool: Pool, periodoId: string): Promise<PeriodoReaperturaResult | PeriodoReaperturaFailure> {
+export async function reabrirPeriodo(pool: Pool, periodoId: string, userId: string): Promise<PeriodoReaperturaResult | PeriodoReaperturaFailure> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -130,6 +130,7 @@ export async function reabrirPeriodo(pool: Pool, periodoId: string): Promise<Per
     // row too, so only committed reopens ever appear in audit_trail.
     await logAuditEvent(client, {
       tenantId: periodo.tenant_id,
+      userId,
       action: 'reopen',
       entity: 'periodo',
       entityId: periodoId,
