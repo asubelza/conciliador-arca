@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PeriodoSelector } from '@/components/PeriodoSelector';
 import { UploadForm } from '@/components/UploadForm';
 import { StatusPoller } from '@/components/StatusPoller';
@@ -12,7 +12,7 @@ import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
-import type { Periodo, SessionUser, StatusResponse } from '@/lib/api';
+import { listPeriodos, type Periodo, type SessionUser, type StatusResponse } from '@/lib/api';
 
 const ROLE_BADGE_CLASSES: Record<SessionUser['role'], string> = {
   admin: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300',
@@ -42,10 +42,20 @@ type UploadStep = 'upload' | 'processing' | 'completed';
  * resubmit into without ever seeing confirmation the previous upload
  * worked, and the per-job ReportViewer — fetched too early, while the job
  * was still processing — spun on a permanent 409).
+ *
+ * AD-6 (dashboard-principal): `PeriodoSelector` was slimmed to a pure
+ * tenant-entry step (it now yields only `tenantId`) ahead of the
+ * `Dashboard` component that will own período listing/selection in a
+ * later slice. Until `Dashboard` lands, this screen fetches the período
+ * list itself — the same `listPeriodos` call PeriodoSelector used to
+ * make before AD-6 — so there's still a way to pick a período to drive
+ * the upload/report circuit below.
  */
 export default function Home() {
   const { user } = useAuth();
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [periodos, setPeriodos] = useState<Periodo[] | null>(null);
+  const [periodosError, setPeriodosError] = useState<string | null>(null);
   const [periodo, setPeriodo] = useState<Periodo | null>(null);
   const [uploadStep, setUploadStep] = useState<UploadStep>('upload');
   const [jobId, setJobId] = useState<string | null>(null);
@@ -53,6 +63,22 @@ export default function Home() {
   const [showJobReport, setShowJobReport] = useState(false);
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
   const [showPendientesHistorico, setShowPendientesHistorico] = useState(false);
+
+  useEffect(() => {
+    if (!tenantId || periodo) return;
+    let cancelled = false;
+    setPeriodosError(null);
+    listPeriodos(tenantId)
+      .then((list) => {
+        if (!cancelled) setPeriodos(list);
+      })
+      .catch((err) => {
+        if (!cancelled) setPeriodosError(err instanceof Error ? err.message : 'No se pudieron cargar los períodos');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId, periodo]);
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
   // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
@@ -62,8 +88,15 @@ export default function Home() {
     return <LoginForm />;
   }
 
-  function handlePeriodoSelected(selectedTenantId: string, selectedPeriodo: Periodo) {
+  // AD-6: PeriodoSelector now only yields a tenantId — see this
+  // function's doc comment above for why período listing happens here.
+  function handleTenantSelected(selectedTenantId: string) {
     setTenantId(selectedTenantId);
+    setPeriodos(null);
+    setPeriodosError(null);
+  }
+
+  function handlePeriodoPicked(selectedPeriodo: Periodo) {
     setPeriodo(selectedPeriodo);
     setUploadStep('upload');
     setJobId(null);
@@ -75,6 +108,8 @@ export default function Home() {
 
   function handleChangePeriodo() {
     setTenantId(null);
+    setPeriodos(null);
+    setPeriodosError(null);
     setPeriodo(null);
     setJobId(null);
     setJobCounts(undefined);
@@ -131,7 +166,57 @@ export default function Home() {
       </header>
 
       <main className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8 sm:px-8">
-        {!periodo && <PeriodoSelector onSelected={handlePeriodoSelected} />}
+        {!tenantId && <PeriodoSelector onSelected={handleTenantSelected} />}
+
+        {tenantId && !periodo && (
+          <div className="flex max-w-xl flex-col gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-card dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-slate-700 dark:text-slate-300">Períodos existentes</h2>
+              <button
+                type="button"
+                onClick={handleChangePeriodo}
+                className="focus-ring rounded text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+              >
+                Cambiar tenant
+              </button>
+            </div>
+            {periodosError && (
+              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
+                {periodosError}
+              </p>
+            )}
+            {!periodosError && !periodos && (
+              <p className="text-sm text-slate-500 dark:text-slate-400">Buscando períodos…</p>
+            )}
+            {!periodosError && periodos && periodos.length === 0 && (
+              <p className="text-sm text-slate-500 dark:text-slate-400">Este tenant todavía no tiene períodos.</p>
+            )}
+            {!periodosError && periodos && periodos.length > 0 && (
+              <ul className="flex flex-col gap-2">
+                {periodos.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => handlePeriodoPicked(p)}
+                      className="focus-ring flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-sm hover:border-indigo-300 hover:bg-indigo-50/50 dark:border-slate-700 dark:hover:border-indigo-800 dark:hover:bg-indigo-950/20"
+                    >
+                      <span className="font-medium text-slate-800 dark:text-slate-100">{p.mes}</span>
+                      <span
+                        className={
+                          p.estado === 'abierto'
+                            ? 'rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                            : 'rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                        }
+                      >
+                        {p.estado}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {periodo && tenantId && (
           <div className="flex flex-col gap-6">

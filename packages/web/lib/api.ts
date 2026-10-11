@@ -14,6 +14,7 @@
  * token y vuelve a login").
  */
 import { clearSession, getSession } from './session';
+import type { PeriodoReabrirResponse, PeriodoDeleteResponse } from 'shared-types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
 
@@ -596,6 +597,39 @@ export async function updateTenantConfig(
   if (!res.ok) {
     handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Config update failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/**
+ * Reabrir un período cerrado — POST /api/periodos/:id/reabrir (RF-30/RF-33).
+ * Returns the reopened período plus how much of cierre's write set was
+ * undone (shared-types `PeriodoReabrirResponse`).
+ */
+export async function reabrirPeriodo(periodoId: string): Promise<PeriodoReabrirResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}/reabrir`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Reabrir failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/**
+ * Eliminar un período (hybrid guard) — DELETE /api/periodos/:id (RF-35).
+ * Returns `PeriodoDeleteResponse` on success (shared-types).
+ */
+export async function eliminarPeriodo(periodoId: string): Promise<PeriodoDeleteResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/periodos/${periodoId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Eliminar failed (${res.status})`));
   }
   return res.json();
 }
