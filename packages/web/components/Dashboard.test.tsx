@@ -315,3 +315,75 @@ describe('DashboardShell', () => {
     expect(screen.queryByRole('button', { name: /Cambiar tenant/i })).not.toBeInTheDocument();
   });
 });
+
+const TENANT_ID_B = '44444444-4444-4444-4444-444444444444';
+
+function baseShellProps(tenantId: string, userRole: 'admin' | 'colaborador' | 'cliente') {
+  return {
+    tenantId,
+    userRole,
+    onOpenPeriodo: jest.fn(),
+    onCreatePeriodo: jest.fn(),
+    onReopenPeriodo: jest.fn(),
+    onDeletePeriodo: jest.fn(),
+    onViewReport: jest.fn(),
+    onChangeTenant: jest.fn(),
+  };
+}
+
+/**
+ * Fix 6/7 (review 2026-10-11): `SectionC`'s `load` and `DashboardShell`'s
+ * `refresh` are `useCallback`-wrapped async fetches with no cancellation
+ * guard — a prop change (tenantId switching, same scenario as a rapid
+ * "Reintentar" re-click) that re-triggers the fetch before the previous one
+ * resolves could let the stale response clobber the fresher one. Both now
+ * guard with a request-generation ref.
+ */
+describe('Fix 6/7 (2026-10-11): a stale in-flight response does not clobber a fresher one', () => {
+  it('SectionC: a late pendientes-históricos response for the OLD tenant is discarded after the tenant changes', async () => {
+    const historicoOld = { ...historicoVacio, count_pendientes: 1 };
+    const historicoNew = { ...historicoVacio, count_pendientes: 99 };
+    let resolveOld: (value: PendientesHistoricoResult) => void = () => {};
+
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico
+      .mockImplementationOnce(() => new Promise<PendientesHistoricoResult>((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(historicoNew);
+
+    const { rerender } = render(<DashboardShell {...baseShellProps(TENANT_ID, 'cliente')} />);
+    // Switch tenants before the first (old tenant) fetch resolves — `load`
+    // gets a new identity (tenantId changed), re-running the mount effect.
+    rerender(<DashboardShell {...baseShellProps(TENANT_ID_B, 'cliente')} />);
+
+    expect(await screen.findByText('99')).toBeInTheDocument();
+
+    // The stale response for the OLD tenant arrives late.
+    resolveOld(historicoOld);
+    await waitFor(() => expect(mockedGetPendientesHistorico).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText('1')).not.toBeInTheDocument();
+    expect(screen.getByText('99')).toBeInTheDocument();
+  });
+
+  it('DashboardShell: a late listPeriodos response for the OLD tenant is discarded after the tenant changes', async () => {
+    const periodoOld = { ...abiertoPeriodo, mes: '2026-01' };
+    const periodoNew = { ...abiertoPeriodo, mes: '2026-12' };
+    let resolveOld: (value: unknown) => void = () => {};
+
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    mockedListPeriodos
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce([periodoNew]);
+
+    const { rerender } = render(<DashboardShell {...baseShellProps(TENANT_ID, 'admin')} />);
+    rerender(<DashboardShell {...baseShellProps(TENANT_ID_B, 'admin')} />);
+
+    expect(await screen.findByText('2026-12')).toBeInTheDocument();
+
+    resolveOld([periodoOld]);
+    await waitFor(() => expect(mockedListPeriodos).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText('2026-01')).not.toBeInTheDocument();
+    expect(screen.getByText('2026-12')).toBeInTheDocument();
+  });
+});

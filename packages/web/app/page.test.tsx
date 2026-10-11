@@ -378,3 +378,97 @@ describe('2026-10-11: Dashboard has a way back to tenant entry on fetch error', 
     expect(screen.queryByText(/db down/i)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Fix 1 (review 2026-10-11): "Crear nuevo período" used to call
+ * `createPeriodo` with `new Date().toISOString().slice(0, 7)` — the UTC
+ * month. In Argentina (UTC-3) this rolled over a day early: clicking
+ * between 21:00-23:59 local on the last day of the month created a
+ * período for NEXT month instead of the current one. Unit coverage for
+ * the extracted `currentLocalYearMonth()` helper lives in lib/date.test.ts
+ * — this test confirms the real click flow actually sends that local
+ * value through to the API, not a UTC-derived one.
+ */
+describe('Fix 1 (2026-10-11): "Crear nuevo período" sends the local month, not UTC', () => {
+  const ORIGINAL_TZ = process.env.TZ;
+
+  afterEach(() => {
+    jest.useRealTimers();
+    process.env.TZ = ORIGINAL_TZ;
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('creates the período for the local month even when UTC has already rolled over to the next month', async () => {
+    process.env.TZ = 'America/Argentina/Buenos_Aires'; // UTC-3, no DST
+    // 2026-08-31 23:30 local (ART) == 2026-09-01 02:30 UTC — a UTC-based
+    // read would wrongly produce '2026-09'.
+    jest.useFakeTimers({ doNotFake: ['queueMicrotask'] }).setSystemTime(new Date('2026-09-01T02:30:00.000Z'));
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+
+    let createdBody: { tenant_id: string; mes: string } | null = null;
+    global.fetch = jest.fn((input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/periodos?tenant_id=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ periodos: [] }) });
+      }
+      if (url.endsWith('/api/periodos') && init && (init as RequestInit).method === 'POST') {
+        createdBody = JSON.parse((init as RequestInit).body as string);
+        return Promise.resolve({ ok: true, json: async () => ({ ...abiertoPeriodo, mes: createdBody!.mes }) });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await user.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+    await user.click(screen.getByRole('button', { name: /ingresar/i }));
+    await user.click(await screen.findByRole('button', { name: /continuar al dashboard/i }));
+    await user.click(await screen.findByRole('button', { name: /Crear nuevo período/i }));
+
+    await waitFor(() => expect(createdBody).not.toBeNull());
+    expect(createdBody!.mes).toBe('2026-08');
+  });
+});
+
+/**
+ * Fix 2 (review 2026-10-11): `handleOpenPeriodo` never cleared
+ * `actionError`, unlike `handleTenantSelected`/`handleChangeTenant` — so a
+ * stale error banner from a failed mutation (e.g. a failed "Reabrir")
+ * stayed on screen after the user opened an unrelated, healthy período.
+ */
+describe('Fix 2 (2026-10-11): opening a período clears a stale actionError banner', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('clears the actionError banner left by a failed "Reabrir" once a healthy período is opened', async () => {
+    global.fetch = jest.fn((input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/periodos?tenant_id=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ periodos: [abiertoPeriodo, cerradoPeriodo] }) });
+      }
+      if (url.includes('/reabrir')) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'reabrir failed' }) });
+      }
+      if (url.includes(`/api/tenants/${TENANT_ID}/pendientes-historico`)) {
+        return Promise.resolve({ ok: true, json: async () => pendientesHistoricoBody });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Reabrir$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Error al reabrir período: reabrir failed/i);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Abrir' }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});

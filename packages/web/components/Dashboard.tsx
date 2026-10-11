@@ -1,24 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { getPendientesHistorico, type PendientesHistoricoResult } from '@/lib/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { getPendientesHistorico, type PendientesHistoricoResult, type Periodo } from '@/lib/api';
 import { listPeriodos } from '@/lib/api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { PendientesArcaChart } from './PendientesArcaChart';
-import { PeriodoReportViewer } from './PeriodoReportViewer';
 import { PendientesHistoricoViewer } from './PendientesHistoricoViewer';
 import { SpinnerIcon, WarningIcon } from './icons';
-
-export interface Periodo {
-  id: string;
-  tenant_id: string;
-  mes: string;
-  estado: 'abierto' | 'cerrado';
-  tolerancia_ars: string | null;
-  cerrado_at: string | null;
-  cerrado_por: string | null;
-  created_at?: string;
-}
 
 /** Section A: Período en curso */
 interface SectionAProps {
@@ -250,19 +238,33 @@ function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, o
 function SectionC({ tenantId, userRole, onViewHistoricoCompleto }: SectionCProps) {
   const [result, setResult] = useState<PendientesHistoricoResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Fix 6 (review): `load` is a useCallback-wrapped async fetch (not a raw
+  // effect), invoked both from the mount effect and from "Reintentar". A
+  // fast re-click before the first call resolves, or an unmount mid-flight,
+  // could otherwise let a stale response clobber fresher state, or set
+  // state after unmount — same risk StatusPoller.tsx guards with a
+  // `cancelled` flag, adapted here as a request-generation ref since this
+  // isn't a single bare effect.
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setError(null);
     try {
       const data = await getPendientesHistorico(tenantId);
+      if (requestIdRef.current !== requestId) return;
       setResult(data);
     } catch (err) {
+      if (requestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
     }
   }, [tenantId]);
 
   useEffect(() => {
     load();
+    return () => {
+      requestIdRef.current++;
+    };
   }, [load]);
 
   if (error) {
@@ -363,21 +365,33 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   // RF-25/RF-29: Sections A+B share ONE listPeriodos call (partitioned
   // client-side by estado) — so its own loading/error state is per-fetch,
   // independent from Section C's separate pendientes-historico fetch.
+  // Fix 7 (review): same request-generation guard as SectionC's `load` —
+  // `refresh` is useCallback-wrapped and re-invoked both on mount and from
+  // "Reintentar"/afterMutation, so a rapid re-click or unmount mid-flight
+  // could otherwise let a stale response clobber fresher state.
+  const refreshRequestIdRef = useRef(0);
+
   const refresh = useCallback(async () => {
+    const requestId = ++refreshRequestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await listPeriodos(tenantId);
+      if (refreshRequestIdRef.current !== requestId) return;
       setPeriodos(data);
     } catch (err) {
+      if (refreshRequestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : 'Períodos fetch failed');
     } finally {
-      setLoading(false);
+      if (refreshRequestIdRef.current === requestId) setLoading(false);
     }
   }, [tenantId]);
 
   useEffect(() => {
     refresh();
+    return () => {
+      refreshRequestIdRef.current++;
+    };
   }, [refresh]);
 
   // Wrap the mutation callbacks so the dashboard's own copy of the list

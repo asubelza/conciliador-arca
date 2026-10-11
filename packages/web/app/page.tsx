@@ -13,6 +13,7 @@ import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
+import { currentLocalYearMonth } from '@/lib/date';
 import {
   reabrirPeriodo,
   eliminarPeriodo,
@@ -106,6 +107,7 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
+    setActionError(null);
     setView('circuit');
   }
 
@@ -238,9 +240,10 @@ export default function Home() {
             scrolling past the whole report first (reported by the
             client: clicked "Ver histórico de pendientes ARCA" and
             "no pasó nada visible" — it DID toggle, just far below the
-            fold). `showPeriodoReport` is set true on selection for a
-            cerrado período (see handlePeriodoSelected) and is only
-            otherwise meaningful for the 'abierto' toggle — an `||` here
+            fold). `showPeriodoReport` defaults to false and
+            handleOpenPeriodo resets it to false on every selection (it's
+            never set true for a cerrado período) — it's only otherwise
+            meaningful for the 'abierto' toggle above; an `||` here
             would always win regardless of showPendientesHistorico, so
             the visibility is branched by estado instead. */}
         {(periodo.estado === 'abierto' ? showPeriodoReport : !showPendientesHistorico) && (
@@ -331,7 +334,7 @@ export default function Home() {
                 onChangeTenant={handleChangeTenant}
                 onCreatePeriodo={async () => {
                   try {
-                    const newPeriodo = await createPeriodo(tenantId, new Date().toISOString().slice(0, 7));
+                    const newPeriodo = await createPeriodo(tenantId, currentLocalYearMonth());
                     setActionError(null);
                     handleOpenPeriodo(newPeriodo);
                   } catch (err) {
