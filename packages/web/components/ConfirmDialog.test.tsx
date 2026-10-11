@@ -251,4 +251,36 @@ describe('ConfirmDialog', () => {
     expect(confirmBtn).toBeInTheDocument();
     expect(confirmBtn).toBeDisabled();
   });
+
+  it('does not call onCancel when the backdrop is clicked while isLoading is true', async () => {
+    const onCancel = jest.fn();
+    render(
+      <ConfirmDialog
+        title="Eliminando"
+        text="Por favor espere..."
+        onConfirm={() => {}}
+        onCancel={onCancel}
+        isLoading={true}
+      />
+    );
+
+    await userEvent.click(screen.getByLabelText('Confirmación').parentElement as HTMLElement);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('does not call onCancel when Escape is pressed while isLoading is true', async () => {
+    const onCancel = jest.fn();
+    render(
+      <ConfirmDialog
+        title="Eliminando"
+        text="Por favor espere..."
+        onConfirm={() => {}}
+        onCancel={onCancel}
+        isLoading={true}
+      />
+    );
+
+    await userEvent.keyboard('{Escape}');
+    expect(onCancel).not.toHaveBeenCalled();
+  });
 });

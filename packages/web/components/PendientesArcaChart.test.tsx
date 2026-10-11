@@ -64,6 +64,18 @@ const emptyResult = {
 };
 
 describe('PendientesArcaChart - processData (pure utility)', () => {
+  // The hardcoded '2026-07'/'2026-06' bucket expectations below only hold
+  // because of the current wall-clock date — pin it so the test is
+  // deterministic regardless of when it actually runs.
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-15'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('buckets dates correctly by month', () => {
     const processed = processData(mockResultWithData);
 
@@ -82,6 +94,25 @@ describe('PendientesArcaChart - processData (pure utility)', () => {
     // All bucket values should be 0
     expect(processed.bucketValues['2026-07']).toBe(0);
     expect(processed.bucketValues['2026-06']).toBe(0);
+  });
+
+  it('does not roll over into the wrong month when pinned to the 31st (date-rollover regression)', () => {
+    // Regression for the classic JS Date bug: subtracting months from a
+    // day-31 date without first pinning the day to 1 overflows into the
+    // following month on any target month with fewer than 31 days. Pinned
+    // to 2026-03-31: Feb 2026 has 28 days, so computing "1 month back"
+    // without the day-1 pin lands on 2026-03-03 instead of 2026-02-xx,
+    // duplicating the 2026-03 bucket and dropping 2026-02 entirely.
+    jest.setSystemTime(new Date('2026-03-31'));
+
+    const processed = processData(emptyResult);
+
+    expect(processed.buckets.length).toBe(12);
+    expect(processed.buckets).toContain('2026-02');
+    expect(processed.buckets).toContain('2026-03');
+    // No duplicate buckets from the overflow (a Set would silently absorb
+    // the duplicate and under-count instead of throwing).
+    expect(new Set(processed.buckets).size).toBe(processed.buckets.length);
   });
 });
 
@@ -106,6 +137,15 @@ describe('last12MonthBuckets (day-of-month collision bug)', () => {
 });
 
 describe('PendientesArcaChartComponent', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-15'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('shows "Sin pendientes ARCA" when count_pendientes is 0', () => {
     const { unmount } = render(
       <PendientesArcaChartComponent result={emptyResult} />

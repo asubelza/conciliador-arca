@@ -43,10 +43,12 @@ export function ConfirmDialog({
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const onCancelRef = useRef(onCancel);
+  const isLoadingRef = useRef(isLoading);
 
   useEffect(() => {
     onCancelRef.current = onCancel;
-  }, [onCancel]);
+    isLoadingRef.current = isLoading;
+  }, [onCancel, isLoading]);
 
   // Focus management (WAI-ARIA dialog pattern): move focus into the dialog
   // on open (prefer the cancel button — the safer default for destructive
@@ -61,11 +63,21 @@ export function ConfirmDialog({
   // focus outside the modal. `onCancelRef` always has the latest callback.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    const initialFocusTarget = cancelButtonRef.current ?? confirmButtonRef.current;
-    initialFocusTarget?.focus();
+    // If every button starts disabled (mounted with isLoading=true and no
+    // cancel button to fall back on), neither ref is focusable — fall back
+    // to the dialog container itself so focus still lands inside the modal.
+    const initialFocusTarget = isLoadingRef.current
+      ? null
+      : cancelButtonRef.current ?? confirmButtonRef.current;
+    (initialFocusTarget ?? dialogRef.current)?.focus();
 
     function handleKeyDown(event: KeyboardEvent) {
+      // PR-9.1 review fix: guard Escape against dismissal while isLoading,
+      // matching the already-guarded backdrop click and confirm/cancel
+      // buttons below — read via a ref (not the `isLoading` prop directly)
+      // since this effect is mount-only (see the comment above).
       if (event.key === 'Escape') {
+        if (isLoadingRef.current) return;
         onCancelRef.current?.();
         return;
       }
@@ -95,12 +107,13 @@ export function ConfirmDialog({
   }, []); // mount-only — onCancelRef.current always has the latest callback
 
   return (
-    <div className={baseDialogClass} onClick={() => onCancel?.()}>
+    <div className={baseDialogClass} onClick={() => !isLoading && onCancel?.()}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Confirmación"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={modalClass}
       >

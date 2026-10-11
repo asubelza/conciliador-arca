@@ -28,6 +28,12 @@ function bucketMonth(fecha: string | null): string | null {
 export function last12MonthBuckets(now: Date = new Date()): string[] {
   const buckets = new Set<string>();
   for (let i = 0; i < 12; i++) {
+    // Build from day 1 of `now`'s month BEFORE subtracting months —
+    // otherwise, on days 29-31, rolling back to a shorter month overflows
+    // into the following month (e.g. Mar 31 minus 1 month would land on
+    // Mar 3, not Feb). Using `now.getFullYear()`/`now.getMonth()` directly
+    // (rather than `new Date()`) also keeps this correct for an injected
+    // `now` whose year differs from the real current year.
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const bucket = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     buckets.add(bucket);

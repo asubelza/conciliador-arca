@@ -2,24 +2,13 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getPendientesHistorico, listPeriodos, type PendientesHistoricoResult, type Periodo } from '@/lib/api';
+import { currentLocalYearMonth } from '@/lib/date';
 import { ConfirmDialog } from './ConfirmDialog';
 import { PendientesArcaChart } from './PendientesArcaChart';
-import { PeriodoReportViewer } from './PeriodoReportViewer';
 import { PendientesHistoricoViewer } from './PendientesHistoricoViewer';
 import { SpinnerIcon, WarningIcon } from './icons';
 
 export type { Periodo };
-
-/**
- * `Date#toISOString()` is always UTC — for Argentina (UTC-3), the last ~3
- * hours of any day already report the next UTC month, so it can't be used
- * to default a "current month" picker to the user's actual local month.
- */
-function currentLocalMonth(now = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  return `${year}-${month}`;
-}
 
 /** Section A: Período en curso */
 interface SectionAProps {
@@ -114,7 +103,7 @@ function useConfirmAction(action: (periodo: Periodo) => void | Promise<void>) {
 /** Section A - Período en curso */
 function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, onCreatePeriodo, onDeletePeriodo }: SectionAProps) {
   const { target: confirmPeriodo, isLoading: isDeleting, open, close, handleConfirm } = useConfirmAction(onDeletePeriodo);
-  const [nuevoMes, setNuevoMes] = useState(() => currentLocalMonth());
+  const [nuevoMes, setNuevoMes] = useState(() => currentLocalYearMonth());
 
   const openPeriodos = periodos.filter((p) => p.estado === 'abierto');
 
@@ -304,7 +293,7 @@ function SectionC({ result, error, onRetry, userRole, onViewHistoricoCompleto }:
           </div>
           <div>
             <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
-              {result.count_excluidos_previos_a_alta > 0 ? result.count_excluidos_previos_a_alta.toLocaleString('es-AR') : '0'}
+              {result.count_excluidos_previos_a_alta}
             </p>
             <p className="text-slate-500 dark:text-slate-400">
               excluidos previos a alta
@@ -355,10 +344,11 @@ export interface DashboardShellProps {
   onDeletePeriodo: (periodo: Periodo) => void | Promise<void>;
   /** Optional: navigate to a closed período's report. Defaults to a no-op. */
   onViewReport?: (periodo: Periodo) => void;
-  /** Always-reachable escape hatch back to tenant-entry (PeriodoSelector) —
-   * without this, a zero-período tenant or a cliente-role user has no way
-   * back short of logging out, since the nav tabs only appear once a
-   * período has been opened (see handleChangePeriodo in page.tsx). */
+  /** Escape hatch back to tenant entry when the períodos fetch fails or
+   * the tenant has no períodos at all — without this, a zero-período
+   * tenant or a cliente-role user would be stranded on the dashboard with
+   * no way back short of logging out, since the nav tabs in page.tsx only
+   * appear once a período has been opened. */
   onChangeTenant: () => void;
 }
 
@@ -391,7 +381,7 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   // calls overlap (e.g. a mutation firing before the initial fetch settles)
   // and the OLDER one resolves LAST, its stale response is ignored instead
   // of overwriting the newer, more accurate state (which could otherwise
-  // resurrect a période that was just deleted/reopened).
+  // resurrect a período that was just deleted/reopened).
   const requestIdRef = useRef(0);
   const refresh = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -412,6 +402,9 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
 
   useEffect(() => {
     refresh();
+    return () => {
+      requestIdRef.current++;
+    };
   }, [refresh]);
 
   // RF-27: Section C's single pendientes-historico fetch, lifted up here
@@ -422,6 +415,7 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   const [historicoError, setHistoricoError] = useState<string | null>(null);
   const historicoRequestIdRef = useRef(0);
   const loadHistorico = useCallback(async () => {
+    if (!isMountedRef.current) return;
     const requestId = ++historicoRequestIdRef.current;
     setHistoricoError(null);
     try {
@@ -458,21 +452,25 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
     await Promise.all([refresh(), loadHistorico()]);
   };
 
+  // 'Cambiar tenant' escape hatch: shown once loading settles and the
+  // períodos fetch either failed or came back empty, so the user is never
+  // stranded on a dashboard with nothing to do and no way back to pick a
+  // different tenant.
+  const showChangeTenantEscape = !loading && (!!error || (periodos !== null && periodos.length === 0));
+
   return (
     <div className="space-y-8">
-      {/* Always reachable, regardless of período/view state — otherwise a
-          zero-período tenant or cliente-role user has no way back to
-          PeriodoSelector short of logging out, since the nav tabs in
-          page.tsx only render once a período has been opened. */}
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={onChangeTenant}
-          className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-        >
-          Cambiar tenant
-        </button>
-      </div>
+      {showChangeTenantEscape && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onChangeTenant}
+            className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+          >
+            Cambiar tenant
+          </button>
+        </div>
+      )}
 
       {showHistoricoOverlay ? (
         <div className="space-y-4">

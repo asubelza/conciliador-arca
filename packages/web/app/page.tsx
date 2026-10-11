@@ -55,6 +55,10 @@ type View = 'dashboard' | 'circuit' | 'report' | 'pendientes-historico';
  * T30 (conciliacion-periodica): after período selection, the system enters
  * a view state machine: 'dashboard' | 'circuit' | 'report' | 'pendientes-historico'.
  * The UUID paste step MUST remain exactly as today.
+ *
+ * AD-6 (dashboard-principal): `PeriodoSelector` was slimmed to a pure
+ * tenant-entry step (it now yields only `tenantId`) — `Dashboard` (Section
+ * A/B) now owns período listing/selection via its own `listPeriodos` call.
  */
 export default function Home() {
   const { user } = useAuth();
@@ -102,9 +106,17 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
+    // Fix 2 (review 2026-10-11): clear a stale dashboardError left by a
+    // failed mutation (e.g. a failed "Reabrir") so it doesn't survive
+    // opening an unrelated, healthy período.
+    setDashboardError(null);
     setView('circuit');
   }
 
+  // Resets back to Dashboard for the SAME tenant — bound to the circuit
+  // view's own "Cambiar período" button. Deliberately does NOT clear
+  // tenantId (regression: it used to share a handler with "Cambiar tenant"
+  // and bounced the user all the way back to PeriodoSelector).
   function handleChangePeriodo() {
     setPeriodo(null);
     setJobId(null);
@@ -112,9 +124,14 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
+    setDashboardError(null);
     setView('dashboard');
   }
 
+  // AD-6: resets back to tenant entry (PeriodoSelector) — used both as the
+  // explicit "Cambiar tenant" action from the circuit view and as the
+  // escape hatch Dashboard offers when the períodos fetch fails or the
+  // tenant has no períodos at all.
   function handleChangeTenant() {
     setTenantId(null);
     handleChangePeriodo();
@@ -233,11 +250,12 @@ export default function Home() {
             scrolling past the whole report first (reported by the
             client: clicked "Ver histórico de pendientes ARCA" and
             "no pasó nada visible" — it DID toggle, just far below the
-            fold). `handleOpenPeriodo` always resets `showPeriodoReport` to
-            false on selection, regardless of estado — it's a per-toggle
-            flag now only meaningful for the 'abierto' branch below; an
-            `||` here would always win regardless of showPendientesHistorico,
-            so the visibility is branched by estado instead. */}
+            fold). `showPeriodoReport` defaults to false and
+            handleOpenPeriodo resets it to false on every selection (it's
+            never set true for a cerrado período) — it's only otherwise
+            meaningful for the 'abierto' toggle above; an `||` here
+            would always win regardless of showPendientesHistorico, so
+            the visibility is branched by estado instead. */}
         {(periodo.estado === 'abierto' ? showPeriodoReport : !showPendientesHistorico) && (
           <PeriodoReportViewer periodoId={periodo.id} onClosed={(closed) => setPeriodo(closed)} />
         )}
