@@ -13,7 +13,6 @@ import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
-import { currentLocalYearMonth } from '@/lib/date';
 import {
   reabrirPeriodo,
   eliminarPeriodo,
@@ -72,7 +71,7 @@ export default function Home() {
   const [view, setView] = useState<View>('dashboard');
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
   const [showPendientesHistorico, setShowPendientesHistorico] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
   // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
@@ -93,7 +92,7 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
-    setActionError(null);
+    setDashboardError(null);
     setView('dashboard');
   }
 
@@ -107,8 +106,26 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
-    setActionError(null);
+    // Fix 2 (review 2026-10-11): clear a stale dashboardError left by a
+    // failed mutation (e.g. a failed "Reabrir") so it doesn't survive
+    // opening an unrelated, healthy período.
+    setDashboardError(null);
     setView('circuit');
+  }
+
+  // Resets back to Dashboard for the SAME tenant — bound to the circuit
+  // view's own "Cambiar período" button. Deliberately does NOT clear
+  // tenantId (regression: it used to share a handler with "Cambiar tenant"
+  // and bounced the user all the way back to PeriodoSelector).
+  function handleChangePeriodo() {
+    setPeriodo(null);
+    setJobId(null);
+    setJobCounts(undefined);
+    setShowJobReport(false);
+    setShowPeriodoReport(false);
+    setShowPendientesHistorico(false);
+    setDashboardError(null);
+    setView('dashboard');
   }
 
   // AD-6: resets back to tenant entry (PeriodoSelector) — used both as the
@@ -117,14 +134,7 @@ export default function Home() {
   // tenant has no períodos at all.
   function handleChangeTenant() {
     setTenantId(null);
-    setPeriodo(null);
-    setJobId(null);
-    setJobCounts(undefined);
-    setShowJobReport(false);
-    setShowPeriodoReport(false);
-    setShowPendientesHistorico(false);
-    setActionError(null);
-    setView('dashboard');
+    handleChangePeriodo();
   }
 
   function handleUploadAnother() {
@@ -177,10 +187,10 @@ export default function Home() {
             )}
             <button
               type="button"
-              onClick={handleChangeTenant}
+              onClick={handleChangePeriodo}
               className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
             >
-              Cambiar tenant
+              Cambiar período
             </button>
           </div>
         </div>
@@ -316,54 +326,53 @@ export default function Home() {
 
         {tenantId && (
           <div className="flex flex-col gap-6">
-            {actionError && (
-              <p
-                role="alert"
-                className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400"
-              >
-                {actionError}
+            {/* Section A: Período en curso (Dashboard) */}
+            {view === 'dashboard' && dashboardError && (
+              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
+                {dashboardError}
               </p>
             )}
-
-            {/* Section A: Período en curso (Dashboard) */}
             {view === 'dashboard' && (
               <Dashboard
                 tenantId={tenantId}
                 userRole={user.role as 'admin' | 'colaborador' | 'cliente'}
                 onOpenPeriodo={handleOpenPeriodo}
                 onChangeTenant={handleChangeTenant}
-                onCreatePeriodo={async () => {
+                onCreatePeriodo={async (mes) => {
                   try {
-                    const newPeriodo = await createPeriodo(tenantId, currentLocalYearMonth());
-                    setActionError(null);
+                    setDashboardError(null);
+                    const newPeriodo = await createPeriodo(tenantId, mes);
                     handleOpenPeriodo(newPeriodo);
                   } catch (err) {
                     console.error('Error creating período:', err);
-                    setActionError('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
+                    setDashboardError('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
+                    throw err;
                   }
                 }}
                 onReopenPeriodo={async (p) => {
                   // La confirmación ya la hace el ConfirmDialog interno del
                   // Dashboard (SectionB); acá solo ejecutamos la operación.
                   try {
+                    setDashboardError(null);
                     const { periodo: reopened } = await reabrirPeriodo(p.id);
-                    setActionError(null);
                     if (periodo?.id === p.id) setPeriodo(reopened);
                   } catch (err) {
                     console.error('Error reopening período:', err);
-                    setActionError('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
+                    setDashboardError('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
+                    throw err;
                   }
                 }}
                 onDeletePeriodo={async (p) => {
                   // La confirmación ya la hace el ConfirmDialog interno del
                   // Dashboard (SectionA).
                   try {
+                    setDashboardError(null);
                     await eliminarPeriodo(p.id);
-                    setActionError(null);
                     if (periodo?.id === p.id) setPeriodo(null);
                   } catch (err) {
                     console.error('Error deleting período:', err);
-                    setActionError('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
+                    setDashboardError('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
+                    throw err;
                   }
                 }}
                 // RF-26: "Ver reporte" on a closed período (Section B) also

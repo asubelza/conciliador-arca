@@ -64,5 +64,21 @@ Two independent, pre-existing **environment/install-state** defects, unrelated t
 - Add a `predev`/CI check (`test -L node_modules/shared-types || npm install`) to catch this class of workspace-symlink drift automatically before someone spends time re-diagnosing config as the culprit.
 - Document the `conciliador_arca_test` bootstrap (migrations 000-023 + seed rows) as a repeatable script rather than ad hoc per-session, since it does not persist across environments/sandboxes.
 
-## Verdict
+## Verdict (original, 2026-09-26)
 **FAIL (environment-blocked)** for `packages/api`; **PASS** for `packages/web` (119/119, tsc clean, build clean). T67 cannot be closed until the api suite runs green again — this requires an `npm install` (relink workspaces) and recreating `conciliador_arca_test`, not a code fix. No dashboard-principal source defect found for RF-24..RF-29; RF-30..RF-40 remain provisionally trusted per PR-8's archived 503/503 evidence but are NOT re-verified at runtime in this session.
+
+## Re-verification (2026-10-08)
+
+Both environment blockers from the original run are confirmed resolved:
+
+1. **`shared-types` workspace symlink** — RESOLVED. `require.resolve('shared-types')` now resolves to `packages/shared-types/dist/index.js`.
+2. **`conciliador_arca_test` database** — RESOLVED. Exists in the `conciliador-pg` container (confirmed via `\l`), no bootstrap needed this time.
+
+**packages/api**: `npx jest --config jest.api.json` → **502/503 passed, 38/40 suites passed**. The only failing suites are the two pre-existing Windows teardown flakes already documented above (`file-row-stream.test.ts` ENOTEMPTY, `reconciliation.worker.test.ts` EPERM) — no new failures. `npx tsc --noEmit` clean — the pre-existing `TS2739` at `reconciliation.worker.ts:146` noted in the original WARNING below is also gone. `npm run build` (`nest build`) succeeded.
+
+**packages/web**: `npx jest --config jest.web.config.js` → **134/134 passed, 17/17 suites**. `npx tsc --noEmit` clean.
+
+This re-verifies RF-30..RF-40 (backend) at runtime, closing the gap left by the original environment-blocked run — all 16 RF-24..RF-40 requirements are now confirmed green at runtime, not just provisionally trusted.
+
+### Final Verdict
+**PASS.** T67 is closed. Both suites green (modulo the two pre-existing, unrelated Windows flakes), `tsc` clean in both packages, both builds succeed. No dashboard-principal source defects found.

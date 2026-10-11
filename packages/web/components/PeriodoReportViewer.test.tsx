@@ -179,16 +179,16 @@ describe('T31: PeriodoReportViewer', () => {
       });
     global.fetch = fetchMock as unknown as typeof fetch;
     const onClosed = jest.fn();
-    jest.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(<PeriodoReportViewer periodoId={PERIODO_ID} onClosed={onClosed} />);
     const cerrarButton = await screen.findByRole('button', { name: /cerrar conciliaci[oó]n del mes/i });
+    await userEvent.click(cerrarButton);
 
+    const dialog = await screen.findByRole('dialog');
     await act(async () => {
-      await userEvent.click(cerrarButton);
+      await userEvent.click(within(dialog).getByRole('button', { name: /^confirmar$/i }));
     });
 
-    expect(window.confirm).toHaveBeenCalled();
     await waitFor(() => expect(onClosed).toHaveBeenCalledWith(expect.objectContaining({ estado: 'cerrado' })));
     await waitFor(() => expect(screen.queryByRole('button', { name: /cerrar conciliaci[oó]n del mes/i })).not.toBeInTheDocument());
   });
@@ -196,13 +196,15 @@ describe('T31: PeriodoReportViewer', () => {
   it('does not close when the confirmation is declined', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody });
     global.fetch = fetchMock as unknown as typeof fetch;
-    jest.spyOn(window, 'confirm').mockReturnValue(false);
 
     render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
     const cerrarButton = await screen.findByRole('button', { name: /cerrar conciliaci[oó]n del mes/i });
     await userEvent.click(cerrarButton);
 
-    expect(window.confirm).toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^cancelar$/i }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial report load, no cierre POST
   });
 
@@ -436,13 +438,14 @@ describe('T31: PeriodoReportViewer', () => {
         .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'a2', estado: 'conciliado' }) })
         .mockResolvedValueOnce({ ok: true, json: async () => openReportBody });
       global.fetch = fetchMock as unknown as typeof fetch;
-      jest.spyOn(window, 'confirm').mockReturnValue(true);
       jest.spyOn(window, 'prompt').mockReturnValue('nunca va a matchear, cargado en arca hace meses');
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
       const resolverButton = await screen.findByRole('button', { name: /marcar como resuelto/i });
+      await userEvent.click(resolverButton);
+      const dialog = await screen.findByRole('dialog');
       await act(async () => {
-        await userEvent.click(resolverButton);
+        await userEvent.click(within(dialog).getByRole('button', { name: /^confirmar$/i }));
       });
 
       expect(fetchMock).toHaveBeenNthCalledWith(
@@ -458,12 +461,13 @@ describe('T31: PeriodoReportViewer', () => {
     it('does not call the API when the confirm dialog is cancelled', async () => {
       const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody });
       global.fetch = fetchMock as unknown as typeof fetch;
-      jest.spyOn(window, 'confirm').mockReturnValue(false);
       const promptSpy = jest.spyOn(window, 'prompt');
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
       const resolverButton = await screen.findByRole('button', { name: /marcar como resuelto/i });
       await userEvent.click(resolverButton);
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: /^cancelar$/i }));
 
       expect(promptSpy).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial load — no POST fired
@@ -472,12 +476,15 @@ describe('T31: PeriodoReportViewer', () => {
     it('aborts when confirmed but the nota prompt is cancelled', async () => {
       const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody });
       global.fetch = fetchMock as unknown as typeof fetch;
-      jest.spyOn(window, 'confirm').mockReturnValue(true);
       jest.spyOn(window, 'prompt').mockReturnValue(null);
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
       const resolverButton = await screen.findByRole('button', { name: /marcar como resuelto/i });
       await userEvent.click(resolverButton);
+      const dialog = await screen.findByRole('dialog');
+      await act(async () => {
+        await userEvent.click(within(dialog).getByRole('button', { name: /^confirmar$/i }));
+      });
 
       expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial load — no POST fired
     });

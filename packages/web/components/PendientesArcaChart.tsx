@@ -18,17 +18,23 @@ function bucketMonth(fecha: string | null): string | null {
   return fecha.slice(0, 7); // e.g. "2026-07"
 }
 
-/** Compute the last 12 month buckets from today backward. */
-function last12MonthBuckets(): string[] {
-  const now = new Date();
+/**
+ * Compute the last 12 month buckets from `now` backward.
+ * Builds each bucket from day 1 of its month — using `now`'s day-of-month
+ * (e.g. via `Date#setMonth`) would roll days 29-31 over into a neighboring
+ * month on shorter months, colliding two buckets into one.
+ * `now` is injectable for testability (defaults to the real current date).
+ */
+export function last12MonthBuckets(now: Date = new Date()): string[] {
   const buckets = new Set<string>();
   for (let i = 0; i < 12; i++) {
-    const d = new Date();
-    // Pin the day to 1 BEFORE subtracting months — otherwise, on days 29-31,
-    // rolling back to a shorter month overflows into the following month
-    // (e.g. Mar 31 minus 1 month would land on Mar 3, not Feb).
-    d.setDate(1);
-    d.setMonth(now.getMonth() - i);
+    // Build from day 1 of `now`'s month BEFORE subtracting months —
+    // otherwise, on days 29-31, rolling back to a shorter month overflows
+    // into the following month (e.g. Mar 31 minus 1 month would land on
+    // Mar 3, not Feb). Using `now.getFullYear()`/`now.getMonth()` directly
+    // (rather than `new Date()`) also keeps this correct for an injected
+    // `now` whose year differs from the real current year.
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const bucket = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     buckets.add(bucket);
   }
@@ -104,31 +110,31 @@ export function PendientesArcaChartComponent({
   // its buckets synchronously from that same prop instead of re-fetching.
   const chartData = useMemo(() => processData(result), [result]);
 
-  // Empty state when no pendientes - check BEFORE loading so 0-count shows immediately
+  // Empty state when no pendientes - check BEFORE loading so 0-count shows immediately.
+  // No own card wrapper here: the caller (Dashboard's SectionC) already
+  // renders the single surrounding card for this section.
   if (result.count_pendientes === 0) {
     return (
-      <div className={`rounded-xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900 ${className}`}>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Sin pendientes ARCA
-        </p>
-      </div>
+      <p className={`text-sm text-slate-500 dark:text-slate-400 ${className}`}>
+        Sin pendientes ARCA
+      </p>
     );
   }
 
-  const { buckets, bucketValues, totals } = chartData;
+  const { buckets: orderedBuckets, bucketValues, totals } = chartData;
   const totalImporte = totals;
 
-  // Determine max value for scaling
-  const maxBucketValue = Object.values(bucketValues).length > 0
+  // Determine max value for scaling. `Math.max` of an all-zero bucket set
+  // legitimately returns 0 (every pendiente fell outside the rolling
+  // 12-month window) — guard that case explicitly so bar heights below
+  // don't divide by zero and produce NaN.
+  const rawMaxBucketValue = Object.values(bucketValues).length > 0
     ? Math.max(...Object.values(bucketValues))
-    : 1; // avoid divide-by-zero
-
-  // Get the last 12 month buckets in order (most recent first)
-  const orderedBuckets = last12MonthBuckets();
+    : 0;
+  const maxBucketValue = rawMaxBucketValue > 0 ? rawMaxBucketValue : 1;
 
   const chartWidth = 400;
   const chartHeight = 200;
-  const barWidth = 30;
   const barGap = 10;
   const leftMargin = 40;
   const rightMargin = 20;
@@ -170,7 +176,7 @@ export function PendientesArcaChartComponent({
     svgParts.push(
       <g
         key={`bar-${bucket}`}
-        transform={`translate(${x + barWidth / 2}, ${topMargin})`}
+        transform={`translate(${x + barWidthAdjusted / 2}, ${topMargin})`}
       >
         <rect
           x={0}
@@ -185,7 +191,7 @@ export function PendientesArcaChartComponent({
           {monthLabel}: ${value.toLocaleString('es-AR')}
         </title>
         <text
-          x={barWidth / 2}
+          x={barWidthAdjusted / 2}
           y={barHeight > 20 ? usableHeight - barHeight + 10 : usableHeight - 5}
           textAnchor="middle"
           fontSize={10}
@@ -197,46 +203,41 @@ export function PendientesArcaChartComponent({
     );
   });
 
+  // No own card wrapper, and no "Ver histórico completo" link here — the
+  // caller (Dashboard's SectionC) owns the single surrounding card and the
+  // one real "Ver histórico completo" button (avoids a duplicated card +
+  // a dead, non-functional link rendered alongside the working one).
   return (
-    <div className={`rounded-xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900 ${className}`}>
-      <div className="flex flex-col gap-3">
-        {/* Totals card */}
-        <div className="flex items-baseline justify-between">
-          <div>
-            <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
-              {result.count_pendientes}
-            </p>
-            <p className="text-slate-500 dark:text-slate-400">
-              total pendientes ARCA
-            </p>
-          </div>
-          <div>
-            <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
-              ${totalImporte.toLocaleString('es-AR')}
-            </p>
-            <p className="text-slate-500 dark:text-slate-400">
-              total importe
-            </p>
-          </div>
+    <div className={`flex flex-col gap-3 ${className}`}>
+      {/* Totals card */}
+      <div className="flex items-baseline justify-between">
+        <div>
+          <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
+            {result.count_pendientes}
+          </p>
+          <p className="text-slate-500 dark:text-slate-400">
+            total pendientes ARCA
+          </p>
         </div>
-
-        {/* SVG chart */}
-        <svg
-          width={chartWidth}
-          height={chartHeight}
-          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-          className="overflow-hidden"
-        >
-          {svgParts}
-        </svg>
+        <div>
+          <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
+            ${totalImporte.toLocaleString('es-AR')}
+          </p>
+          <p className="text-slate-500 dark:text-slate-400">
+            total importe
+          </p>
+        </div>
       </div>
 
-      {/* "Ver histórico completo" link */}
-      <p
-        className="mt-3 text-sm text-indigo-600 dark:text-indigo-400 underline cursor-pointer"
+      {/* SVG chart */}
+      <svg
+        width={chartWidth}
+        height={chartHeight}
+        viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+        className="overflow-hidden"
       >
-        Ver histórico completo
-      </p>
+        {svgParts}
+      </svg>
     </div>
   );
 }

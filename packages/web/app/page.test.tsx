@@ -92,6 +92,7 @@ function mockFetchByUrl(periodos: MockPeriodo[] = [cerradoPeriodo]) {
 describe('T39: app/page.tsx (auth gate)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    clearSession();
   });
 
   it('shows the login form when there is no session', () => {
@@ -110,6 +111,16 @@ describe('T39: app/page.tsx (auth gate)', () => {
     expect(screen.getByText('Ana')).toBeInTheDocument();
     expect(screen.getByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /cerrar sesión/i })).toBeInTheDocument();
+  });
+
+  it('does not leak the session from the previous test into a fresh render', () => {
+    // Regression: afterEach must clear the session set by the previous
+    // test — session state lives in a module-level variable + localStorage
+    // (lib/session.ts), neither of which Jest resets automatically between
+    // tests in the same file.
+    render(<Home />);
+    expect(screen.getByRole('heading', { name: /conciliador inteligente de comprobantes/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
   });
 });
 
@@ -139,6 +150,7 @@ async function enterTenant() {
 describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period report, not stacks below it', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    clearSession();
   });
 
   it('replaces the período report with PendientesHistoricoViewer on click, and restores it on toggle-off', async () => {
@@ -207,6 +219,22 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
     expect(circuitView).toBeInTheDocument();
   });
 
+  it('"Cambiar período" returns to Dashboard WITHOUT clearing tenantId (regression: used to share a handler with "Cambiar tenant")', async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+    await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
+    expect(screen.getByText(/Período 2026-08/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cambiar período' }));
+
+    // Back at Dashboard for the SAME tenant — not bounced to tenant-entry.
+    expect(await screen.findByRole('heading', { name: /Histórico/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+  });
+
   it('navigates to report view via the nav tab', async () => {
     global.fetch = mockFetchByUrl();
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
@@ -273,7 +301,10 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
         String(input).includes('/api/periodos?tenant_id='),
       ).length;
 
-    expect(periodosCallCount()).toBe(1); // the fetch from entering the dashboard
+    // 1 call so far: the Dashboard's own mount fetch (PeriodoSelector no
+    // longer does its own round-trip — see PeriodoSelector.tsx's comment on
+    // why that validation was removed again).
+    expect(periodosCallCount()).toBe(1);
 
     await userEvent.click(await screen.findByRole('button', { name: /Ver reporte/i }));
     await userEvent.click(screen.getByRole('button', { name: 'Dashboard' }));
@@ -349,6 +380,30 @@ describe('role-based access control', () => {
 });
 
 /**
+ * Regression: a tenant with zero períodos never has a `periodo` selected,
+ * so the nav tabs (periodo && (...)) never render — before this fix, that
+ * left no way back to PeriodoSelector short of a full logout.
+ */
+describe('zero-período tenant is not a dead end', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('lets the user change tenant from the Dashboard even with zero períodos', async () => {
+    global.fetch = mockFetchByUrl([]);
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+
+    expect(await screen.findByText(/todavía no tiene períodos/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Cambiar tenant/i }));
+
+    expect(await screen.findByLabelText(/tenant id/i)).toBeInTheDocument();
+  });
+});
+
+/**
  * 2026-10-11: review fix for a dead-end — if Dashboard's shared
  * `listPeriodos` fetch fails (or the tenant has zero períodos), the user
  * was stuck on the dashboard with no way back to tenant entry, since
@@ -376,6 +431,46 @@ describe('2026-10-11: Dashboard has a way back to tenant entry on fetch error', 
 
     expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
     expect(screen.queryByText(/db down/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Regression: onCreatePeriodo/onReopenPeriodo/onDeletePeriodo failures used
+ * to call native alert() — invisible to screen readers and untestable the
+ * way every other error path in this app is (an accessible role="alert"
+ * banner). Confirms the accessible banner appears instead, and that
+ * alert() is never called.
+ */
+describe('Dashboard mutation failures surface an accessible banner, not alert()', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('crear período fallido muestra un banner role="alert" y no llama a alert()', async () => {
+    const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+    global.fetch = jest.fn((input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init as RequestInit | undefined)?.method ?? 'GET';
+      if (url.includes('/api/periodos?tenant_id=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ periodos: [] }) });
+      }
+      if (url.includes(`/api/tenants/${TENANT_ID}/pendientes-historico`)) {
+        return Promise.resolve({ ok: true, json: async () => pendientesHistoricoBody });
+      }
+      if (url.endsWith('/api/periodos') && method === 'POST') {
+        return Promise.resolve({ ok: false, status: 409, json: async () => ({ error: 'ALREADY_ABIERTO' }) });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url} ${method}`));
+    }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await enterTenant();
+
+    await userEvent.click(await screen.findByRole('button', { name: /Crear nuevo período/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/error al crear per[ií]odo/i);
+    expect(alertSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -433,17 +528,17 @@ describe('Fix 1 (2026-10-11): "Crear nuevo período" sends the local month, not 
 
 /**
  * Fix 2 (review 2026-10-11): `handleOpenPeriodo` never cleared
- * `actionError`, unlike `handleTenantSelected`/`handleChangeTenant` — so a
+ * `dashboardError`, unlike `handleTenantSelected`/`handleChangeTenant` — so a
  * stale error banner from a failed mutation (e.g. a failed "Reabrir")
  * stayed on screen after the user opened an unrelated, healthy período.
  */
-describe('Fix 2 (2026-10-11): opening a período clears a stale actionError banner', () => {
+describe('Fix 2 (2026-10-11): opening a período clears a stale dashboardError banner', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     clearSession();
   });
 
-  it('clears the actionError banner left by a failed "Reabrir" once a healthy período is opened', async () => {
+  it('clears the dashboardError banner left by a failed "Reabrir" once a healthy período is opened', async () => {
     global.fetch = jest.fn((input) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.includes('/api/periodos?tenant_id=')) {

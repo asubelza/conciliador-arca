@@ -20,7 +20,7 @@ export async function createTestTenant(pool: Pool, name = 'Test Tenant', created
   if (createdAt) {
     await pool.query('INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, $3)', [id, name, createdAt]);
   } else {
-    await pool.query('INSERT INTO tenants (id, name) VALUES ($1, $2)', [id, name]);
+    await pool.query('INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, now())', [id, name]);
   }
   return id;
 }

@@ -21,6 +21,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * client-side). The admin-only tolerance config toggle stays here per
  * design's component diagram ("PeriodoSelector: tenant entry + admin
  * TenantConfigPanel").
+ *
+ * Tenant-existence validation was attempted here via a `listPeriodos(id)`
+ * round-trip, but removed again: `GET /api/periodos` never checks a
+ * `tenants` table for admin/colaborador roles, it just returns
+ * `200 {periodos: []}` for ANY syntactically-valid UUID, identical to a
+ * real empty tenant — so the round-trip validated nothing and only added
+ * a network call plus a fake "Verificando…" spinner. A real fix needs a
+ * backend endpoint that actually checks tenant existence; that's out of
+ * scope for this frontend-only change (follow-up).
  */
 export function PeriodoSelector({ onSelected }: PeriodoSelectorProps) {
   const { user } = useAuth();

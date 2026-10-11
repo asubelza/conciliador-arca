@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import {
   PendientesArcaChartComponent,
   processData,
+  last12MonthBuckets,
 } from './PendientesArcaChart';
 import type { PendientesHistoricoResult } from '@/lib/api';
 
@@ -115,6 +116,26 @@ describe('PendientesArcaChart - processData (pure utility)', () => {
   });
 });
 
+describe('last12MonthBuckets (day-of-month collision bug)', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('returns 12 distinct consecutive month keys even when "now" is on day 29-31', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 2, 31)); // 2026-03-31
+
+    const buckets = last12MonthBuckets();
+
+    expect(buckets.length).toBe(12);
+    expect(new Set(buckets).size).toBe(12); // no duplicates from month-rollover
+    expect(buckets).toEqual([
+      '2025-04', '2025-05', '2025-06', '2025-07', '2025-08', '2025-09',
+      '2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03',
+    ]);
+  });
+});
+
 describe('PendientesArcaChartComponent', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -169,57 +190,92 @@ describe('PendientesArcaChartComponent', () => {
     unmountEmpty();
   });
 
-  it('plots bar geometry inside the drawable area (regression: bars were double-offset by the margins)', () => {
-    const { container, unmount } = render(
-      <PendientesArcaChartComponent result={mockResultWithData} />
-    );
-
-    // chartHeight=200, topMargin=20, bottomMargin=40 -> usableHeight=140.
-    const usableHeight = 140;
-
-    const groups = Array.from(container.querySelectorAll('svg g'));
-    const barGroups = groups.filter((g) => g.querySelector('title'));
-    expect(barGroups.length).toBe(12);
-
-    for (const g of barGroups) {
-      const rect = g.querySelector('rect');
-      const text = g.querySelector('text');
-      expect(rect).not.toBeNull();
-      const y = Number(rect!.getAttribute('y'));
-      const height = Number(rect!.getAttribute('height'));
-
-      // Every bar must stay within the margin-adjusted drawable height —
-      // a bar using `chartHeight` as its reference frame would push
-      // (y + height) well past `usableHeight` (by the 60px top+bottom
-      // margin), overflowing the chart.
-      expect(y).toBeGreaterThanOrEqual(0);
-      expect(y + height).toBeLessThanOrEqual(usableHeight);
-
-      // The value label must land inside the same drawable area.
-      const labelY = Number(text!.getAttribute('y'));
-      expect(labelY).toBeGreaterThanOrEqual(0);
-      expect(labelY).toBeLessThanOrEqual(usableHeight);
-    }
-
-    // The bucket with the largest value (2026-07: 1250) should span the
-    // full drawable height, i.e. sit flush with the top (y === 0).
-    const tallestGroup = barGroups.find((g) => g.querySelector('title')!.textContent?.startsWith('2026-07:'));
-    expect(tallestGroup).toBeDefined();
-    const tallestRect = tallestGroup!.querySelector('rect')!;
-    expect(Number(tallestRect.getAttribute('y'))).toBe(0);
-    expect(Number(tallestRect.getAttribute('height'))).toBe(usableHeight);
-
-    unmount();
+  it('does not render its own "Ver histórico completo" link (that control lives once, in the caller)', () => {
+    render(<PendientesArcaChartComponent result={mockResultWithData} />);
+    expect(screen.queryByText(/Ver histórico completo/i)).not.toBeInTheDocument();
   });
 
-  it('interpolates the viewBox dimensions instead of emitting literal template braces', () => {
-    const { container, unmount } = render(
+  it('interpolates the viewBox with real dimensions, not a literal template string', () => {
+    const { container } = render(
       <PendientesArcaChartComponent result={mockResultWithData} />
     );
-
     const svg = container.querySelector('svg');
-    expect(svg?.getAttribute('viewBox')).toBe('0 0 400 200');
+    expect(svg).toHaveAttribute('viewBox', '0 0 400 200');
+  });
 
-    unmount();
+  it('every bar sits on the axis (local y + height === usableHeight), including the tallest bar', () => {
+    // usableHeight = chartHeight(200) - topMargin(20) - bottomMargin(40) = 140.
+    // The <g> wrapper already translates by topMargin, so bars must be
+    // positioned in that LOCAL frame — using chartHeight instead of
+    // usableHeight double-counts the translate and pushes every bar's
+    // bottom edge past the axis (and the tallest bar's top past the top margin).
+    const { container } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+    const usableHeight = 140;
+
+    const rects = container.querySelectorAll('svg rect');
+    expect(rects.length).toBe(12);
+    rects.forEach((rect) => {
+      const y = Number(rect.getAttribute('y'));
+      const height = Number(rect.getAttribute('height'));
+      expect(y + height).toBeCloseTo(usableHeight, 5);
+    });
+  });
+
+  it('centers each bar group and its label on the slot computed with barWidthAdjusted, not the stale barWidth constant', () => {
+    // leftMargin=40, usableWidth=340, barGap=10, bucketCount=12 ->
+    // barWidthAdjusted = (340 - 11*10) / 12 = 230/12.
+    const { container } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+    const leftMargin = 40;
+    const barGap = 10;
+    const bucketCount = 12;
+    const usableWidth = 340;
+    const barWidthAdjusted = (usableWidth - (bucketCount - 1) * barGap) / bucketCount;
+
+    const barGroups = Array.from(container.querySelectorAll('svg g[transform]'));
+    expect(barGroups.length).toBe(12);
+
+    // First bar's slot starts at x = leftMargin; its group should be
+    // centered at leftMargin + barWidthAdjusted / 2, not leftMargin + 15
+    // (half of the old fixed barWidth=30 constant).
+    const firstTransform = barGroups[0].getAttribute('transform') ?? '';
+    const match = firstTransform.match(/translate\(([-\d.]+),/);
+    expect(match).not.toBeNull();
+    const translateX = Number(match![1]);
+    expect(translateX).toBeCloseTo(leftMargin + barWidthAdjusted / 2, 3);
+
+    const firstText = barGroups[0].querySelector('text');
+    expect(firstText).not.toBeNull();
+    expect(Number(firstText!.getAttribute('x'))).toBeCloseTo(barWidthAdjusted / 2, 3);
+  });
+
+  it('never produces NaN bar attributes when every pendiente falls outside the last-12-months window', () => {
+    const outOfWindowResult: PendientesHistoricoResult = {
+      ...mockResultWithData,
+      count_pendientes: 1,
+      pendientes: [
+        {
+          ...mockResultWithData.pendientes[0],
+          fecha: '2000-01-15', // always outside the rolling 12-month window
+        },
+      ],
+    };
+
+    const { container } = render(
+      <PendientesArcaChartComponent result={outOfWindowResult} />
+    );
+
+    const rects = container.querySelectorAll('svg rect');
+    expect(rects.length).toBe(12);
+    rects.forEach((rect) => {
+      ['x', 'y', 'width', 'height'].forEach((attr) => {
+        const value = rect.getAttribute(attr);
+        expect(value).not.toBeNull();
+        expect(Number.isNaN(Number(value))).toBe(false);
+      });
+    });
   });
 });

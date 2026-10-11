@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getPendientesHistorico, type PendientesHistoricoResult, type Periodo } from '@/lib/api';
-import { listPeriodos } from '@/lib/api';
+import { getPendientesHistorico, listPeriodos, type PendientesHistoricoResult, type Periodo } from '@/lib/api';
+import { currentLocalYearMonth } from '@/lib/date';
 import { ConfirmDialog } from './ConfirmDialog';
 import { PendientesArcaChart } from './PendientesArcaChart';
 import { PendientesHistoricoViewer } from './PendientesHistoricoViewer';
 import { SpinnerIcon, WarningIcon } from './icons';
+
+export type { Periodo };
 
 /** Section A: Período en curso */
 interface SectionAProps {
@@ -16,7 +18,7 @@ interface SectionAProps {
   error: string | null;
   onRetry: () => void;
   onOpenPeriodo: (periodo: Periodo) => void;
-  onCreatePeriodo: () => void;
+  onCreatePeriodo: (mes: string) => void | Promise<void>;
   onDeletePeriodo: (periodo: Periodo) => void | Promise<void>;
 }
 
@@ -64,29 +66,44 @@ function SectionSpinner({ label }: { label: string }) {
 
 /** Section C: Pendientes ARCA */
 interface SectionCProps {
-  tenantId: string;
+  result: PendientesHistoricoResult | null;
+  error: string | null;
+  onRetry: () => void;
   userRole: 'admin' | 'colaborador' | 'cliente';
   /** RF-24/RF-27: opens PendientesHistoricoViewer as an overlay swap inside the dashboard route. */
   onViewHistoricoCompleto: () => void;
 }
 
-/** Section A - Período en curso */
-function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, onCreatePeriodo, onDeletePeriodo }: SectionAProps) {
-  const [confirmPeriodo, setConfirmPeriodo] = useState<Periodo | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const handleConfirmDialogClose = () => setConfirmPeriodo(null);
+/**
+ * Shared by SectionA/SectionB: tracks the período pending a destructive
+ * confirm action, awaits the mutation before closing the dialog, and keeps
+ * it in a loading state meanwhile (isLoading disables Confirmar/Cancelar)
+ * so a second click can't fire a concurrent mutation against the same
+ * período — same pattern, previously duplicated between both sections
+ * (eliminar vs. reabrir), differing only in which action it ran.
+ */
+function useConfirmAction(action: (periodo: Periodo) => void | Promise<void>) {
+  const [target, setTarget] = useState<Periodo | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleConfirm = async () => {
-    if (!confirmPeriodo) return;
-    setIsSubmitting(true);
+    if (!target) return;
+    setIsLoading(true);
     try {
-      await onDeletePeriodo(confirmPeriodo);
+      await action(target);
     } finally {
-      setIsSubmitting(false);
-      setConfirmPeriodo(null);
+      setIsLoading(false);
+      setTarget(null);
     }
   };
+
+  return { target, isLoading, open: setTarget, close: () => setTarget(null), handleConfirm };
+}
+
+/** Section A - Período en curso */
+function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, onCreatePeriodo, onDeletePeriodo }: SectionAProps) {
+  const { target: confirmPeriodo, isLoading: isDeleting, open, close, handleConfirm } = useConfirmAction(onDeletePeriodo);
+  const [nuevoMes, setNuevoMes] = useState(() => currentLocalYearMonth());
 
   const openPeriodos = periodos.filter((p) => p.estado === 'abierto');
 
@@ -124,7 +141,7 @@ function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, 
                   {userRole === 'admin' && (
                     <button
                       type="button"
-                      onClick={() => setConfirmPeriodo(p)}
+                      onClick={() => open(p)}
                       className="focus-ring rounded text-sm font-medium text-red-600 hover:text-red-500 dark:text-red-400"
                     >
                       Eliminar
@@ -136,13 +153,26 @@ function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, 
           )}
 
           {userRole !== 'cliente' && (
-            <button
-              type="button"
-              onClick={onCreatePeriodo}
-              className="focus-ring rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-card hover:bg-indigo-500"
-            >
-              Crear nuevo período
-            </button>
+            <div className="flex items-center gap-2">
+              <label htmlFor="nuevo-periodo-mes" className="sr-only">
+                Mes del nuevo período
+              </label>
+              <input
+                id="nuevo-periodo-mes"
+                type="month"
+                value={nuevoMes}
+                onChange={(e) => setNuevoMes(e.target.value)}
+                className="focus-ring rounded border border-slate-200 bg-white px-2 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              />
+              <button
+                type="button"
+                onClick={() => onCreatePeriodo(nuevoMes)}
+                disabled={!nuevoMes}
+                className="focus-ring rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-card hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Crear nuevo período
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -152,8 +182,8 @@ function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, 
           title="Eliminar período"
           text="¿Estás seguro de que deseas eliminar este período?"
           onConfirm={handleConfirm}
-          onCancel={handleConfirmDialogClose}
-          isLoading={isSubmitting}
+          onCancel={close}
+          isLoading={isDeleting}
         />
       )}
     </div>
@@ -162,20 +192,8 @@ function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, 
 
 /** Section B - Histórico */
 function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, onReopenPeriodo }: SectionBProps) {
-  const [confirmPeriodo, setConfirmPeriodo] = useState<Periodo | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { target: confirmPeriodo, isLoading: isReopening, open, close, handleConfirm } = useConfirmAction(onReopenPeriodo);
   const closedPeriodos = periodos.filter((p) => p.estado === 'cerrado');
-
-  const handleConfirm = async () => {
-    if (!confirmPeriodo) return;
-    setIsSubmitting(true);
-    try {
-      await onReopenPeriodo(confirmPeriodo);
-    } finally {
-      setIsSubmitting(false);
-      setConfirmPeriodo(null);
-    }
-  };
 
   return (
     <div>
@@ -208,7 +226,7 @@ function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, o
                   {(userRole === 'admin' || userRole === 'colaborador') && (
                     <button
                       type="button"
-                      onClick={() => setConfirmPeriodo(p)}
+                      onClick={() => open(p)}
                       className="focus-ring rounded text-sm font-medium text-emerald-600 hover:text-emerald-500 dark:text-emerald-400"
                     >
                       Reabrir
@@ -226,8 +244,8 @@ function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, o
           title="Reabrir período"
           text="¿Estás seguro de que deseas reabrir este período?"
           onConfirm={handleConfirm}
-          onCancel={() => setConfirmPeriodo(null)}
-          isLoading={isSubmitting}
+          onCancel={close}
+          isLoading={isReopening}
         />
       )}
     </div>
@@ -235,40 +253,19 @@ function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, o
 }
 
 /** Section C - Pendientes ARCA */
-function SectionC({ tenantId, userRole, onViewHistoricoCompleto }: SectionCProps) {
-  const [result, setResult] = useState<PendientesHistoricoResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Fix 6 (review): `load` is a useCallback-wrapped async fetch (not a raw
-  // effect), invoked both from the mount effect and from "Reintentar". A
-  // fast re-click before the first call resolves, or an unmount mid-flight,
-  // could otherwise let a stale response clobber fresher state, or set
-  // state after unmount — same risk StatusPoller.tsx guards with a
-  // `cancelled` flag, adapted here as a request-generation ref since this
-  // isn't a single bare effect.
-  const requestIdRef = useRef(0);
-
-  const load = useCallback(async () => {
-    const requestId = ++requestIdRef.current;
-    setError(null);
-    try {
-      const data = await getPendientesHistorico(tenantId);
-      if (requestIdRef.current !== requestId) return;
-      setResult(data);
-    } catch (err) {
-      if (requestIdRef.current !== requestId) return;
-      setError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
-    }
-  }, [tenantId]);
-
-  useEffect(() => {
-    load();
-    return () => {
-      requestIdRef.current++;
-    };
-  }, [load]);
-
+function SectionC({ result, error, onRetry, userRole, onViewHistoricoCompleto }: SectionCProps) {
+  // RF-29: a failed fetch must stop showing the loading spinner and surface
+  // the shared error banner with retry (same pattern as Sections A/B),
+  // checked BEFORE the `!result` loading branches below.
   if (error) {
-    return <SectionErrorBanner error={error} onRetry={load} />;
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50 mb-4">
+          Pendientes ARCA
+        </h2>
+        <SectionErrorBanner error={error} onRetry={onRetry} />
+      </div>
+    );
   }
 
   // Cliente role: read-only, show totals only, no chart editing
@@ -342,14 +339,16 @@ export interface DashboardShellProps {
   tenantId: string;
   userRole: 'admin' | 'colaborador' | 'cliente';
   onOpenPeriodo: (periodo: Periodo) => void;
-  onCreatePeriodo: () => void;
-  onReopenPeriodo: (periodo: Periodo) => void;
-  onDeletePeriodo: (periodo: Periodo) => void;
+  onCreatePeriodo: (mes: string) => void | Promise<void>;
+  onReopenPeriodo: (periodo: Periodo) => void | Promise<void>;
+  onDeletePeriodo: (periodo: Periodo) => void | Promise<void>;
   /** Optional: navigate to a closed período's report. Defaults to a no-op. */
   onViewReport?: (periodo: Periodo) => void;
   /** Escape hatch back to tenant entry when the períodos fetch fails or
-   * the tenant has no períodos at all — otherwise the user would be
-   * stranded on the dashboard with no way back to pick another tenant. */
+   * the tenant has no períodos at all — without this, a zero-período
+   * tenant or a cliente-role user would be stranded on the dashboard with
+   * no way back short of logging out, since the nav tabs in page.tsx only
+   * appear once a período has been opened. */
   onChangeTenant: () => void;
 }
 
@@ -362,45 +361,95 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   // stays 'dashboard' the whole time — this toggle is local to the shell).
   const [showHistoricoOverlay, setShowHistoricoOverlay] = useState(false);
 
+  // Guards refresh()'s post-await setState calls against firing after this
+  // shell has unmounted (e.g. onCreatePeriodo's action navigates away to
+  // 'circuit' as soon as it resolves, unmounting this shell before
+  // afterMutation's subsequent `await refresh()` applies its result).
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   // RF-25/RF-29: Sections A+B share ONE listPeriodos call (partitioned
   // client-side by estado) — so its own loading/error state is per-fetch,
   // independent from Section C's separate pendientes-historico fetch.
-  // Fix 7 (review): same request-generation guard as SectionC's `load` —
-  // `refresh` is useCallback-wrapped and re-invoked both on mount and from
-  // "Reintentar"/afterMutation, so a rapid re-click or unmount mid-flight
-  // could otherwise let a stale response clobber fresher state.
-  const refreshRequestIdRef = useRef(0);
-
+  //
+  // requestIdRef guards against concurrent, unsequenced refreshes: if two
+  // calls overlap (e.g. a mutation firing before the initial fetch settles)
+  // and the OLDER one resolves LAST, its stale response is ignored instead
+  // of overwriting the newer, more accurate state (which could otherwise
+  // resurrect a período that was just deleted/reopened).
+  const requestIdRef = useRef(0);
   const refresh = useCallback(async () => {
-    const requestId = ++refreshRequestIdRef.current;
+    if (!isMountedRef.current) return;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await listPeriodos(tenantId);
-      if (refreshRequestIdRef.current !== requestId) return;
+      if (!isMountedRef.current || requestIdRef.current !== requestId) return; // unmounted or stale — ignore
       setPeriodos(data);
     } catch (err) {
-      if (refreshRequestIdRef.current !== requestId) return;
+      if (!isMountedRef.current || requestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : 'Períodos fetch failed');
     } finally {
-      if (refreshRequestIdRef.current === requestId) setLoading(false);
+      if (isMountedRef.current && requestIdRef.current === requestId) setLoading(false);
     }
   }, [tenantId]);
 
   useEffect(() => {
     refresh();
     return () => {
-      refreshRequestIdRef.current++;
+      requestIdRef.current++;
     };
   }, [refresh]);
+
+  // RF-27: Section C's single pendientes-historico fetch, lifted up here
+  // (rather than owned by SectionC itself) so the "Ver histórico completo"
+  // overlay below can reuse this same result instead of
+  // PendientesHistoricoViewer re-fetching the same tenant's data again.
+  const [historicoResult, setHistoricoResult] = useState<PendientesHistoricoResult | null>(null);
+  const [historicoError, setHistoricoError] = useState<string | null>(null);
+  const historicoRequestIdRef = useRef(0);
+  const loadHistorico = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    const requestId = ++historicoRequestIdRef.current;
+    setHistoricoError(null);
+    try {
+      const data = await getPendientesHistorico(tenantId);
+      if (!isMountedRef.current || historicoRequestIdRef.current !== requestId) return; // unmounted or stale — ignore
+      setHistoricoResult(data);
+    } catch (err) {
+      if (!isMountedRef.current || historicoRequestIdRef.current !== requestId) return;
+      setHistoricoError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    loadHistorico();
+  }, [loadHistorico]);
 
   // Wrap the mutation callbacks so the dashboard's own copy of the list
   // refreshes after the action runs. The action itself lives in page.tsx
   // (which also re-fetches for its own selected-período state); this keeps
   // the Section A/B lists here in sync with the API.
+  //
+  // page.tsx's action handlers catch their own errors and surface them via
+  // `dashboardError`, but they now rethrow after doing so — so a failed
+  // mutation doesn't waste a refetch here (nothing actually changed). On
+  // success, both the período list AND the pendientes-histórico data are
+  // refreshed — reabrir/eliminar/crear can all change voucher pendiente
+  // status, which Section C's chart/totals depend on.
   const afterMutation = async (action: () => void | Promise<void>) => {
-    await action();
-    await refresh();
+    try {
+      await action();
+    } catch {
+      return;
+    }
+    await Promise.all([refresh(), loadHistorico()]);
   };
 
   // 'Cambiar tenant' escape hatch: shown once loading settles and the
@@ -408,21 +457,6 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   // stranded on a dashboard with nothing to do and no way back to pick a
   // different tenant.
   const showChangeTenantEscape = !loading && (!!error || (periodos !== null && periodos.length === 0));
-
-  if (showHistoricoOverlay) {
-    return (
-      <div className="space-y-4">
-        <button
-          type="button"
-          onClick={() => setShowHistoricoOverlay(false)}
-          className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-        >
-          ← Volver al dashboard
-        </button>
-        <PendientesHistoricoViewer tenantId={tenantId} />
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-8">
@@ -437,30 +471,48 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
           </button>
         </div>
       )}
-      <SectionA
-        periodos={periodos || []}
-        userRole={userRole}
-        loading={loading}
-        error={error}
-        onRetry={refresh}
-        onOpenPeriodo={onOpenPeriodo}
-        onCreatePeriodo={onCreatePeriodo}
-        onDeletePeriodo={(p) => afterMutation(() => onDeletePeriodo(p))}
-      />
-      <SectionB
-        periodos={periodos || []}
-        userRole={userRole}
-        loading={loading}
-        error={error}
-        onRetry={refresh}
-        onViewReport={onViewReport ?? (() => {})}
-        onReopenPeriodo={(p) => afterMutation(() => onReopenPeriodo(p))}
-      />
-      <SectionC
-        tenantId={tenantId}
-        userRole={userRole}
-        onViewHistoricoCompleto={() => setShowHistoricoOverlay(true)}
-      />
+
+      {showHistoricoOverlay ? (
+        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={() => setShowHistoricoOverlay(false)}
+            className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+          >
+            ← Volver al dashboard
+          </button>
+          <PendientesHistoricoViewer tenantId={tenantId} initialResult={historicoResult ?? undefined} />
+        </div>
+      ) : (
+        <>
+          <SectionA
+            periodos={periodos || []}
+            userRole={userRole}
+            loading={loading}
+            error={error}
+            onRetry={refresh}
+            onOpenPeriodo={onOpenPeriodo}
+            onCreatePeriodo={(mes) => afterMutation(() => onCreatePeriodo(mes))}
+            onDeletePeriodo={(p) => afterMutation(() => onDeletePeriodo(p))}
+          />
+          <SectionB
+            periodos={periodos || []}
+            userRole={userRole}
+            loading={loading}
+            error={error}
+            onRetry={refresh}
+            onViewReport={onViewReport ?? (() => {})}
+            onReopenPeriodo={(p) => afterMutation(() => onReopenPeriodo(p))}
+          />
+          <SectionC
+            result={historicoResult}
+            error={historicoError}
+            onRetry={loadHistorico}
+            userRole={userRole}
+            onViewHistoricoCompleto={() => setShowHistoricoOverlay(true)}
+          />
+        </>
+      )}
     </div>
   );
 }

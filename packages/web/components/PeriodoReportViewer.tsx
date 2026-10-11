@@ -14,6 +14,7 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/session';
 import { CoincidenciaModal } from './CoincidenciaModal';
+import { ConfirmDialog } from './ConfirmDialog';
 import { CheckIcon, SpinnerIcon, XIcon } from './icons';
 
 export interface PeriodoReportViewerProps {
@@ -124,6 +125,12 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
   // se dispara la acción (igual que los botones rápidos inline no esperan
   // a que termine el fetch para que la UI se sienta responsiva).
   const [comparingRow, setComparingRow] = useState<PeriodoReportRow | null>(null);
+  // T68 (cleanup, optional): native window.confirm() replaced with the same
+  // ConfirmDialog used by Dashboard's destructive actions, for a consistent
+  // confirmation UI across the app. window.prompt() for the optional nota
+  // stays as-is — ConfirmDialog has no text-input affordance.
+  const [confirmingCerrar, setConfirmingCerrar] = useState(false);
+  const [confirmingResolverRow, setConfirmingResolverRow] = useState<PeriodoReportRow | null>(null);
   const canAct = user?.role !== 'cliente';
   // "Ver pendientes sistema" (pedido del cliente, 2026-08-23): filtra las 4
   // secciones a solo los comprobantes del sistema contable sin match en
@@ -195,18 +202,24 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
    * presente ahí). Pide una nota opcional, igual que 'explicado', porque es
    * la misma clase de decisión (el contador está registrando un motivo).
    */
+  function openResolverPendienteConfirm(row: PeriodoReportRow) {
+    setConfirmingResolverRow(row);
+  }
+
+  // Keeps confirmingResolverRow set (ConfirmDialog mounted, its full-screen
+  // overlay blocking the underlying row button) through window.prompt() and
+  // the mutation itself, clearing it only in `finally` — closing it up front
+  // left a gap where the row's trigger was re-enabled (pendingActionKey
+  // still null) while window.prompt() was pending, open to a double submit.
   async function handleResolverPendiente(row: PeriodoReportRow) {
     if (!row.arca) return;
-    if (typeof window !== 'undefined') {
-      const confirmed = window.confirm(
-        'Vas a marcar este comprobante de ARCA como resuelto sin ningún par en el sistema contable — no va a volver a aparecer como pendiente. ¿Confirmás?',
-      );
-      if (!confirmed) return;
-    }
     let nota: string | undefined;
     if (typeof window !== 'undefined') {
       const entered = window.prompt('Motivo (opcional):');
-      if (entered === null) return;
+      if (entered === null) {
+        setConfirmingResolverRow(null);
+        return;
+      }
       nota = entered.trim() === '' ? undefined : entered.trim();
     }
     const key = `${row.composite_key}:resolver`;
@@ -219,6 +232,7 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
       setRowActionError(err instanceof Error ? err.message : 'Resolver pendiente failed');
     } finally {
       setPendingActionKey(null);
+      setConfirmingResolverRow(null);
     }
   }
 
@@ -237,13 +251,10 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
     }
   }
 
+  // Same reasoning as handleResolverPendiente above: confirmingCerrar stays
+  // true (dialog mounted) through the whole mutation so isLoading={closing}
+  // is actually observable, clearing it only in `finally`.
   async function handleCerrar() {
-    if (typeof window !== 'undefined') {
-      const confirmed = window.confirm(
-        'Cerrar la Conciliación del Mes es una acción definitiva: los comprobantes conciliados quedan congelados y no se puede deshacer. ¿Confirmás el cierre?',
-      );
-      if (!confirmed) return;
-    }
     setCloseError(null);
     setClosing(true);
     try {
@@ -254,6 +265,7 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
       setCloseError(err instanceof Error ? err.message : 'Cierre failed');
     } finally {
       setClosing(false);
+      setConfirmingCerrar(false);
     }
   }
 
@@ -327,7 +339,7 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
         {report.periodo.estado === 'abierto' && user?.role !== 'cliente' && (
           <button
             type="button"
-            onClick={handleCerrar}
+            onClick={() => setConfirmingCerrar(true)}
             disabled={closing}
             className="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white shadow-card hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -517,7 +529,7 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                       type="button"
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        handleResolverPendiente(row);
+                                        openResolverPendienteConfirm(row);
                                       }}
                                       disabled={pendingActionKey === `${row.composite_key}:resolver`}
                                       className="focus-ring rounded text-xs font-medium text-slate-600 hover:text-slate-500 disabled:opacity-50 dark:text-slate-400"
@@ -539,6 +551,26 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
           </div>
         );
       })}
+
+      {confirmingCerrar && (
+        <ConfirmDialog
+          title="Cerrar Conciliación del Mes"
+          text="Cerrar la Conciliación del Mes es una acción definitiva: los comprobantes conciliados quedan congelados y no se puede deshacer. ¿Confirmás el cierre?"
+          onConfirm={handleCerrar}
+          onCancel={() => setConfirmingCerrar(false)}
+          isLoading={closing}
+        />
+      )}
+
+      {confirmingResolverRow && (
+        <ConfirmDialog
+          title="Marcar como resuelto"
+          text="Vas a marcar este comprobante de ARCA como resuelto sin ningún par en el sistema contable — no va a volver a aparecer como pendiente. ¿Confirmás?"
+          onConfirm={() => handleResolverPendiente(confirmingResolverRow)}
+          onCancel={() => setConfirmingResolverRow(null)}
+          isLoading={pendingActionKey === `${confirmingResolverRow.composite_key}:resolver`}
+        />
+      )}
 
       {comparingRow && (
         <CoincidenciaModal

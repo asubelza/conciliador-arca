@@ -54,5 +54,5 @@ AC Phase 2: `npx jest` (web) verde (119/119); build `npm run build` ok; sin depe
 
 ## Phase 3: Verificación cruzada
 
-- [ ] T67: correr ambas suites completas (api + web) + builds; recorrer mapa RF-24..RF-40 contra escenarios de specs; smoke E2E opcional Playwright del flujo 3 secciones
+- [x] T67: correr ambas suites completas (api + web) + builds; recorrer mapa RF-24..RF-40 contra escenarios de specs; smoke E2E opcional Playwright del flujo 3 secciones
 - [ ] T68 (opcional, puede posponerse): migrar prompts legacy de `PeriodoReportViewer` a ConfirmDialog (AD-8 lo marca cleanup opcional; NO requerido para este cambio)
