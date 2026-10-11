@@ -347,3 +347,34 @@ describe('role-based access control', () => {
     expect(screen.getByRole('button', { name: 'Reporte' })).toBeInTheDocument();
   });
 });
+
+/**
+ * 2026-10-11: review fix for a dead-end — if Dashboard's shared
+ * `listPeriodos` fetch fails (or the tenant has zero períodos), the user
+ * was stuck on the dashboard with no way back to tenant entry, since
+ * `PeriodoSelector` only remounts once `tenantId` is cleared. Dashboard's
+ * "Cambiar tenant" escape hatch (shown once loading settles and the fetch
+ * either failed or came back empty) gives that way back, wired through
+ * page.tsx's `handleChangeTenant`.
+ */
+describe('2026-10-11: Dashboard has a way back to tenant entry on fetch error', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('shows "Cambiar tenant" on a listPeriodos failure and returns to PeriodoSelector on click', async () => {
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'db down' }) })) as unknown as typeof fetch;
+
+    render(<Home />);
+    await enterTenant();
+
+    expect(await screen.findAllByText(/db down/i)).not.toHaveLength(0);
+
+    await userEvent.click(screen.getByRole('button', { name: /cambiar tenant/i }));
+
+    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(screen.queryByText(/db down/i)).not.toBeInTheDocument();
+  });
+});

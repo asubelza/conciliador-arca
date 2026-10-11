@@ -63,6 +63,18 @@ const emptyResult = {
 };
 
 describe('PendientesArcaChart - processData (pure utility)', () => {
+  // The hardcoded '2026-07'/'2026-06' bucket expectations below only hold
+  // because of the current wall-clock date — pin it so the test is
+  // deterministic regardless of when it actually runs.
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-15'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('buckets dates correctly by month', () => {
     const processed = processData(mockResultWithData);
 
@@ -82,9 +94,37 @@ describe('PendientesArcaChart - processData (pure utility)', () => {
     expect(processed.bucketValues['2026-07']).toBe(0);
     expect(processed.bucketValues['2026-06']).toBe(0);
   });
+
+  it('does not roll over into the wrong month when pinned to the 31st (date-rollover regression)', () => {
+    // Regression for the classic JS Date bug: subtracting months from a
+    // day-31 date without first pinning the day to 1 overflows into the
+    // following month on any target month with fewer than 31 days. Pinned
+    // to 2026-03-31: Feb 2026 has 28 days, so computing "1 month back"
+    // without the day-1 pin lands on 2026-03-03 instead of 2026-02-xx,
+    // duplicating the 2026-03 bucket and dropping 2026-02 entirely.
+    jest.setSystemTime(new Date('2026-03-31'));
+
+    const processed = processData(emptyResult);
+
+    expect(processed.buckets.length).toBe(12);
+    expect(processed.buckets).toContain('2026-02');
+    expect(processed.buckets).toContain('2026-03');
+    // No duplicate buckets from the overflow (a Set would silently absorb
+    // the duplicate and under-count instead of throwing).
+    expect(new Set(processed.buckets).size).toBe(processed.buckets.length);
+  });
 });
 
 describe('PendientesArcaChartComponent', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-15'));
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('shows "Sin pendientes ARCA" when count_pendientes is 0', () => {
     const { unmount } = render(
       <PendientesArcaChartComponent result={emptyResult} />
@@ -127,5 +167,59 @@ describe('PendientesArcaChartComponent', () => {
     // count_pendientes === 0 shows the empty-state card, no <svg> at all.
     expect(emptyContainer.querySelectorAll('svg rect').length).toBe(0);
     unmountEmpty();
+  });
+
+  it('plots bar geometry inside the drawable area (regression: bars were double-offset by the margins)', () => {
+    const { container, unmount } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+
+    // chartHeight=200, topMargin=20, bottomMargin=40 -> usableHeight=140.
+    const usableHeight = 140;
+
+    const groups = Array.from(container.querySelectorAll('svg g'));
+    const barGroups = groups.filter((g) => g.querySelector('title'));
+    expect(barGroups.length).toBe(12);
+
+    for (const g of barGroups) {
+      const rect = g.querySelector('rect');
+      const text = g.querySelector('text');
+      expect(rect).not.toBeNull();
+      const y = Number(rect!.getAttribute('y'));
+      const height = Number(rect!.getAttribute('height'));
+
+      // Every bar must stay within the margin-adjusted drawable height —
+      // a bar using `chartHeight` as its reference frame would push
+      // (y + height) well past `usableHeight` (by the 60px top+bottom
+      // margin), overflowing the chart.
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y + height).toBeLessThanOrEqual(usableHeight);
+
+      // The value label must land inside the same drawable area.
+      const labelY = Number(text!.getAttribute('y'));
+      expect(labelY).toBeGreaterThanOrEqual(0);
+      expect(labelY).toBeLessThanOrEqual(usableHeight);
+    }
+
+    // The bucket with the largest value (2026-07: 1250) should span the
+    // full drawable height, i.e. sit flush with the top (y === 0).
+    const tallestGroup = barGroups.find((g) => g.querySelector('title')!.textContent?.startsWith('2026-07:'));
+    expect(tallestGroup).toBeDefined();
+    const tallestRect = tallestGroup!.querySelector('rect')!;
+    expect(Number(tallestRect.getAttribute('y'))).toBe(0);
+    expect(Number(tallestRect.getAttribute('height'))).toBe(usableHeight);
+
+    unmount();
+  });
+
+  it('interpolates the viewBox dimensions instead of emitting literal template braces', () => {
+    const { container, unmount } = render(
+      <PendientesArcaChartComponent result={mockResultWithData} />
+    );
+
+    const svg = container.querySelector('svg');
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 400 200');
+
+    unmount();
   });
 });

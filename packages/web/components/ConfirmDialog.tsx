@@ -38,14 +38,15 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (isLoading) return;
       if (event.key === 'Escape') onCancel?.();
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onCancel]);
+  }, [onCancel, isLoading]);
 
   return (
-    <div className={baseDialogClass} onClick={() => onCancel?.()}>
+    <div className={baseDialogClass} onClick={() => !isLoading && onCancel?.()}>
       <div
         role="dialog"
         aria-modal="true"

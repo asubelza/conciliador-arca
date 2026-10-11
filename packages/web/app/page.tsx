@@ -55,6 +55,10 @@ type View = 'dashboard' | 'circuit' | 'report' | 'pendientes-historico';
  * T30 (conciliacion-periodica): after período selection, the system enters
  * a view state machine: 'dashboard' | 'circuit' | 'report' | 'pendientes-historico'.
  * The UUID paste step MUST remain exactly as today.
+ *
+ * AD-6 (dashboard-principal): `PeriodoSelector` was slimmed to a pure
+ * tenant-entry step (it now yields only `tenantId`) — `Dashboard` (Section
+ * A/B) now owns período listing/selection via its own `listPeriodos` call.
  */
 export default function Home() {
   const { user } = useAuth();
