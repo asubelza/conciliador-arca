@@ -763,6 +763,197 @@ describe('T18: /api/periodos (integration)', () => {
   });
 
   /**
+   * dashboard-principal T57/T58 (RF-30/RF-35) — integration coverage for
+   * the actual HTTP wiring of POST /api/periodos/:id/reabrir and
+   * DELETE /api/periodos/:id. The domain logic itself (transaction, guard,
+   * stamps) is exhaustively covered in periodo-reapertura.test.ts /
+   * periodo-eliminacion.test.ts; this proves the controllers' handler
+   * order (validatePeriodoIdParam -> assertRole -> resolvePeriodoTenantId +
+   * assertTenantAccess -> domain call) maps typed results/failures to the
+   * right status/body, and that success bodies match the additive
+   * shared-types contracts (PeriodoReabrirResponse / PeriodoDeleteResponse).
+   *
+   * Uses its OWN tenant (same isolation pattern as the list tests above):
+   * matchPeriodo pools a tenant's WHOLE historic voucher stock, so asserting
+   * exact counts against the file's shared tenant would silently depend on
+   * leftovers from every earlier test in this file.
+   */
+  describe('POST /api/periodos/:id/reabrir and DELETE /api/periodos/:id', () => {
+    let pr8TenantId: string;
+
+    beforeAll(async () => {
+      pr8TenantId = await createTestTenant(pool, 'periodos.controller.test (pr8 lifecycle)');
+    });
+
+    afterAll(async () => {
+      await deleteTestTenant(pool, pr8TenantId);
+    });
+
+    it('returns 400 for a malformed período id on both endpoints (handler-order first step)', async () => {
+      const reabrir = await request(app.getHttpServer())
+        .post('/api/periodos/not-a-uuid/reabrir')
+        .set('Authorization', adminAuth);
+      expect(reabrir.status).toBe(400);
+      expect(reabrir.body).toEqual({ error: 'periodo id must be a UUID' });
+
+      const eliminar = await request(app.getHttpServer())
+        .delete('/api/periodos/not-a-uuid')
+        .set('Authorization', adminAuth);
+      expect(eliminar.status).toBe(400);
+      expect(eliminar.body).toEqual({ error: 'periodo id must be a UUID' });
+    });
+
+    it('RF-30 Scenario: a colaborador WITH tenant access reopens a cerrado período and the body matches PeriodoReabrirResponse', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: pr8TenantId, mes: '2026-01-01' });
+      const periodoId = created.body.id;
+
+      const cerrar = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/cerrar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(cerrar.status).toBe(200);
+
+      const { id: userId } = await createTestUser(pool, { role: 'colaborador' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, pr8TenantId]);
+        const res = await request(app.getHttpServer())
+          .post(`/api/periodos/${periodoId}/reabrir`)
+          .set('Authorization', authHeaderFor('colaborador', { sub: userId }));
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+          periodo: {
+            id: periodoId,
+            tenant_id: pr8TenantId,
+            mes: '2026-01-01',
+            estado: 'abierto',
+            tolerancia_ars: null,
+            cerrado_at: null,
+            cerrado_por: null,
+          },
+          counts: { vouchers_reabiertos: 0, resultados_eliminados: 0 },
+        });
+
+        const { rows: auditRows } = await pool.query<{ user_id: string }>(
+          "SELECT user_id FROM audit_trail WHERE action = 'reopen' AND entity = 'periodo' AND entity_id = $1",
+          [periodoId],
+        );
+        expect(auditRows).toEqual([{ user_id: userId }]);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('RF-30 Scenario: a cliente JWT WITH tenant access is rejected with 403 even though it could read the período', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: pr8TenantId, mes: '2026-02-01' });
+      const periodoId = created.body.id;
+
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, pr8TenantId]);
+
+        // Prove the caller genuinely HAS tenant access first (the same JWT can read the período).
+        const readable = await request(app.getHttpServer())
+          .get(`/api/periodos/${periodoId}`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+        expect(readable.status).toBe(200);
+
+        const res = await request(app.getHttpServer())
+          .post(`/api/periodos/${periodoId}/reabrir`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBeDefined();
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('RF-35 Scenario: an admin deletes an empty período — 200 {deleted:true, periodo_id}, row gone, audited with the acting admin', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: pr8TenantId, mes: '2026-03-01' });
+      const periodoId = created.body.id;
+
+      const deletingAdminId = randomUUID();
+      const res = await request(app.getHttpServer())
+        .delete(`/api/periodos/${periodoId}`)
+        .set('Authorization', authHeaderFor('admin', { sub: deletingAdminId }));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ deleted: true, periodo_id: periodoId });
+
+      const detail = await request(app.getHttpServer())
+        .get(`/api/periodos/${periodoId}`)
+        .set('Authorization', adminAuth);
+      expect(detail.status).toBe(404);
+
+      const { rows: auditRows } = await pool.query<{ user_id: string }>(
+        "SELECT user_id FROM audit_trail WHERE action = 'delete' AND entity = 'periodo' AND entity_id = $1",
+        [periodoId],
+      );
+      expect(auditRows).toEqual([{ user_id: deletingAdminId }]);
+    });
+
+    it('RF-35 Scenario: colaborador AND cliente are rejected with 403 on DELETE (admin-only)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: pr8TenantId, mes: '2031-01-01' });
+      const periodoId = created.body.id;
+
+      const { id: colabId } = await createTestUser(pool, { role: 'colaborador' });
+      const { id: clientId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        // Both roles get REAL tenant access so the 403 provably comes from
+        // the role gate, not from assertTenantAccess.
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [colabId, pr8TenantId]);
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [clientId, pr8TenantId]);
+
+        const colabRes = await request(app.getHttpServer())
+          .delete(`/api/periodos/${periodoId}`)
+          .set('Authorization', authHeaderFor('colaborador', { sub: colabId }));
+        expect(colabRes.status).toBe(403);
+
+        const clientRes = await request(app.getHttpServer())
+          .delete(`/api/periodos/${periodoId}`)
+          .set('Authorization', authHeaderFor('cliente', { sub: clientId }));
+        expect(clientRes.status).toBe(403);
+
+        // Untouched by both rejected attempts.
+        const stillThere = await request(app.getHttpServer())
+          .get(`/api/periodos/${periodoId}`)
+          .set('Authorization', adminAuth);
+        expect(stillThere.status).toBe(200);
+      } finally {
+        await deleteTestUser(pool, colabId);
+        await deleteTestUser(pool, clientId);
+      }
+    });
+
+    it('returns 404 for an unknown período id on both endpoints', async () => {
+      const unknown = '00000000-0000-0000-0000-000000000000';
+
+      const reabrir = await request(app.getHttpServer())
+        .post(`/api/periodos/${unknown}/reabrir`)
+        .set('Authorization', adminAuth);
+      expect(reabrir.status).toBe(404);
+      expect(reabrir.body).toEqual({ error: 'período not found' });
+
+      const eliminar = await request(app.getHttpServer())
+        .delete(`/api/periodos/${unknown}`)
+        .set('Authorization', adminAuth);
+      expect(eliminar.status).toBe(404);
+      expect(eliminar.body).toEqual({ error: 'período not found' });
+    });
+  });
+
+  /**
    * RF-09 — integration coverage for the actual HTTP wiring of
    * POST /api/periodos/:id/marks. feedback_loop's own persistence and
    * periodo-report.ts's attachFeedbackAndReprioritize consumption of it are

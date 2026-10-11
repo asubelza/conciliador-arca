@@ -5,7 +5,7 @@
  * shared pool (no repository/ORM layer in this codebase; prisma is
  * documentation-only, see seed-runner.ts's module doc).
  */
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpException, HttpStatus, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { getPgPool } from '../db/pg-pool';
 import {
@@ -15,6 +15,8 @@ import {
   validateTenantIdQuery,
 } from './periodos-validation';
 import { cerrarPeriodo } from './periodo-cierre';
+import { reabrirPeriodo } from './periodo-reapertura';
+import { eliminarPeriodo } from './periodo-eliminacion';
 import { getPeriodoReport, filterSectionsByClassification } from './periodo-report';
 import type { PeriodoClassification } from '../reconciliations/periodo-matching-engine';
 import { buildPeriodoExportSections, toPeriodoReportCsv, toPeriodoReportXlsxBuffer } from './periodo-report-exporter';
@@ -234,6 +236,84 @@ export class PeriodosController {
 
     const cerradoPor = (body as { cerrado_por?: string } | null)?.cerrado_por ?? null;
     const result = await cerrarPeriodo(pool, id as string, cerradoPor);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * dashboard-principal T58 (RF-30, RF-39): "Reabrir" — the audited inverse
+   * of cerrar (see periodo-reapertura.ts). Handler order mirrors cerrar's
+   * exactly: param validation -> assertRole(['admin','colaborador']) ->
+   * cheap resolvePeriodoTenantId + assertTenantAccess -> domain call. All
+   * the real work (row lock, stamp-scoped undo, snapshot delete, in-tx
+   * audit) lives inside one transaction in the domain function; this
+   * handler only maps its typed result/failure to an HTTP response.
+   */
+  @Post(':id/reabrir')
+  @HttpCode(HttpStatus.OK)
+  async reabrir(@Param('id') id: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    // Same "resolve, then authorize, before real work" posture as cerrar —
+    // a genuinely missing período still surfaces its 404 from
+    // reabrirPeriodo's own row-locked check below.
+    const tenantId = await resolvePeriodoTenantId(pool, id as string);
+    if (tenantId !== undefined) {
+      const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+      if (authFailure) {
+        throw new HttpException({ error: authFailure.error }, authFailure.status);
+      }
+    }
+
+    const result = await reabrirPeriodo(pool, id as string, req.user!.id);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * dashboard-principal T58 (RF-35, RF-39): "Eliminar" — physical delete of
+   * an empty período behind the hybrid zero-reference guard
+   * (periodo-eliminacion.ts). Admin-only, mirroring the sole precedent PUT
+   * tenants/:id/config; handler order mirrors cerrar's. The typed BLOCKED
+   * failure's `{ error }` message already names both blocker counts
+   * verbatim for the UI to surface as-is.
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  async eliminar(@Param('id') id: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validatePeriodoIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const tenantId = await resolvePeriodoTenantId(pool, id as string);
+    if (tenantId !== undefined) {
+      const authFailure = await assertTenantAccess(pool, req.user!, tenantId);
+      if (authFailure) {
+        throw new HttpException({ error: authFailure.error }, authFailure.status);
+      }
+    }
+
+    const result = await eliminarPeriodo(pool, id as string, req.user!.id);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }

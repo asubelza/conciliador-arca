@@ -1,0 +1,32 @@
+-- 023_grant_app_role_delete_periodos.sql
+-- dashboard-principal T59 (RF-40, design AD-4): additive least-privilege
+-- migration granting app_role exactly DELETE on the two tables the new
+-- período lifecycle endpoints delete rows from. No schema change, no data
+-- change.
+--
+-- Why this exists at all: 017's invariant is "every grant mirrors an actual
+-- application statement". Until dashboard-principal that statement set
+-- contained no DELETE at all ("No table gets DELETE: no code path in the app
+-- deletes production rows" — see 017's module comment). The two new audited
+-- lifecycle actions change exactly that, each with one statement:
+--
+--   periodo_resultados — reabrirPeriodo()'s snapshot emptying inside its
+--     single transaction (periodo-reapertura.ts):
+--       DELETE FROM periodo_resultados WHERE periodo_id = $1
+--     This is cierre-de-mes RF-20's user-approved append-only exception:
+--     the frozen snapshot regenerates at the next cierre. UPDATE stays
+--     revoked by 016_init_periodo_resultados.sql — a reabiert snapshot is
+--     deleted whole and rewritten by cierre, never edited in place.
+--
+--   periodos — eliminarPeriodo()'s physical row delete inside its guard
+--     transaction (periodo-eliminacion.ts), reached only when zero vouchers
+--     and zero snapshot rows reference the período:
+--       DELETE FROM periodos WHERE id = $1
+--
+-- Every other denial in app-role-grants.test.ts is unchanged by design: no
+-- DELETE on tenants/vouchers_staging/vouchers_canonical/reconciliation_
+-- results/users, no UPDATE on periodo_resultados/reconciliation_results/
+-- vouchers_staging, and still nothing at all on afip_tipo_map.
+
+GRANT DELETE ON periodo_resultados TO app_role;
+GRANT DELETE ON periodos TO app_role;
