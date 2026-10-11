@@ -6,6 +6,12 @@ import { SpinnerIcon } from './icons';
 
 export interface PendientesHistoricoViewerProps {
   tenantId: string;
+  /** Optional: an already-fetched result to render immediately, skipping
+   * this component's own fetch — Dashboard's "Ver histórico completo"
+   * overlay reuses Section C's own fetch instead of re-requesting the same
+   * tenant's data a second time. Any other caller that doesn't pass this
+   * keeps the component's original standalone fetch-on-mount behavior. */
+  initialResult?: PendientesHistoricoResult;
 }
 
 /**
@@ -66,8 +72,8 @@ function VoucherTable({ rows, showAntiguedad }: { rows: PendientesHistoricoRow[]
   );
 }
 
-export function PendientesHistoricoViewer({ tenantId }: PendientesHistoricoViewerProps) {
-  const [result, setResult] = useState<PendientesHistoricoResult | null>(null);
+export function PendientesHistoricoViewer({ tenantId, initialResult }: PendientesHistoricoViewerProps) {
+  const [result, setResult] = useState<PendientesHistoricoResult | null>(initialResult ?? null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -81,8 +87,9 @@ export function PendientesHistoricoViewer({ tenantId }: PendientesHistoricoViewe
   }, [tenantId]);
 
   useEffect(() => {
+    if (initialResult) return; // already have data from the caller — skip the redundant fetch
     void load();
-  }, [load]);
+  }, [load, initialResult]);
 
   if (error) {
     return (

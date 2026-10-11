@@ -1,10 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { PendientesHistoricoViewer } from './PendientesHistoricoViewer';
 import { clearSession, setSession } from '@/lib/session';
+import type { PendientesHistoricoResult } from '@/lib/api';
 
 const TENANT_ID = '11111111-1111-1111-1111-111111111111';
 
-const emptyBody = {
+const emptyBody: PendientesHistoricoResult = {
   tenant: { id: TENANT_ID, name: 'Estudio Contable JY', created_at: '2026-03-01T00:00:00.000Z' },
   pendientes: [],
   count_pendientes: 0,
@@ -12,7 +13,7 @@ const emptyBody = {
   count_excluidos_previos_a_alta: 0,
 };
 
-const populatedBody = {
+const populatedBody: PendientesHistoricoResult = {
   tenant: { id: TENANT_ID, name: 'Estudio Contable JY', created_at: '2026-03-01T00:00:00.000Z' },
   pendientes: [
     {
@@ -26,7 +27,7 @@ const populatedBody = {
       fecha: '2026-04-15',
       file_source: 'arca',
       estado: 'pendiente',
-      periodo_alta_id: null,
+      periodo_alta_id: '',
       antiguedad_meses: 4,
     },
   ],
@@ -43,7 +44,7 @@ const populatedBody = {
       fecha: '2025-11-01',
       file_source: 'arca',
       estado: 'pendiente',
-      periodo_alta_id: null,
+      periodo_alta_id: '',
       antiguedad_meses: 9,
     },
   ],
@@ -116,5 +117,16 @@ describe('2026-08-23 (feature 3 de 3): PendientesHistoricoViewer', () => {
       expect.stringContaining(`/api/tenants/${TENANT_ID}/pendientes-historico`),
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token' }) }),
     );
+  });
+
+  it('usa initialResult sin fetchear de nuevo cuando ya viene provisto (evita el refetch redundante de Section C)', () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<PendientesHistoricoViewer tenantId={TENANT_ID} initialResult={populatedBody} />);
+
+    expect(screen.getByText(/histórico de pendientes en arca/i)).toBeInTheDocument();
+    expect(screen.getByText(/pendientes desde el alta \(1\)/i)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

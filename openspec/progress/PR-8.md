@@ -46,3 +46,12 @@
 
 - Frontend slice (PR-9): fetchers `reabrirPeriodo()`/`eliminarPeriodo()` consuming T56 types, UI wiring (T60–T62) — out of this branch's scope by design.
 - The two pre-existing Windows teardown flakes above could be fixed upstream (retry-tolerant rmSync in their afterAll) but belong to reconciliation test infra, not this feature.
+
+## Archive Phase Complete (2026-08-23)
+
+- Backend slice PR-8 fully archived
+- Delta specs synced to main specs (`periodos.spec.md`, `cierre-de-mes.spec.md`)
+- Archive report persisted to Engram topic `sdd/dashboard-principal/archive-report`
+- Change folder moved to `openspec/changes/archive/2026-08-23-dashboard-principal/`
+- 5 commits archived (T52–T59 complete)
+- 503/503 tests passing in `packages/api`

@@ -82,7 +82,7 @@ services:
       # being shared beyond this machine.
       JWT_SECRET: "5lwvp8aTXVBhlUED1Syq12iL19kBnUGonwXfd/9X5TMlkMRv+Fmeea83aCCKFts0"
     ports:
-      - "3000:3000"
+      - "3002:3000"
     volumes:
       # api writes uploaded files to os.tmpdir()/conciliador-uploads
       # (reconciliations.controller.ts) and the worker reads them back by
@@ -127,7 +127,7 @@ services:
         # from the user's browser on the host, not the Docker network, so
         # this is localhost:3000 (the api service's published port), not
         # http://api:3000 (which only resolves between containers).
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:3000
+        NEXT_PUBLIC_API_URL: http://localhost:3002
     container_name: conciliador-web
     ports:
       - "3001:3001"
