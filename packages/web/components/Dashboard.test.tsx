@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DashboardShell } from './Dashboard';
 import { listPeriodos, getPendientesHistorico } from '../lib/api';
@@ -52,6 +52,7 @@ function renderDashboard(overrides: Partial<Parameters<typeof DashboardShell>[0]
     onReopenPeriodo: jest.fn(),
     onDeletePeriodo: jest.fn(),
     onViewReport: jest.fn(),
+    onChangeTenant: jest.fn(),
     ...overrides,
   };
   render(<DashboardShell {...props} />);
@@ -236,5 +237,81 @@ describe('DashboardShell', () => {
     renderDashboard({ userRole: 'cliente' });
 
     expect(await screen.findByRole('heading', { name: /Pendientes ARCA/i })).toBeInTheDocument();
+  });
+
+  it('Section C muestra conteos como números simples, sin símbolo de moneda', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue({
+      ...historicoVacio,
+      count_excluidos_previos_a_alta: 1234,
+    });
+    renderDashboard({ userRole: 'cliente' });
+
+    expect(await screen.findByText(/excluidos previos a alta/i)).toBeInTheDocument();
+    expect(screen.getByText('1234')).toBeInTheDocument();
+    expect(screen.queryByText(/\$1234/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$1,234/)).not.toBeInTheDocument();
+  });
+
+  it('al confirmar "Eliminar" deshabilita el diálogo mientras la mutación está en curso y lo cierra al terminar', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    let resolveDelete: () => void = () => {};
+    const onDeletePeriodo = jest.fn(() => new Promise<void>((resolve) => { resolveDelete = resolve; }));
+    renderDashboard({ onDeletePeriodo });
+
+    await userEvent.click(await screen.findByRole('button', { name: /Eliminar/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+
+    expect(onDeletePeriodo).toHaveBeenCalledWith(abiertoPeriodo);
+    // Still open and disabled while the mutation is pending — the dialog
+    // must not be dismissed before the mutation settles.
+    expect(screen.getByRole('button', { name: /Confirmar/i })).toBeDisabled();
+
+    resolveDelete();
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /Eliminar período/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('si getPendientesHistorico falla, Section C muestra error con reintentar', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockRejectedValueOnce(new Error('Pendientes históricos fetch failed'));
+    renderDashboard();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Pendientes históricos fetch failed');
+
+    mockedGetPendientesHistorico.mockResolvedValueOnce(historicoVacio);
+    await userEvent.click(screen.getByRole('button', { name: /Reintentar/i }));
+
+    expect(await screen.findByText(/Sin pendientes ARCA/i)).toBeInTheDocument();
+  });
+
+  it('ofrece "Cambiar tenant" cuando listPeriodos falla, y lo invoca al hacer click', async () => {
+    mockedListPeriodos.mockRejectedValueOnce(new Error('Períodos fetch failed (500)'));
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    const props = renderDashboard();
+
+    const changeTenantBtn = await screen.findByRole('button', { name: /Cambiar tenant/i });
+    await userEvent.click(changeTenantBtn);
+    expect(props.onChangeTenant).toHaveBeenCalled();
+  });
+
+  it('ofrece "Cambiar tenant" cuando el tenant no tiene ningún período', async () => {
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    renderDashboard();
+
+    expect(await screen.findByRole('button', { name: /Cambiar tenant/i })).toBeInTheDocument();
+  });
+
+  it('no ofrece "Cambiar tenant" cuando hay períodos cargados sin error', async () => {
+    mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    renderDashboard();
+
+    await screen.findByText('2026-08');
+    expect(screen.queryByRole('button', { name: /Cambiar tenant/i })).not.toBeInTheDocument();
   });
 });

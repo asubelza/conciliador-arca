@@ -29,7 +29,7 @@ interface SectionAProps {
   onRetry: () => void;
   onOpenPeriodo: (periodo: Periodo) => void;
   onCreatePeriodo: () => void;
-  onDeletePeriodo: (periodo: Periodo) => void;
+  onDeletePeriodo: (periodo: Periodo) => void | Promise<void>;
 }
 
 /** Section B: Histórico */
@@ -40,7 +40,7 @@ interface SectionBProps {
   error: string | null;
   onRetry: () => void;
   onViewReport: (periodo: Periodo) => void;
-  onReopenPeriodo: (periodo: Periodo) => void;
+  onReopenPeriodo: (periodo: Periodo) => void | Promise<void>;
 }
 
 /** RF-29: shared per-section error banner + retry button. */
@@ -85,13 +85,19 @@ interface SectionCProps {
 /** Section A - Período en curso */
 function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, onCreatePeriodo, onDeletePeriodo }: SectionAProps) {
   const [confirmPeriodo, setConfirmPeriodo] = useState<Periodo | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleConfirmDialogClose = () => setConfirmPeriodo(null);
 
   const handleConfirm = async () => {
     if (!confirmPeriodo) return;
-    onDeletePeriodo(confirmPeriodo);
-    setConfirmPeriodo(null);
+    setIsSubmitting(true);
+    try {
+      await onDeletePeriodo(confirmPeriodo);
+    } finally {
+      setIsSubmitting(false);
+      setConfirmPeriodo(null);
+    }
   };
 
   const openPeriodos = periodos.filter((p) => p.estado === 'abierto');
@@ -159,6 +165,7 @@ function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, 
           text="¿Estás seguro de que deseas eliminar este período?"
           onConfirm={handleConfirm}
           onCancel={handleConfirmDialogClose}
+          isLoading={isSubmitting}
         />
       )}
     </div>
@@ -168,12 +175,18 @@ function SectionA({ periodos, userRole, loading, error, onRetry, onOpenPeriodo, 
 /** Section B - Histórico */
 function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, onReopenPeriodo }: SectionBProps) {
   const [confirmPeriodo, setConfirmPeriodo] = useState<Periodo | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const closedPeriodos = periodos.filter((p) => p.estado === 'cerrado');
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!confirmPeriodo) return;
-    onReopenPeriodo(confirmPeriodo);
-    setConfirmPeriodo(null);
+    setIsSubmitting(true);
+    try {
+      await onReopenPeriodo(confirmPeriodo);
+    } finally {
+      setIsSubmitting(false);
+      setConfirmPeriodo(null);
+    }
   };
 
   return (
@@ -226,6 +239,7 @@ function SectionB({ periodos, userRole, loading, error, onRetry, onViewReport, o
           text="¿Estás seguro de que deseas reabrir este período?"
           onConfirm={handleConfirm}
           onCancel={() => setConfirmPeriodo(null)}
+          isLoading={isSubmitting}
         />
       )}
     </div>
@@ -237,17 +251,23 @@ function SectionC({ tenantId, userRole, onViewHistoricoCompleto }: SectionCProps
   const [result, setResult] = useState<PendientesHistoricoResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const data = await getPendientesHistorico(tenantId);
-        setResult(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
-      }
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const data = await getPendientesHistorico(tenantId);
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error fetching pendientes históricos');
     }
-    load();
   }, [tenantId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (error) {
+    return <SectionErrorBanner error={error} onRetry={load} />;
+  }
 
   // Cliente role: read-only, show totals only, no chart editing
   if (userRole === 'cliente') {
@@ -274,7 +294,7 @@ function SectionC({ tenantId, userRole, onViewHistoricoCompleto }: SectionCProps
           </div>
           <div>
             <p className="text-indigo-600 dark:text-indigo-400 text-2xl font-bold">
-              ${result.count_excluidos_previos_a_alta > 0 ? result.count_excluidos_previos_a_alta.toLocaleString('es-AR') : '0'}
+              {result.count_excluidos_previos_a_alta}
             </p>
             <p className="text-slate-500 dark:text-slate-400">
               excluidos previos a alta
@@ -325,9 +345,13 @@ export interface DashboardShellProps {
   onDeletePeriodo: (periodo: Periodo) => void;
   /** Optional: navigate to a closed período's report. Defaults to a no-op. */
   onViewReport?: (periodo: Periodo) => void;
+  /** Escape hatch back to tenant entry when the períodos fetch fails or
+   * the tenant has no períodos at all — otherwise the user would be
+   * stranded on the dashboard with no way back to pick another tenant. */
+  onChangeTenant: () => void;
 }
 
-export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeriodo, onReopenPeriodo, onDeletePeriodo, onViewReport }: DashboardShellProps) {
+export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeriodo, onReopenPeriodo, onDeletePeriodo, onViewReport, onChangeTenant }: DashboardShellProps) {
   const [periodos, setPeriodos] = useState<Periodo[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -365,6 +389,12 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
     await refresh();
   };
 
+  // 'Cambiar tenant' escape hatch: shown once loading settles and the
+  // períodos fetch either failed or came back empty, so the user is never
+  // stranded on a dashboard with nothing to do and no way back to pick a
+  // different tenant.
+  const showChangeTenantEscape = !loading && (!!error || (periodos !== null && periodos.length === 0));
+
   if (showHistoricoOverlay) {
     return (
       <div className="space-y-4">
@@ -382,6 +412,17 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
 
   return (
     <div className="space-y-8">
+      {showChangeTenantEscape && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={onChangeTenant}
+            className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+          >
+            Cambiar tenant
+          </button>
+        </div>
+      )}
       <SectionA
         periodos={periodos || []}
         userRole={userRole}
@@ -389,7 +430,7 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
         error={error}
         onRetry={refresh}
         onOpenPeriodo={onOpenPeriodo}
-        onCreatePeriodo={() => afterMutation(onCreatePeriodo)}
+        onCreatePeriodo={onCreatePeriodo}
         onDeletePeriodo={(p) => afterMutation(() => onDeletePeriodo(p))}
       />
       <SectionB

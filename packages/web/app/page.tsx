@@ -67,6 +67,7 @@ export default function Home() {
   const [view, setView] = useState<View>('dashboard');
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
   const [showPendientesHistorico, setShowPendientesHistorico] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
   // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
@@ -87,6 +88,7 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
+    setActionError(null);
     setView('dashboard');
   }
 
@@ -103,7 +105,11 @@ export default function Home() {
     setView('circuit');
   }
 
-  function handleChangePeriodo() {
+  // AD-6: resets back to tenant entry (PeriodoSelector) — used both as the
+  // explicit "Cambiar tenant" action from the circuit view and as the
+  // escape hatch Dashboard offers when the períodos fetch fails or the
+  // tenant has no períodos at all.
+  function handleChangeTenant() {
     setTenantId(null);
     setPeriodo(null);
     setJobId(null);
@@ -111,11 +117,8 @@ export default function Home() {
     setShowJobReport(false);
     setShowPeriodoReport(false);
     setShowPendientesHistorico(false);
+    setActionError(null);
     setView('dashboard');
-  }
-
-  function setViewFunc(newView: View) {
-    setView(newView);
   }
 
   function handleUploadAnother() {
@@ -168,10 +171,10 @@ export default function Home() {
             )}
             <button
               type="button"
-              onClick={handleChangePeriodo}
+              onClick={handleChangeTenant}
               className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
             >
-              Cambiar período
+              Cambiar tenant
             </button>
           </div>
         </div>
@@ -306,19 +309,30 @@ export default function Home() {
 
         {tenantId && (
           <div className="flex flex-col gap-6">
+            {actionError && (
+              <p
+                role="alert"
+                className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400"
+              >
+                {actionError}
+              </p>
+            )}
+
             {/* Section A: Período en curso (Dashboard) */}
             {view === 'dashboard' && (
               <Dashboard
                 tenantId={tenantId}
                 userRole={user.role as 'admin' | 'colaborador' | 'cliente'}
                 onOpenPeriodo={handleOpenPeriodo}
+                onChangeTenant={handleChangeTenant}
                 onCreatePeriodo={async () => {
                   try {
                     const newPeriodo = await createPeriodo(tenantId, new Date().toISOString().slice(0, 7));
+                    setActionError(null);
                     handleOpenPeriodo(newPeriodo);
                   } catch (err) {
                     console.error('Error creating período:', err);
-                    alert('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
+                    setActionError('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
                   }
                 }}
                 onReopenPeriodo={async (p) => {
@@ -326,10 +340,11 @@ export default function Home() {
                   // Dashboard (SectionB); acá solo ejecutamos la operación.
                   try {
                     const { periodo: reopened } = await reabrirPeriodo(p.id);
+                    setActionError(null);
                     if (periodo?.id === p.id) setPeriodo(reopened);
                   } catch (err) {
                     console.error('Error reopening período:', err);
-                    alert('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
+                    setActionError('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
                   }
                 }}
                 onDeletePeriodo={async (p) => {
@@ -337,10 +352,11 @@ export default function Home() {
                   // Dashboard (SectionA).
                   try {
                     await eliminarPeriodo(p.id);
+                    setActionError(null);
                     if (periodo?.id === p.id) setPeriodo(null);
                   } catch (err) {
                     console.error('Error deleting período:', err);
-                    alert('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
+                    setActionError('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
                   }
                 }}
                 // RF-26: "Ver reporte" on a closed período (Section B) also
@@ -357,28 +373,28 @@ export default function Home() {
               <div className="flex gap-4 mt-4">
                 <button
                   type="button"
-                  onClick={() => setViewFunc('dashboard')}
+                  onClick={() => setView('dashboard')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'dashboard' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Dashboard
                 </button>
                 <button
                   type="button"
-                  onClick={() => setViewFunc('circuit')}
+                  onClick={() => setView('circuit')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'circuit' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Circuito
                 </button>
                 <button
                   type="button"
-                  onClick={() => setViewFunc('report')}
+                  onClick={() => setView('report')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'report' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Reporte
                 </button>
                 <button
                   type="button"
-                  onClick={() => setViewFunc('pendientes-historico')}
+                  onClick={() => setView('pendientes-historico')}
                   className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'pendientes-historico' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
                 >
                   Histórico
