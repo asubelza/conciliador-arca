@@ -6,3 +6,8 @@ coverage/
 .engram/
 .atl/
 tmp/
+
+# packages/web (Next.js)
+.next/
+next-env.d.ts
+*.tsbuildinfo

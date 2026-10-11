@@ -1,0 +1,60 @@
+# Tasks: conciliacion-periodica
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~1400 |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | PR-4 (schema fix + períodos) → PR-5 (stock histórico + matching de 3 pasos + tolerancia) → PR-6 (cierre de mes + reporte de 3 secciones + frontend) |
+| Delivery strategy | auto-forecast → C3 Chained |
+| Chain strategy | feature-branch-chain (same pattern as pr-2/pr-3) |
+
+Decision needed before apply: No
+Chained PRs recommended: Yes
+
+## Phase 1: Schema fix + Períodos (PR-4 — base: feature/mvp-carga-comprobantes-pr-3)
+
+- [x] T14: Migración: reemplazar el esquema legacy CHAR(3) de `afip_tipo_map`/`vouchers_canonical.tipo` por los códigos AFIP enteros reales que ya usa `afip-tipo-lookup.ts` (RF-14) (M, api+db, PR-4) — commit `d33ee79`
+- [x] T15: Re-escribir `seed.ts`/`seed-runner.ts` para sembrar los códigos reales; actualizar `shared-types` si corresponde (S, api, PR-4) — commit `d33ee79`
+- [x] T16: Migración: tabla `periodos` (tenant_id, mes, estado, tolerancia_ars snapshot, cerrado_at/cerrado_por) + `UNIQUE(tenant_id, mes)` (S, db, PR-4) — 013_init_periodos.sql
+- [x] T17: Migración: `tenants.tolerancia_redondeo_ars` (default 0.99) (S, db, PR-4) — 014_alter_tenants_add_tolerancia.sql
+- [x] T18: Endpoints: `POST /api/periodos`, `GET /api/periodos`, `GET /api/periodos/:id` (RF-12) (S, api, PR-4)
+- [x] T19: `POST /api/reconciliations` exige `periodo_id`; rechaza upload contra período cerrado (RF-13) (M, api, PR-4)
+- [x] T20: Endpoint de configuración de tolerancia por tenant: `GET`/`PUT /api/tenants/:id/config` (S, api, PR-4)
+
+## Phase 2: Stock Histórico + Matching de 3 Pasos (PR-5 — base: PR-4)
+
+- [x] T21: Migración: columnas `estado`/`periodo_alta_id`/`periodo_cierre_id` en `vouchers_canonical` + índice único de clave compuesta por `file_source` (RF-15) (M, db, PR-5) — 015_alter_vouchers_canonical_add_estado_periodo.sql
+- [x] T22: Upsert real de `CanonicalVoucher` normalizado -> `vouchers_canonical` por clave compuesta, respetando inmutabilidad de filas `conciliado` (RF-15) (M, api, PR-5) — vouchers-canonical-writer.ts, wired into reconciliation.worker.ts
+- [x] T23: Motor de matching de 3 pasos: excluir conciliado, match corriente, match histórico contra stock pendiente (RF-16) (L, api, PR-5) — periodo-matching-engine.ts
+- [x] T24: Comparación de importes con tolerancia por tenant + clasificación `con_divergencia` (RF-18) (S, api, PR-5) — periodo-matching-engine.ts
+- [x] T25: Detección de `posible_duplicado_en_sistema` (RF-17) (S, api, PR-5) — periodo-matching-engine.ts
+- [x] T26: Cálculo de `antiguedad_meses` para stock pendiente (RF-19) (S, api, PR-5) — periodo-matching-engine.ts
+
+## Phase 3: Cierre de Mes + Reporte + Frontend (PR-6 — base: PR-5)
+
+- [x] T27: `POST /api/periodos/:id/cerrar` — persistir estados finales, rollover implícito de pendientes, rechazo de doble cierre (RF-20) (M, api, PR-6) — periodo-cierre.ts
+- [x] T28: Snapshot de tolerancia al cerrar + inmutabilidad del resultado congelado (RF-21) (S, api+db, PR-6) — 016_init_periodo_resultados.sql
+- [x] T29: `GET /api/periodos/:id/report` — reporte de 3 secciones (RF-22/RF-23) (M, api, PR-6) — periodo-report.ts
+- [x] T30: Frontend: alta/selección de período, cargas múltiples dentro de un período abierto, botón "Cerrar Conciliación del Mes" con confirmación (M, frontend, PR-6) — PeriodoSelector.tsx, UploadForm.tsx, PeriodoReportViewer.tsx
+- [x] T31: Frontend: nuevo visor de reporte de 3 secciones, con antigüedad visible en Pendientes en ARCA (M, frontend, PR-6) — PeriodoReportViewer.tsx
+- [x] T32: Frontend: configuración simple de tolerancia por tenant (S, frontend, PR-6) — TenantConfigPanel.tsx
+
+## Phase 4: Matching por Similitud + Tolerancia de Fecha + Feedback Influye en Futuras Clasificaciones (PR-7 — base: PR-6)
+
+Cierra los 2 gaps de alcance que quedaban de RF-01–RF-15 después de `autenticacion-roles` (ver `claude/estado_dev_y_revision_pr1.md`, sección "Los 3 gaps..."). Instrucción del cliente: "si prosigamos con ambos" — ambos se implementaron juntos, no uno a la vez.
+
+- [x] T44: Migraciones: `tenants.tolerancia_dias_fecha` (default 5, CHECK 0–365), tabla `fuzzy_match_confirmations` (confirmado/descartado por par sistema/ARCA), `periodo_resultados.classification` admite `'posible_coincidencia'` + columna `similarity_reason` (RF-04/RF-13) (S, db, PR-7) — 019/020/021_*.sql
+- [x] T45: Motor de matching: fallback de similitud cuando la clave exacta no encuentra nada — Paso A (typo de 1 dígito en `numero`, mismo `punto_venta`, fecha exacta, importe con tolerancia) y Paso B (fecha dentro de `tolerancia_dias_fecha` + importe con tolerancia, `numero`/`punto_venta` libres); una fila `posible_coincidencia` NUNCA se promueve sola a `conciliado_ok` — requiere confirmación explícita del contador; un par `confirmado` en `fuzzy_match_confirmations` se trata igual que un match de clave exacta en la siguiente corrida (RF-04/RF-16) (L, api, PR-7) — periodo-matching-engine.ts
+- [x] T46: `tolerancia_dias_fecha` configurable por tenant, mismo patrón que `tolerancia_redondeo_ars` — `GET`/`PUT /api/tenants/:id/config` (RF-13) (S, api, PR-7) — tenants.controller.ts, tenants-validation.ts
+- [x] T47: `POST /api/periodos/:id/coincidencias` — el contador confirma o descarta una sugerencia de `posible_coincidencia` con un click; rechaza contra un período `cerrado` (409); valida que ambos vouchers existan y pertenezcan al tenant (404); loguea `confirm_similarity`/`discard_similarity` en `audit_trail` (RF-04) (M, api, PR-7) — periodos.controller.ts, coincidencia-validation.ts
+- [x] T48: Reporte de período: 4ta sección `posibles_coincidencias`; cada fila de cada sección lleva `feedback_previo` (la marca más reciente de `feedback_loop` para esa `composite_key`, de cualquier período anterior) — nunca se oculta nada (RNF-07), solo se reordena: filas sin feedback previo primero dentro de su sección (RF-04/RF-09) (M, api, PR-7) — periodo-report.ts, periodo-report-exporter.ts (CSV/XLSX también exportan la 4ta sección)
+- [x] T49: `POST /api/periodos/:id/marks` — marca `revisado`/`explicado` con alcance de período (no de job), usando el `user_id` del JWT autenticado (`req.user!.id`), no un `user_id` del body como el endpoint viejo pre-auth (RF-09) (S, api, PR-7) — periodos.controller.ts
+- [x] T50: Frontend: sección "Posible Coincidencia" en `PeriodoReportViewer` — filas sistema/ARCA lado a lado, motivo de la sugerencia, botones Confirmar/Descartar (admin/colaborador); nota de feedback previo visible debajo de cualquier fila que ya la tenga; botones Revisado/Explicado (con nota opcional vía prompt) en Discrepancias/Pendientes/Posible Coincidencia — todo oculto para `cliente` (RF-14 read-only) (M, frontend, PR-7) — PeriodoReportViewer.tsx
+- [x] T51: Frontend: segundo campo en `TenantConfigPanel` para `tolerancia_dias_fecha`, mismo patrón que la tolerancia de redondeo — la API exige ambos campos juntos en cada PUT (S, frontend, PR-7) — TenantConfigPanel.tsx
+
+## Verification Discipline (unchanged from PR-1/2/3)
+
+Cada tarea se verifica contra Postgres/Redis reales (no solo jest con mocks), se sincroniza a la máquina del usuario, y se confirma con `git log`/`git show --stat` corridos directamente sobre su repo antes de marcarse como hecha — mismo estándar que se aplicó en todo `mvp-carga-comprobantes` y en el fix de `libro_iva_compras`.

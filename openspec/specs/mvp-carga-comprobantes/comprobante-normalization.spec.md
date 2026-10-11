@@ -16,12 +16,14 @@ After staging, raw rows from ARCA and four accounting-system exports (Tango, Bej
 
 The system MUST read each vendor's variant column names and map them to the canonical fields: `cuit_emisor`, `tipo_cbte`, `punto_venta`, `numero`, `fecha_emision`, `importe_total_ars`, `moneda`, `cotizacion`.
 
-#### Scenario: Normalize ARCA "Tipo Doc. Receptor" column
+#### Scenario: Normalize ARCA "Tipo Doc. Emisor" column
 
-- GIVEN a staged ARCA row with `Nro. Doc. Receptor = "30-12345678-9"`
+- GIVEN a staged ARCA row with `Nro. Doc. Emisor = "30-12345678-9"`
 - WHEN normalization runs
 - THEN `cuit_emisor` is stored as `"30123456789"` (punctuation stripped)
 - AND `tipo_cbte` is canonicalized from `"1"` → `1` (integer)
+
+**Correction (2026-08-23, real client data):** this scenario originally named `Nro. Doc. Receptor` as the source of `cuit_emisor` — an assumption never checked against a real ARCA export until a client-provided 995-row "Comprobantes Recibidos" file showed `Nro. Doc. Receptor` is constant across the whole file (the estudio's own client — the party *receiving* the comprobante), while `Nro. Doc. Emisor` varies per row (292 distinct vendor CUITs — the party who actually issued it, what reconciliation needs). Also confirmed on that same real export and now handled by `column-adapters.ts`'s `adaptArca`: `Tipo de Comprobante` arrives as `"<código> - <descripción>"` (e.g. `"1 - Factura A"`), not a bare code; and the comprobante number arrives as a `Número Desde`/`Número Hasta` pair rather than a single `Número` column.
 
 #### Scenario: Normalize Tango "CUIT" column
 
@@ -63,6 +65,8 @@ The system MUST maintain a lookup table (`afip_tipo_map`) mapping textual and nu
 - THEN the row is classified as `errors`
 - AND an operator can add `"20" → 20` to `afip_tipo_map` via seed migration
 - AND re-processing the upload succeeds
+
+**Correction (2026-08-23, real client data):** exactly this "tipo drift" scenario played out for real. A client-provided ARCA "Comprobantes Recibidos" export (995 rows) had 8 rows with 3 AFIP codes not yet in `AFIP_TIPOS_CADENCIAL` (shared-types, the runtime source of truth `afip_tipo_map` is seeded from): `15` (Recibo C), `51` and `81`. They were added after confirming each against AFIP's own published "Tabla de Comprobantes" — see `AFIP_TIPOS_CADENCIAL`'s doc comment in `packages/shared-types/src/index.ts` for the full detail. `51` is worth flagging specifically: it used to mean "Factura M", but RG 5762/2025 ("Fin de las facturas M") repurposed that same numeric code to mean "Factura A con leyenda Operación Sujeta a Retención" instead — a different comprobante type that explicitly is *not* Factura M despite reusing the code. The real export's own row description matched this current, post-2025 meaning, which is what got encoded.
 
 ### RF-07: Locale-aware parsing (decimal, date, currency)
 

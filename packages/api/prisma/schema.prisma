@@ -1,0 +1,176 @@
+// Prisma data model for conciliador-arca (mvp-carga-comprobantes).
+// Mirrors the SQL migrations in prisma/migrations/*.sql.
+// Production provider is PostgreSQL (shared schema + RLS per design/architecture.md).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                    String   @id @default(uuid())
+  name                  String
+  cuit                  String?
+  // T17 (RF-18, conciliacion-periodica): per-tenant amount-comparison
+  // tolerance — see 014_alter_tenants_add_tolerancia.sql.
+  toleranciaRedondeoArs Decimal  @default(0.99) @map("tolerancia_redondeo_ars") @db.Decimal(10, 2)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("tenants")
+}
+
+// T14 (RF-14, conciliacion-periodica, 2026-08-22): `codigo` is a real AFIP
+// integer tipo code (1=Factura A, 6=Factura B, …), replacing the disconnected
+// zero-padded CHAR(3) scheme this model used before — see
+// 012_migrate_tipo_to_afip_integer_codes.sql and shared-types' module doc.
+model AfipTipoMap {
+  codigo      Int      @id
+  descripcion String
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("afip_tipo_map")
+}
+
+// T16 (RF-12/RF-13, conciliacion-periodica): a calendar month, per tenant,
+// that reconciliation uploads belong to — see 013_init_periodos.sql.
+model Periodo {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  mes            DateTime  @db.Date
+  estado         String    @default("abierto")
+  toleranciaArs  Decimal?  @map("tolerancia_ars") @db.Decimal(10, 2)
+  cerradoAt      DateTime? @map("cerrado_at")
+  cerradoPor     String?   @map("cerrado_por")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@unique([tenantId, mes])
+  @@map("periodos")
+}
+
+model VoucherStaging {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  jobId      String?  @map("job_id")
+  fileSource String   @map("file_source")
+  rawData    Json     @map("raw_data")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("vouchers_staging")
+}
+
+model VoucherCanonical {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  fecha        DateTime?
+  // T14: real AFIP integer tipo code (see AfipTipoMap's module doc above) —
+  // replaces the old CHAR(3) `tipo` column.
+  tipoCbte     Int      @map("tipo_cbte")
+  cuitEmisor   String   @map("cuit_emisor") @db.VarChar(11)
+  puntoVenta   Int      @map("punto_venta")
+  numero       Int
+  importeTotal Decimal? @map("importe_total") @db.Decimal(15, 2)
+  iva          Float?
+  fileSource   String   @map("file_source")
+  // T21 (RF-15/RF-16, conciliacion-periodica): the persistent-stock state —
+  // see 015_alter_vouchers_canonical_add_estado_periodo.sql and
+  // vouchers-canonical-writer.ts's module doc for the periodoAltaId
+  // asymmetry between the arca and contabilidad sides.
+  estado         String    @default("pendiente")
+  periodoAltaId  String?   @map("periodo_alta_id")
+  periodoCierreId String?  @map("periodo_cierre_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("vouchers_canonical")
+}
+
+// T27/T28 (RF-20/RF-21, conciliacion-periodica): the frozen 3-section
+// snapshot written once, atomically, when a período closes — see
+// 016_init_periodo_resultados.sql and periodo-cierre.ts's module doc for
+// why this is a separate table from ReconciliationResult (job-scoped,
+// different classification taxonomy).
+model PeriodoResultado {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  periodoId       String   @map("periodo_id")
+  classification  String
+  compositeKey    String   @map("composite_key")
+  sistemaRow      Json?    @map("sistema_row")
+  arcaRow         Json?    @map("arca_row")
+  delta           Decimal? @db.Decimal(15, 2)
+  antiguedadMeses Int?     @map("antiguedad_meses")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("periodo_resultados")
+}
+
+model ReconciliationResult {
+  id                 String   @id @default(uuid())
+  tenantId           String   @map("tenant_id")
+  jobId              String?  @map("job_id")
+  compositeKey       String?  @map("composite_key")
+  voucherCanonicalId String?  @map("voucher_canonical_id")
+  arcaRow            Json?    @map("arca_row")
+  contabilidadRow    Json?    @map("contabilidad_row")
+  tipoClasificacion  String   @map("tipo_clasificacion")
+  ivaImpacto         Decimal? @map("iva_impacto") @db.Decimal(15, 2)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@map("reconciliation_results")
+}
+
+model AuditTrail {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  userId    String?  @map("user_id")
+  action    String
+  entity    String?
+  entityId  String?  @map("entity_id")
+  details   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("audit_trail")
+}
+
+model FeedbackLoop {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  userId         String?  @map("user_id")
+  compositeKey   String   @map("composite_key")
+  classification String
+  note           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("feedback_loop")
+}
+
+// T33 (RF-14, autenticacion-roles, 2026-08-22): login + roles. No tenantId —
+// a single estudio's admin/colaborador users implicitly span every tenant;
+// see openspec/designs/autenticacion-roles/architecture.md's "Por qué no
+// hay tabla estudios".
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String
+  displayName  String?  @map("display_name")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+// Only meaningful for role='cliente' — which tenant(s) that user may see.
+model UserTenantAccess {
+  userId   String @map("user_id")
+  tenantId String @map("tenant_id")
+
+  @@id([userId, tenantId])
+  @@map("user_tenant_access")
+}
