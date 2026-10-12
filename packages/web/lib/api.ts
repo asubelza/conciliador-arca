@@ -251,8 +251,14 @@ function filenameFromContentDisposition(res: Response, fallback: string): string
   return match ? match[1] : fallback;
 }
 
-async function downloadAuthenticated(url: string, fallbackFilename: string): Promise<void> {
-  const res = await fetch(url, { headers: authHeaders() });
+/**
+ * `init`, when passed, replaces the default bare-GET request entirely
+ * (headers included) — see `downloadAuthenticatedPost` below, the only
+ * other caller, which passes its own POST method/headers/body. Every
+ * GET caller omits it and gets the original bare-GET behavior unchanged.
+ */
+async function downloadAuthenticated(url: string, fallbackFilename: string, init?: RequestInit): Promise<void> {
+  const res = await fetch(url, init ?? { headers: authHeaders() });
   if (!res.ok) {
     handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Download failed (${res.status})`));
@@ -268,6 +274,23 @@ async function downloadAuthenticated(url: string, fallbackFilename: string): Pro
   link.click();
   document.body.removeChild(link);
   window.URL.revokeObjectURL(blobUrl);
+}
+
+/**
+ * 2026-10-12 (Histórico filters + export): the first POST-with-body
+ * download in this codebase — every download endpoint until now was a
+ * GET + querystring, but exporting "exactly the currently-filtered
+ * voucher ids" needs a request body (an id list can't reasonably go in
+ * a querystring). Delegates to `downloadAuthenticated`'s shared
+ * blob/Content-Disposition/anchor-click/createObjectURL mechanism via its
+ * `init` override, instead of duplicating that mechanism a second time.
+ */
+function downloadAuthenticatedPost(url: string, body: unknown, fallbackFilename: string): Promise<void> {
+  return downloadAuthenticated(url, fallbackFilename, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
 }
 
 /**
@@ -583,6 +606,27 @@ export async function getPendientesHistorico(tenantId: string): Promise<Pendient
     throw new Error(await readErrorMessage(res, `Pendientes histórico fetch failed (${res.status})`));
   }
   return res.json();
+}
+
+/**
+ * 2026-10-12 (Histórico filters + export): downloads ONLY the given
+ * `voucherIds` — PendientesHistoricoViewer.tsx always sends exactly the ids
+ * currently visible after its client-side filters (whichever of the 3
+ * buckets they came from), never the whole unfiltered tenant dataset. See
+ * tenants.controller.ts's exportPendientesHistorico for the server-side
+ * contract (ids not belonging to this tenant are silently excluded, not
+ * rejected).
+ */
+export async function downloadPendientesHistoricoExcel(
+  tenantId: string,
+  voucherIds: string[],
+  format: 'xlsx' | 'csv',
+): Promise<void> {
+  await downloadAuthenticatedPost(
+    `${API_BASE_URL}/api/tenants/${tenantId}/pendientes-historico/export`,
+    { voucher_ids: voucherIds, format },
+    `pendientes-historico-${tenantId}.${format}`,
+  );
 }
 
 /**

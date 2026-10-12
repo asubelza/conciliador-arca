@@ -542,3 +542,124 @@ describe('2026-10-12 (Histórico filters + "Archivar")', () => {
     expect(screen.queryByRole('button', { name: /archivar seleccionados/i })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * 2026-10-12 (Histórico filters + export): "Descargar Excel/CSV" buttons —
+ * must send EXACTLY the ids currently visible after filters, and
+ * "ver archivados" must change what's included exactly the way it changes
+ * what's on screen.
+ */
+describe('2026-10-12 (Histórico filters + export): Descargar Excel/CSV', () => {
+  beforeEach(() => {
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  function mockDownloadResponse() {
+    return {
+      ok: true,
+      headers: { get: () => 'attachment; filename="pendientes-historico-export.csv"' },
+      blob: async () => ({ type: 'text/csv' }),
+    };
+  }
+
+  it('sends exactly the currently-filtered ids as voucher_ids in the request body', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => twoRowsBody }) // initial load
+      .mockResolvedValueOnce(mockDownloadResponse()); // POST export
+    global.fetch = fetchMock as unknown as typeof fetch;
+    window.URL.createObjectURL = jest.fn().mockReturnValue('blob:mock');
+    window.URL.revokeObjectURL = jest.fn();
+    jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const user = userEvent.setup();
+
+    render(<PendientesHistoricoViewer tenantId={TENANT_ID} userRole="admin" />);
+    await screen.findByText(/pendientes desde el alta \(2 de 2\)/i);
+
+    // narrow to rowB only
+    await user.type(screen.getByLabelText(/cuit \(filtro\)/i), rowB.cuit_emisor);
+    expect(screen.getByText(/pendientes desde el alta \(1 de 2\)/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /descargar csv/i }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
+      expect(postCall).toBeDefined();
+      expect(postCall![0]).toContain(`/api/tenants/${TENANT_ID}/pendientes-historico/export`);
+      const sentBody = JSON.parse(postCall![1].body);
+      expect(sentBody.voucher_ids).toEqual([rowB.id]);
+      expect(sentBody.format).toBe('csv');
+    });
+  });
+
+  it('disables both download buttons when the current filters leave zero visible rows, instead of letting a backend validation error reach the user', async () => {
+    global.fetch = jest.fn().mockResolvedValueOnce({ ok: true, json: async () => twoRowsBody }) as unknown as typeof fetch;
+    const user = userEvent.setup();
+
+    render(<PendientesHistoricoViewer tenantId={TENANT_ID} userRole="admin" />);
+    await screen.findByText(/pendientes desde el alta \(2 de 2\)/i);
+
+    // narrow to a CUIT that matches nothing
+    await user.type(screen.getByLabelText(/cuit \(filtro\)/i), '99999999999');
+    expect(screen.getByText(/pendientes desde el alta \(0 de 2\)/i)).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: /descargar csv/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /descargar excel/i })).toBeDisabled();
+  });
+
+  it('"ver archivados" toggled off excludes archivado ids from the export; toggled on includes them', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => twoRowsBody }) // initial load
+      .mockResolvedValueOnce(mockDownloadResponse()) // POST export (archivados off)
+      .mockResolvedValueOnce(mockDownloadResponse()); // POST export (archivados on)
+    global.fetch = fetchMock as unknown as typeof fetch;
+    window.URL.createObjectURL = jest.fn().mockReturnValue('blob:mock');
+    window.URL.revokeObjectURL = jest.fn();
+    jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const user = userEvent.setup();
+
+    render(<PendientesHistoricoViewer tenantId={TENANT_ID} userRole="admin" />);
+    await screen.findByText(/pendientes desde el alta \(2 de 2\)/i);
+
+    await user.click(screen.getByRole('button', { name: /descargar excel/i }));
+    await waitFor(() => {
+      const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
+      expect(postCalls).toHaveLength(1);
+      const sentBody = JSON.parse(postCalls[0][1].body);
+      expect(sentBody.voucher_ids.sort()).toEqual([rowA.id, rowB.id].sort());
+      expect(sentBody.voucher_ids).not.toContain(archivadoRow.id);
+    });
+
+    await user.click(screen.getByRole('checkbox', { name: /ver archivados/i }));
+    await user.click(screen.getByRole('button', { name: /descargar excel/i }));
+
+    await waitFor(() => {
+      const postCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
+      expect(postCalls).toHaveLength(2);
+      const sentBody = JSON.parse(postCalls[1][1].body);
+      expect(sentBody.voucher_ids.sort()).toEqual([rowA.id, rowB.id, archivadoRow.id].sort());
+    });
+  });
+
+  it('surfaces a download error without crashing', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => twoRowsBody }) // initial load
+      .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'export failed' }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const user = userEvent.setup();
+
+    render(<PendientesHistoricoViewer tenantId={TENANT_ID} userRole="admin" />);
+    await screen.findByText(/pendientes desde el alta \(2 de 2\)/i);
+
+    await user.click(screen.getByRole('button', { name: /descargar csv/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/export failed/i);
+  });
+});
