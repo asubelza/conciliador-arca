@@ -15,6 +15,7 @@ import {
 import { useAuth } from '@/lib/session';
 import { CoincidenciaModal } from './CoincidenciaModal';
 import { ConfirmDialog } from './ConfirmDialog';
+import { MatchManualModal } from './MatchManualModal';
 import { CheckIcon, SpinnerIcon, XIcon } from './icons';
 
 export interface PeriodoReportViewerProps {
@@ -131,6 +132,10 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
   // stays as-is — ConfirmDialog has no text-input affordance.
   const [confirmingCerrar, setConfirmingCerrar] = useState(false);
   const [confirmingResolverRow, setConfirmingResolverRow] = useState<PeriodoReportRow | null>(null);
+  // 2026-10-12 ("Match manual" para no_existe_en_arca): la fila de
+  // Discrepancias y Alertas (classification 'no_existe_en_arca') para la que
+  // el contador abrió el modal de match manual, o null si ninguna.
+  const [matchManualRow, setMatchManualRow] = useState<PeriodoReportRow | null>(null);
   const canAct = user?.role !== 'cliente';
   // "Ver pendientes sistema" (pedido del cliente, 2026-08-23): filtra las 4
   // secciones a solo los comprobantes del sistema contable sin match en
@@ -538,6 +543,18 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                                       Marcar como resuelto
                                     </button>
                                   )}
+                                  {key === 'discrepancias_y_alertas' && row.classification === 'no_existe_en_arca' && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMatchManualRow(row);
+                                      }}
+                                      className="focus-ring rounded text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                                    >
+                                      Match manual
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </td>
@@ -594,6 +611,19 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
                 }
               : undefined
           }
+        />
+      )}
+
+      {matchManualRow && matchManualRow.sistema && (
+        <MatchManualModal
+          periodoId={periodoId}
+          sistemaVoucherId={matchManualRow.sistema.id}
+          tenantId={report.periodo.tenant_id}
+          onClose={() => setMatchManualRow(null)}
+          onMatched={() => {
+            setMatchManualRow(null);
+            void load();
+          }}
         />
       )}
     </div>

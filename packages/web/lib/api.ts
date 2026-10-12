@@ -699,6 +699,35 @@ export async function archivarComprobantesArcaLote(
   return res.json();
 }
 
+/** Response for the desarchivar endpoint — the exact inverse of ArchivarComprobanteResponse. */
+export interface DesarchivarComprobanteResponse {
+  id: string;
+  estado: 'pendiente';
+}
+
+/**
+ * 2026-10-12 ("Match manual" para no_existe_en_arca): la contraparte exacta
+ * de `archivarComprobanteArca` — usada por MatchManualModal.tsx's tab
+ * "Buscar en archivados" cuando el comprobante correcto resultó estar
+ * archivado. SIEMPRE se llama antes de `confirmarCoincidencia`, nunca
+ * después — ver tenants.controller.ts's desarchivarComprobante for el
+ * detalle server-side (estado debe ser 'archivado', 409 si no).
+ */
+export async function desarchivarComprobanteArca(
+  tenantId: string,
+  voucherId: string,
+): Promise<DesarchivarComprobanteResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/comprobantes/${voucherId}/desarchivar`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Desarchivar comprobante failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /** The API requires both fields on every PUT (see tenants-validation.ts) — tolerancia_dias_fecha is not optional here either. */
 export async function updateTenantConfig(
   tenantId: string,
