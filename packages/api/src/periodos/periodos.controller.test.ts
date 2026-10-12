@@ -727,6 +727,25 @@ describe('T18: /api/periodos (integration)', () => {
       expect(second.status).toBe(409);
     });
 
+    it('returns 409 when the voucher is already archivado (gap a code review caught: this endpoint pre-dates archivado and was never updated for it)', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/periodos')
+        .set('Authorization', adminAuth)
+        .send({ tenant_id: tenantId, mes: '2029-08-01' });
+      const periodoId = created.body.id;
+      const arcaId = await insertVoucher(pool, tenantId, periodoId, { fileSource: 'arca' });
+      await pool.query(`UPDATE vouchers_canonical SET estado = 'archivado' WHERE id = $1`, [arcaId]);
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/periodos/${periodoId}/pendientes-arca-resolver`)
+        .set('Authorization', adminAuth)
+        .send({ arca_voucher_id: arcaId });
+      expect(res.status).toBe(409);
+
+      const { rows } = await pool.query<{ estado: string }>('SELECT estado FROM vouchers_canonical WHERE id = $1', [arcaId]);
+      expect(rows[0].estado).toBe('archivado');
+    });
+
     it('returns 400 for a malformed body (missing arca_voucher_id)', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/periodos')

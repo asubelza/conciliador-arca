@@ -35,6 +35,7 @@
  */
 import type { Pool, PoolClient } from 'pg';
 import { logAuditEvent } from '../reconciliations/audit-logger';
+import { NON_TERMINAL_ESTADO_SQL, isTerminalVoucherEstado } from '../reconciliations/voucher-estado';
 
 export type ArchivarComprobanteFailure =
   | { code: 'TENANT_NOT_FOUND'; status: 404; error: string }
@@ -91,7 +92,7 @@ export async function archivarComprobanteArca(
     }
 
     const estadoActual = voucherRows[0].estado;
-    if (estadoActual === 'conciliado' || estadoActual === 'archivado') {
+    if (isTerminalVoucherEstado(estadoActual)) {
       await client.query('ROLLBACK');
       return { code: 'ALREADY_RESOLVED', status: 409, error: `this voucher is already ${estadoActual}` };
     }
@@ -106,7 +107,7 @@ export async function archivarComprobanteArca(
     // bug; that's reported as the same 409 instead of a silent overwrite.
     const { rows: updatedRows } = await client.query<{ id: string; estado: 'archivado' }>(
       `UPDATE vouchers_canonical SET estado = 'archivado'
-       WHERE id = $1 AND estado NOT IN ('conciliado', 'archivado')
+       WHERE id = $1 AND ${NON_TERMINAL_ESTADO_SQL}
        RETURNING id, estado`,
       [voucherId],
     );
@@ -284,7 +285,7 @@ async function archiveOneForLote(
       // run) can still resolve this voucher before this UPDATE commits.
       const { rows: updatedRows } = await client.query<{ estado: string }>(
         `UPDATE vouchers_canonical SET estado = 'archivado'
-         WHERE id = $1 AND estado NOT IN ('conciliado', 'archivado')
+         WHERE id = $1 AND ${NON_TERMINAL_ESTADO_SQL}
          RETURNING estado`,
         [voucherId],
       );
