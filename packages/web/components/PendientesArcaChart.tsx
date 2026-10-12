@@ -229,15 +229,20 @@ export function PendientesArcaChartComponent({
         </div>
       </div>
 
-      {/* SVG chart */}
-      <svg
-        width={chartWidth}
-        height={chartHeight}
-        viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-        className="overflow-hidden"
-      >
-        {svgParts}
-      </svg>
+      {/* SVG chart — width/height fijos en px rompían la escala en cualquier
+          ancho de contenedor (desktop angosto o mobile); preserveAspectRatio
+          + un wrapper con aspect-ratio lo hacen fluido. El viewBox interno
+          (chartWidth x chartHeight) sigue siendo el sistema de coordenadas
+          para el cálculo de barras, sin cambios en esa lógica. */}
+      <div className="w-full aspect-[2/1]">
+        <svg
+          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+          preserveAspectRatio="xMidYMid meet"
+          className="h-full w-full overflow-hidden"
+        >
+          {svgParts}
+        </svg>
+      </div>
     </div>
   );
 }

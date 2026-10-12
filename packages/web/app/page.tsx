@@ -284,7 +284,7 @@ export default function Home() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-3 sm:px-8">
+        <div className="mx-auto flex max-w-screen-2xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white">
               <BuildingIcon size={20} />
@@ -321,11 +321,51 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8 sm:px-8">
+      <main className="mx-auto flex max-w-screen-2xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
         {!tenantId && <PeriodoSelector onSelected={handleTenantSelected} />}
 
         {tenantId && (
           <div className="flex flex-col gap-6">
+            {/* Nav tabs only make sense once a período round-trips into the
+                existing circuit/report — Dashboard is the entry point.
+                Fixed position at the top regardless of `view` — it used to
+                sit right after the Dashboard block, which only renders for
+                view === 'dashboard', so the tabs visibly jumped to the
+                bottom of the (now much taller) dashboard content on that
+                view and stayed at the top on every other view. */}
+            {periodo && (
+              <div className="flex w-fit gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-card dark:border-slate-800 dark:bg-slate-900">
+                <button
+                  type="button"
+                  onClick={() => setView('dashboard')}
+                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                >
+                  Dashboard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView('circuit')}
+                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'circuit' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                >
+                  Circuito
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView('report')}
+                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'report' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                >
+                  Reporte
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView('pendientes-historico')}
+                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'pendientes-historico' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                >
+                  Histórico
+                </button>
+              </div>
+            )}
+
             {/* Section A: Período en curso (Dashboard) */}
             {view === 'dashboard' && dashboardError && (
               <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
@@ -381,41 +421,6 @@ export default function Home() {
                 // by default (see renderCircuitView's estado ternary below).
                 onViewReport={handleOpenPeriodo}
               />
-            )}
-
-            {/* Nav tabs only make sense once a período round-trips into the
-                existing circuit/report — Dashboard is the entry point. */}
-            {periodo && (
-              <div className="flex gap-4 mt-4">
-                <button
-                  type="button"
-                  onClick={() => setView('dashboard')}
-                  className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'dashboard' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
-                >
-                  Dashboard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView('circuit')}
-                  className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'circuit' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
-                >
-                  Circuito
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView('report')}
-                  className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'report' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
-                >
-                  Reporte
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView('pendientes-historico')}
-                  className={`focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 ${view === 'pendientes-historico' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : ''}`}
-                >
-                  Histórico
-                </button>
-              </div>
             )}
 
             {/* Render the selected view */}
