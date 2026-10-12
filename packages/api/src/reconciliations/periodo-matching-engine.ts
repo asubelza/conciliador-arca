@@ -25,7 +25,13 @@
  * `estado = 'conciliado'` rows are excluded from every pool by construction
  * (the WHERE clauses below), never filtered out afterward — this is what
  * RF-16's "a conciliado voucher is never returned as a match candidate"
- * scenario requires.
+ * scenario requires. `estado = 'archivado'` rows (2026-10-12, Histórico
+ * filters + "Archivar") get the identical treatment in the sistema/arca-
+ * corriente pools below — a human decided this voucher is no longer
+ * relevant, so it must never resurface as a match candidate either. The
+ * histórico-pendiente pool query below intentionally keeps its own
+ * `estado = 'pendiente'` equality check unchanged — an archivado row is
+ * already excluded there by that same equality, nothing to add.
  *
  * RF-04/RF-13 (matching por similitud, added after autenticacion-roles):
  * when a sistema row has NO exact composite-key match anywhere (corriente
@@ -85,7 +91,11 @@ export interface VoucherCanonicalRow {
   iva: number | null;
   fecha: string | null;
   file_source: 'arca' | 'contabilidad';
-  estado: 'pendiente' | 'conciliado';
+  // 'archivado' added 2026-10-12 (Histórico filters + "Archivar",
+  // 024_alter_vouchers_canonical_estado_add_archivado.sql) — excluded from
+  // every pool here by construction (see the WHERE clauses below), same
+  // treatment as 'conciliado'.
+  estado: 'pendiente' | 'conciliado' | 'archivado';
   periodo_alta_id: string;
 }
 
@@ -321,14 +331,16 @@ export async function matchPeriodo(
   toleranciaDiasFecha = 0,
 ): Promise<PeriodoMatchSummary> {
   const [sistemaRows, arcaCorriente, arcaHistorico, { confirmedArcaBySistemaId, descartado }] = await Promise.all([
-    queryRows(pool, `tenant_id = $1 AND file_source = 'contabilidad' AND periodo_alta_id = $2 AND estado <> 'conciliado'`, [
-      tenantId,
-      periodoId,
-    ]),
-    queryRows(pool, `tenant_id = $1 AND file_source = 'arca' AND periodo_alta_id = $2 AND estado <> 'conciliado'`, [
-      tenantId,
-      periodoId,
-    ]),
+    queryRows(
+      pool,
+      `tenant_id = $1 AND file_source = 'contabilidad' AND periodo_alta_id = $2 AND estado NOT IN ('conciliado', 'archivado')`,
+      [tenantId, periodoId],
+    ),
+    queryRows(
+      pool,
+      `tenant_id = $1 AND file_source = 'arca' AND periodo_alta_id = $2 AND estado NOT IN ('conciliado', 'archivado')`,
+      [tenantId, periodoId],
+    ),
     queryRows(
       pool,
       `tenant_id = $1 AND file_source = 'arca' AND estado = 'pendiente' AND periodo_alta_id <> $2`,

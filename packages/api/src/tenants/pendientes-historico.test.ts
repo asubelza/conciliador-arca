@@ -20,7 +20,7 @@ async function insertVoucher(
   overrides: {
     numero?: number;
     fileSource?: 'arca' | 'contabilidad';
-    estado?: 'pendiente' | 'conciliado';
+    estado?: 'pendiente' | 'conciliado' | 'archivado';
     fecha?: string | null;
   } = {},
 ): Promise<string> {
@@ -105,6 +105,44 @@ describe('2026-08-23 (feature 3 de 3): fetchPendientesHistorico', () => {
       expect(result.count_pendientes).toBe(0);
       expect(result.excluidos_previos_a_alta).toEqual([]);
       expect(result.count_excluidos_previos_a_alta).toBe(0);
+      expect(result.archivados).toEqual([]);
+      expect(result.count_archivados).toBe(0);
+    } finally {
+      await deleteTestTenant(pool, tenantId);
+    }
+  });
+
+  /**
+   * 2026-10-12 (Histórico filters + "Archivar"): the new third bucket —
+   * archivado rows land in `archivados`, never in `pendientes` or
+   * `excluidos_previos_a_alta`, regardless of their fecha relative to the
+   * tenant's alta date (archiving is an explicit decision, not subject to
+   * the alta-date guard rail the other two buckets apply).
+   */
+  it('archivado ARCA vouchers land in the archivados bucket, not pendientes/excluidos, regardless of fecha', async () => {
+    const tenantId = await createTestTenant(pool, 'pendientes-historico.test (archivados)', '2026-03-01T00:00:00Z');
+    try {
+      const archivadoAfterAltaId = await insertVoucher(pool, tenantId, { fecha: '2026-04-15', estado: 'archivado' });
+      const archivadoBeforeAltaId = await insertVoucher(pool, tenantId, { fecha: '2025-11-01', estado: 'archivado' });
+      const archivadoNoFechaId = await insertVoucher(pool, tenantId, { fecha: null, estado: 'archivado' });
+      const pendienteId = await insertVoucher(pool, tenantId, { fecha: '2026-04-15' });
+
+      const result = await fetchPendientesHistorico(pool, tenantId);
+      if ('code' in result) throw new Error('expected a result, got a failure');
+
+      const archivadoIds = result.archivados.map((r) => r.id).sort();
+      expect(archivadoIds).toEqual([archivadoAfterAltaId, archivadoBeforeAltaId, archivadoNoFechaId].sort());
+      expect(result.count_archivados).toBe(3);
+
+      const pendienteIds = result.pendientes.map((r) => r.id);
+      expect(pendienteIds).toEqual([pendienteId]);
+      expect(result.excluidos_previos_a_alta).toEqual([]);
+
+      // antiguedad_meses still computed the same way for archivado rows
+      const noFechaRow = result.archivados.find((r) => r.id === archivadoNoFechaId);
+      expect(noFechaRow?.antiguedad_meses).toBeNull();
+      const withFechaRow = result.archivados.find((r) => r.id === archivadoAfterAltaId);
+      expect(typeof withFechaRow?.antiguedad_meses).toBe('number');
     } finally {
       await deleteTestTenant(pool, tenantId);
     }

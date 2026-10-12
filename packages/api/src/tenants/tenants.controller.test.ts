@@ -98,6 +98,8 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(res.body.count_pendientes).toBe(0);
       expect(res.body.excluidos_previos_a_alta).toEqual([]);
       expect(res.body.count_excluidos_previos_a_alta).toBe(0);
+      expect(res.body.archivados).toEqual([]);
+      expect(res.body.count_archivados).toBe(0);
     });
   });
 
@@ -249,6 +251,267 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(historicoRes.status).toBe(200);
       const ids = historicoRes.body.pendientes.map((r: { id: string }) => r.id);
       expect(ids).toContain(createRes.body.id);
+    });
+  });
+
+  /**
+   * 2026-10-12 (Histórico filters + "Archivar"): both archive endpoints get
+   * their own dedicated tenant (not the shared `tenantId` above) so vouchers
+   * inserted directly by these tests never leak into the pendientes-historico
+   * or comprobantes-arca assertions elsewhere in this file.
+   */
+  describe('2026-10-12 (Histórico filters + "Archivar"): POST .../comprobantes/:voucherId/archivar', () => {
+    let archivarTenantId: string;
+
+    beforeAll(async () => {
+      archivarTenantId = await createTestTenant(pool, 'tenants.controller.test (archivar)');
+    });
+
+    afterAll(async () => {
+      await deleteTestTenant(pool, archivarTenantId);
+    });
+
+    async function insertVoucher(overrides: {
+      fileSource?: 'arca' | 'contabilidad';
+      estado?: 'pendiente' | 'conciliado' | 'archivado';
+      tenantId?: string;
+    } = {}): Promise<string> {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO vouchers_canonical (
+           tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+           file_source, estado, periodo_alta_id
+         ) VALUES ($1, '30111111112', 1, $2, $3, 1000, $4, $5, NULL)
+         RETURNING id`,
+        [
+          overrides.tenantId ?? archivarTenantId,
+          Math.floor(Math.random() * 1_000_000),
+          Math.floor(Math.random() * 1_000_000),
+          overrides.fileSource ?? 'arca',
+          overrides.estado ?? 'pendiente',
+        ],
+      );
+      return rows[0].id;
+    }
+
+    it('archives a pendiente ARCA voucher as admin', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', adminAuth)
+        .send({ nota: 'ya no corresponde' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ id: voucherId, estado: 'archivado' });
+
+      const { rows } = await pool.query('SELECT estado FROM vouchers_canonical WHERE id = $1', [voucherId]);
+      expect(rows[0].estado).toBe('archivado');
+    });
+
+    it('archives as colaborador', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', authHeaderFor('colaborador'))
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.estado).toBe('archivado');
+    });
+
+    it('returns 403 for a cliente (role check runs before any DB write)', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({});
+      expect(res.status).toBe(403);
+
+      const { rows } = await pool.query('SELECT estado FROM vouchers_canonical WHERE id = $1', [voucherId]);
+      expect(rows[0].estado).toBe('pendiente');
+    });
+
+    it('returns 404 for a voucher that does not belong to this tenant', async () => {
+      const otherTenantId = await createTestTenant(pool, 'tenants.controller.test (archivar, other tenant)');
+      try {
+        const voucherId = await insertVoucher({ tenantId: otherTenantId });
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+          .set('Authorization', adminAuth)
+          .send({});
+        expect(res.status).toBe(404);
+      } finally {
+        await deleteTestTenant(pool, otherTenantId);
+      }
+    });
+
+    it('returns 404 for an unknown voucher id', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/00000000-0000-0000-0000-000000000000/archivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 400 for a contabilidad-side voucher (archivar only applies to ARCA)', async () => {
+      const voucherId = await insertVoucher({ fileSource: 'contabilidad' });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 409 for an already-conciliado voucher, naming the state in the message', async () => {
+      const voucherId = await insertVoucher({ estado: 'conciliado' });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/conciliado/);
+    });
+
+    it('returns 409 for an already-archivado voucher, naming the state in the message', async () => {
+      const voucherId = await insertVoucher({ estado: 'archivado' });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/archivado/);
+    });
+
+    it('returns 400 for a malformed voucher id', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/not-a-uuid/archivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('an archived voucher shows up in the archivados bucket of GET .../pendientes-historico, not pendientes', async () => {
+      const voucherId = await insertVoucher();
+      await request(app.getHttpServer())
+        .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/tenants/${archivarTenantId}/pendientes-historico`)
+        .set('Authorization', adminAuth);
+      expect(res.status).toBe(200);
+      expect(res.body.archivados.map((r: { id: string }) => r.id)).toContain(voucherId);
+      expect(res.body.pendientes.map((r: { id: string }) => r.id)).not.toContain(voucherId);
+    });
+  });
+
+  describe('2026-10-12 (Histórico filters + "Archivar"): POST .../comprobantes/archivar-lote', () => {
+    let loteTenantId: string;
+
+    beforeAll(async () => {
+      loteTenantId = await createTestTenant(pool, 'tenants.controller.test (archivar-lote)');
+    });
+
+    afterAll(async () => {
+      await deleteTestTenant(pool, loteTenantId);
+    });
+
+    async function insertVoucher(overrides: {
+      fileSource?: 'arca' | 'contabilidad';
+      estado?: 'pendiente' | 'conciliado' | 'archivado';
+      tenantId?: string;
+    } = {}): Promise<string> {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO vouchers_canonical (
+           tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+           file_source, estado, periodo_alta_id
+         ) VALUES ($1, '30111111112', 1, $2, $3, 1000, $4, $5, NULL)
+         RETURNING id`,
+        [
+          overrides.tenantId ?? loteTenantId,
+          Math.floor(Math.random() * 1_000_000),
+          Math.floor(Math.random() * 1_000_000),
+          overrides.fileSource ?? 'arca',
+          overrides.estado ?? 'pendiente',
+        ],
+      );
+      return rows[0].id;
+    }
+
+    it('archives valid ids and reports a per-id skip reason for the rest, in one call', async () => {
+      const validId = await insertVoucher();
+      const alreadyArchivadoId = await insertVoucher({ estado: 'archivado' });
+      const alreadyConciliadoId = await insertVoucher({ estado: 'conciliado' });
+      const wrongFileSourceId = await insertVoucher({ fileSource: 'contabilidad' });
+      const otherTenantId = await createTestTenant(pool, 'tenants.controller.test (archivar-lote, other tenant)');
+      let wrongTenantId: string;
+      const unknownId = '00000000-0000-0000-0000-000000000000';
+      try {
+        wrongTenantId = await insertVoucher({ tenantId: otherTenantId });
+
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${loteTenantId}/comprobantes/archivar-lote`)
+          .set('Authorization', adminAuth)
+          .send({
+            voucher_ids: [validId, alreadyArchivadoId, alreadyConciliadoId, wrongFileSourceId, wrongTenantId, unknownId],
+            nota: 'limpieza histórico',
+          });
+
+        expect(res.status).toBe(200);
+        const byId = new Map(res.body.results.map((r: { voucher_id: string }) => [r.voucher_id, r]));
+        expect(byId.get(validId)).toEqual({ voucher_id: validId, status: 'archived' });
+        expect(byId.get(alreadyArchivadoId)).toEqual({ voucher_id: alreadyArchivadoId, status: 'skipped', reason: 'already_archivado' });
+        expect(byId.get(alreadyConciliadoId)).toEqual({ voucher_id: alreadyConciliadoId, status: 'skipped', reason: 'already_conciliado' });
+        expect(byId.get(wrongFileSourceId)).toEqual({ voucher_id: wrongFileSourceId, status: 'skipped', reason: 'wrong_file_source' });
+        expect(byId.get(wrongTenantId)).toEqual({ voucher_id: wrongTenantId, status: 'skipped', reason: 'wrong_tenant' });
+        expect(byId.get(unknownId)).toEqual({ voucher_id: unknownId, status: 'skipped', reason: 'not_found' });
+
+        // the valid one actually got archived; every skipped one is untouched
+        const { rows } = await pool.query(
+          'SELECT id, estado FROM vouchers_canonical WHERE id = ANY($1::uuid[])',
+          [[validId, alreadyArchivadoId, alreadyConciliadoId, wrongFileSourceId, wrongTenantId]],
+        );
+        const estadoById = new Map(rows.map((r) => [r.id, r.estado]));
+        expect(estadoById.get(validId)).toBe('archivado');
+        expect(estadoById.get(alreadyArchivadoId)).toBe('archivado');
+        expect(estadoById.get(alreadyConciliadoId)).toBe('conciliado');
+        expect(estadoById.get(wrongFileSourceId)).toBe('pendiente');
+        expect(estadoById.get(wrongTenantId)).toBe('pendiente');
+      } finally {
+        await deleteTestTenant(pool, otherTenantId);
+      }
+    });
+
+    it('returns 403 for a cliente', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${loteTenantId}/comprobantes/archivar-lote`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({ voucher_ids: [voucherId] });
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 400 for an empty voucher_ids array', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${loteTenantId}/comprobantes/archivar-lote`)
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [] });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 for a voucher_ids entry that is not a UUID', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${loteTenantId}/comprobantes/archivar-lote`)
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: ['not-a-uuid'] });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 for an unknown tenant', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants/00000000-0000-0000-0000-000000000000/comprobantes/archivar-lote')
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [voucherId] });
+      expect(res.status).toBe(404);
     });
   });
 
