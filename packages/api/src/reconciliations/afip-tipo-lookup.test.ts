@@ -1,4 +1,5 @@
 import { lookupAfipTipo } from './afip-tipo-lookup';
+import { isValidAfipTipo } from 'shared-types';
 
 /**
  * T07 — RF-06 (comprobante-normalization.spec.md). Covers the exact
@@ -64,5 +65,19 @@ describe('T07 RF-06: lookupAfipTipo', () => {
 
   it('Libro de IVA Compras: is case-insensitive, matching how the adapter builds the composite key', () => {
     expect(lookupAfipTipo('libro_iva_compras', 'fcp a')).toBe(1);
+  });
+
+  it('every resolvable code is a valid canonical AfipTipo per shared-types', () => {
+    const resolved = [
+      lookupAfipTipo('arca', '1'),
+      lookupAfipTipo('arca', '19'),
+      lookupAfipTipo('tango', 'nd a'),
+      lookupAfipTipo('tango', 'nc c'),
+      lookupAfipTipo('xubio', 'nc'),
+    ];
+    resolved.forEach((code) => {
+      expect(code).toBeDefined();
+      expect(isValidAfipTipo(code as number)).toBe(true);
+    });
   });
 });

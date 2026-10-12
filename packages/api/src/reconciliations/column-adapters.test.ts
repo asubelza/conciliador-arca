@@ -11,6 +11,7 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
     const adapted = adaptRow('arca', row);
     expect(adapted.cuit_emisor_raw).toBe('30-12345678-9');
     expect(adapted.tipo_cbte).toBe(1);
+    expect(adapted.source_row).toBe(row);
   });
 
   it('ARCA: "Nro. Doc. Emisor" wins over "Nro. Doc. Receptor" when a row somehow carries both (Receptor is the estudio\'s own client, not the vendor)', () => {

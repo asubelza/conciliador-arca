@@ -108,7 +108,7 @@ export interface VoucherStagingRow {
  */
 export interface CanonicalVoucher {
   cuit_emisor: string; // 11 digits, punctuation stripped
-  tipo_cbte: number; // canonical AFIP integer
+  tipo_cbte: AfipTipo; // canonical AFIP tipo integer (real "Tabla de Comprobantes" code)
   punto_venta: number;
   numero: number;
   fecha_emision: string; // ISO YYYY-MM-DD
