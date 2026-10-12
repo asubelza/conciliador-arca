@@ -25,6 +25,7 @@ import { validatePendienteResolverRequest } from './pendiente-resolver-validatio
 import { validateMarkRequest } from '../reconciliations/marks-validation';
 import { insertFeedbackMark } from '../reconciliations/feedback-writer';
 import { logAuditEvent } from '../reconciliations/audit-logger';
+import { NON_TERMINAL_ESTADO_SQL, isTerminalVoucherEstado } from '../reconciliations/voucher-estado';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
@@ -591,14 +592,24 @@ export class PeriodosController {
         HttpStatus.BAD_REQUEST,
       );
     }
-    if (voucherRows[0].estado === 'conciliado') {
-      throw new HttpException({ error: 'this voucher is already conciliado' }, HttpStatus.CONFLICT);
+    if (isTerminalVoucherEstado(voucherRows[0].estado)) {
+      throw new HttpException({ error: `this voucher is already ${voucherRows[0].estado}` }, HttpStatus.CONFLICT);
     }
 
+    // Atomic guard, same idiom as comprobante-arca-archivar.ts: a
+    // concurrent archivar call (or another resolve) could change `estado`
+    // between the SELECT above and this UPDATE — re-stating the condition
+    // here means a 0-row result can only be that race, not a bug, and this
+    // endpoint can never silently flip an already-archivado voucher to
+    // conciliado (a gap a code review caught after 'archivado' was added:
+    // this endpoint pre-dates it and was never updated for the new state).
     const { rows: updatedRows } = await pool.query<{ id: string; estado: string }>(
-      `UPDATE vouchers_canonical SET estado = 'conciliado' WHERE id = $1 RETURNING id, estado`,
+      `UPDATE vouchers_canonical SET estado = 'conciliado' WHERE id = $1 AND ${NON_TERMINAL_ESTADO_SQL} RETURNING id, estado`,
       [arcaVoucherId],
     );
+    if (updatedRows.length === 0) {
+      throw new HttpException({ error: 'this voucher was resolved by a concurrent operation' }, HttpStatus.CONFLICT);
+    }
 
     await logAuditEvent(pool, {
       tenantId,
