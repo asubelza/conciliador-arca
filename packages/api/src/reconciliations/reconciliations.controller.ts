@@ -26,6 +26,30 @@ import { getReconciliationQueue } from './reconciliation.queue';
 import { mapJobToStatusResponse } from './job-status';
 
 /**
+ * Multer's `diskStorage` writes files to disk BEFORE `validateUploadFiles`/
+ * `validateTenantId` run below, so a 400/415 response otherwise leaves
+ * already-written files orphaned in the upload temp dir forever. Best-effort
+ * cleanup: swallow failures (the file may already be gone, or this is a
+ * best-effort GC, not something that should fail the HTTP response) but log
+ * them so a persistent disk-fill issue is still visible.
+ */
+async function cleanupUploadedFiles(
+  files: { arca_file?: Express.Multer.File[]; contabilidad_file?: Express.Multer.File[] } | undefined,
+): Promise<void> {
+  const uploaded = [...(files?.arca_file ?? []), ...(files?.contabilidad_file ?? [])];
+  await Promise.all(
+    uploaded.map(async (f) => {
+      try {
+        await fs.promises.unlink(f.path);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[reconciliations.controller] failed to clean up orphaned upload "${f.path}"`, err);
+      }
+    }),
+  );
+}
+
+/**
  * T04+T05 (RF-01/RF-02/RF-03): validates the two-file upload contract,
  * streams both files to a temp dir on disk (multer diskStorage — never
  * buffers the whole file in process memory), and enqueues a BullMQ job that
@@ -53,7 +77,16 @@ export class ReconciliationsController {
             fs.mkdirSync(dir, { recursive: true });
             cb(null, dir);
           },
-          filename: (_req, file, cb) => cb(null, `${randomUUID()}-${file.originalname}`),
+          // Never interpolate `file.originalname` into the stored filename:
+          // it is attacker-controlled (multipart filename header) and
+          // multer's diskStorage does a plain path.join with whatever this
+          // callback returns, so a name like "../../../evil.csv" would
+          // escape the upload directory (path traversal). Only a
+          // lowercased extension survives from the original name — the
+          // extension itself is re-validated by upload-validation.ts
+          // before the file is ever read.
+          filename: (_req, file, cb) =>
+            cb(null, `${randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
         }),
       },
     ),
@@ -65,12 +98,14 @@ export class ReconciliationsController {
   ) {
     const filesFailure = validateUploadFiles(files ?? {});
     if (filesFailure) {
+      await cleanupUploadedFiles(files);
       const body = 'error' in filesFailure ? { error: filesFailure.error } : {};
       throw new HttpException(body, filesFailure.status);
     }
 
     const tenantFailure = validateTenantId(tenantId);
     if (tenantFailure) {
+      await cleanupUploadedFiles(files);
       const body = 'error' in tenantFailure ? { error: tenantFailure.error } : {};
       throw new HttpException(body, tenantFailure.status);
     }
@@ -96,7 +131,16 @@ export class ReconciliationsController {
           extension: getAllowedExtension(contabilidadFile.originalname),
         },
       },
-      { jobId },
+      {
+        jobId,
+        // BullMQ's default is `attempts: 1` — a transient DB/Redis blip
+        // during staging would otherwise permanently fail the job with no
+        // retry. 3 attempts with exponential backoff (2s, 4s, 8s) gives a
+        // short-lived outage time to clear without the client having to
+        // re-upload.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+      },
     );
 
     return {

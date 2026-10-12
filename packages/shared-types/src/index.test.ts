@@ -94,7 +94,7 @@ describe('T01: shared-types AFIP tipo map + canonical voucher types', () => {
     it('CanonicalVoucher is structurally usable', () => {
       const voucher: CanonicalVoucher = {
         cuit_emisor: '30123456789',
-        tipo_cbte: 1,
+        tipo_cbte: '001',
         punto_venta: 1,
         numero: 1234,
         fecha_emision: '2021-01-01',

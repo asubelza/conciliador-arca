@@ -29,8 +29,13 @@ async function cleanupTempFiles(paths: string[]): Promise<void> {
     paths.map(async (p) => {
       try {
         await fs.unlink(p);
-      } catch {
-        // Already gone or never created — not fatal to job completion.
+      } catch (err) {
+        // Not fatal to job completion (the file may already be gone or
+        // never created), but a persistent failure here means disk
+        // accumulates orphaned uploads silently, so log it rather than
+        // swallowing it outright.
+        // eslint-disable-next-line no-console
+        console.error(`[reconciliation.worker] failed to clean up temp file "${p}"`, err);
       }
     }),
   );
@@ -40,8 +45,20 @@ export async function processReconciliationJob(
   pool: Pool,
   jobId: string,
   data: ReconciliationJobData,
+  options: { cleanupOnFailure?: boolean } = {},
 ): Promise<ReconciliationJobResult> {
+  // Default true: a direct, non-BullMQ caller (e.g. reconciliation.worker.test.ts)
+  // gets exactly one attempt, so cleaning up on failure there is correct —
+  // nothing will ever retry it. `createReconciliationWorker` below is the
+  // only caller that overrides this, and only for a non-final retry
+  // attempt (see finding #8: adding `attempts`/`backoff` to the BullMQ job
+  // options means a failed attempt may be retried, and a retry needs the
+  // temp files to still be on disk — deleting them after every failed
+  // attempt would make every retry fail with ENOENT, silently defeating
+  // the whole point of retrying).
+  const { cleanupOnFailure = true } = options;
   const client = await pool.connect();
+  let succeeded = false;
   try {
     await client.query('BEGIN');
 
@@ -61,6 +78,7 @@ export async function processReconciliationJob(
     );
 
     await client.query('COMMIT');
+    succeeded = true;
 
     return {
       arca_rows: arcaResult.rowCount,
@@ -71,14 +89,22 @@ export async function processReconciliationJob(
     throw err;
   } finally {
     client.release();
-    await cleanupTempFiles([data.arca.filePath, data.contabilidad.filePath]);
+    if (succeeded || cleanupOnFailure) {
+      await cleanupTempFiles([data.arca.filePath, data.contabilidad.filePath]);
+    }
   }
 }
 
 export function createReconciliationWorker(pool: Pool): Worker<ReconciliationJobData, ReconciliationJobResult> {
   return new Worker<ReconciliationJobData, ReconciliationJobResult>(
     RECONCILIATION_QUEUE_NAME,
-    (job) => processReconciliationJob(pool, job.id as string, job.data),
+    (job) => {
+      const totalAttempts = job.opts.attempts ?? 1;
+      const isFinalAttempt = job.attemptsMade + 1 >= totalAttempts;
+      return processReconciliationJob(pool, job.id as string, job.data, {
+        cleanupOnFailure: isFinalAttempt,
+      });
+    },
     { connection: getRedisConnectionOptions() },
   );
 }

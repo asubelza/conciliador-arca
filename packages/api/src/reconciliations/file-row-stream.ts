@@ -36,22 +36,42 @@ async function* streamCsvRows(filePath: string): AsyncGenerator<RawRow> {
 
 async function* streamXlsxRows(filePath: string): AsyncGenerator<RawRow> {
   const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {});
-  for await (const worksheetReader of workbookReader) {
-    let headers: string[] | undefined;
-    for await (const row of worksheetReader) {
-      // exceljs row.values is 1-indexed (index 0 is always undefined).
-      const values = (row.values as unknown[]).slice(1);
-      if (!headers) {
-        headers = values.map((v) => String(v ?? '').trim());
-        continue;
+  try {
+    for await (const worksheetReader of workbookReader) {
+      let headers: string[] | undefined;
+      for await (const row of worksheetReader) {
+        // exceljs row.values is 1-indexed (index 0 is always undefined).
+        const values = (row.values as unknown[]).slice(1);
+        if (!headers) {
+          headers = values.map((v) => String(v ?? '').trim());
+          continue;
+        }
+        const isEmpty = values.every((v) => v === null || v === undefined || v === '');
+        if (isEmpty) continue;
+        const record: RawRow = {};
+        headers.forEach((h, i) => {
+          if (h) record[h] = values[i];
+        });
+        yield record;
       }
-      const isEmpty = values.every((v) => v === null || v === undefined || v === '');
-      if (isEmpty) continue;
-      const record: RawRow = {};
-      headers.forEach((h, i) => {
-        if (h) record[h] = values[i];
-      });
-      yield record;
+    }
+  } finally {
+    // A corrupt/truncated XLSX throws mid-iteration, leaving the
+    // WorkbookReader's underlying file-read stream open — this showed up as
+    // real jest teardown failures (ENOTEMPTY/EPERM on leftover temp
+    // files/dirs), not flakiness. exceljs's own WorkbookReader has no public
+    // close/destroy API (it isn't declared on the type, and isn't exposed
+    // at runtime either); the actual open resource is the Node Readable it
+    // stashes on `this.stream` once iteration starts
+    // (lib/stream/xlsx/workbook-reader.js's `parse()`), so we reach for
+    // that directly and destroy it to release the underlying file
+    // descriptor. Swallow errors from it (e.g. "already closed") since we
+    // are already unwinding from either a normal return or a thrown error.
+    try {
+      const internalStream = (workbookReader as unknown as { stream?: { destroy?: () => void } }).stream;
+      internalStream?.destroy?.();
+    } catch {
+      // Already destroyed/closed — nothing more we can do here.
     }
   }
 }

@@ -23,12 +23,13 @@
  */
 import { lookupAfipTipo } from './afip-tipo-lookup';
 import type { RawRow } from './file-row-stream';
+import type { AfipTipo } from 'shared-types';
 
 export type SourceSystem = 'arca' | 'tango' | 'bejerman' | 'xubio' | 'contabilium';
 
 export interface AdaptedRow {
   cuit_emisor_raw: string | undefined;
-  tipo_cbte: number | undefined;
+  tipo_cbte: AfipTipo | undefined;
   punto_venta_raw: string | undefined;
   numero_raw: string | undefined;
   fecha_emision_raw: string | undefined;

@@ -7,7 +7,7 @@ import type { CanonicalVoucher } from 'shared-types';
 function voucher(overrides: Partial<CanonicalVoucher> = {}): CanonicalVoucher {
   return {
     cuit_emisor: '30123456789',
-    tipo_cbte: 1,
+    tipo_cbte: '001',
     punto_venta: 1,
     numero: 1,
     fecha_emision: '2021-01-01',
@@ -22,9 +22,9 @@ function voucher(overrides: Partial<CanonicalVoucher> = {}): CanonicalVoucher {
 
 describe('T09 RF-08: buildCompositeKey', () => {
   it('joins cuit_emisor|tipo_cbte|punto_venta|numero', () => {
-    expect(buildCompositeKey(voucher({ cuit_emisor: '30123456789', tipo_cbte: 1, punto_venta: 1, numero: 1234 }))).toBe(
-      '30123456789|1|1|1234',
-    );
+    expect(
+      buildCompositeKey(voucher({ cuit_emisor: '30123456789', tipo_cbte: '001', punto_venta: 1, numero: 1234 })),
+    ).toBe('30123456789|001|1|1234');
   });
 });
 

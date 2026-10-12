@@ -50,7 +50,11 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
     await deleteTestTenant(pool, tenantId);
     await pool.end();
     await app.close();
-  });
+    // Default hook timeout (20000ms, from jest.api.json's testTimeout) can
+    // be too tight here: the corrupt-file retry test above (finding #8's
+    // attempts/backoff) may still have a job settling its final retry when
+    // this hook starts, and worker.close() waits for that to finish.
+  }, 30000);
 
   it('AC1: returns 202 with job_id + status_url for two valid files + tenant_id', async () => {
     const res = await request(app.getHttpServer())
@@ -220,7 +224,13 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
       expect(uploadRes.status).toBe(202);
       const jobId = uploadRes.body.job_id as string;
 
-      const deadline = Date.now() + 10000;
+      // This job retries (finding #8: attempts: 3, exponential backoff
+      // starting at 2000ms) before BullMQ marks it 'failed' — a corrupt
+      // file fails identically on every attempt, so the mandatory backoff
+      // delays alone (2000ms + 4000ms = 6000ms) are on the critical path
+      // here. The deadline/timeout below are generous beyond that floor so
+      // this doesn't flake under parallel test-suite load.
+      const deadline = Date.now() + 20000;
       let statusBody: Record<string, unknown> = {};
       while (Date.now() < deadline) {
         const res = await request(app.getHttpServer()).get(`/api/reconciliations/${jobId}/status`);
@@ -231,6 +241,6 @@ describe('T04/T05: POST /api/reconciliations (integration)', () => {
 
       expect(statusBody.status).toBe('error');
       expect(typeof statusBody.detail).toBe('string');
-    }, 15000);
+    }, 25000);
   });
 });

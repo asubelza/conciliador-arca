@@ -10,7 +10,7 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
     const row = { 'Nro. Doc. Receptor': '30-12345678-9', 'Tipo de Comprobante': '1' };
     const adapted = adaptRow('arca', row);
     expect(adapted.cuit_emisor_raw).toBe('30-12345678-9');
-    expect(adapted.tipo_cbte).toBe(1);
+    expect(adapted.tipo_cbte).toBe('001');
     expect(adapted.source_row).toBe(row);
   });
 
@@ -18,13 +18,13 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
     const row = { CUIT: '30.12345678.9', Tipo: 'Factura A' };
     const adapted = adaptRow('tango', row);
     expect(adapted.cuit_emisor_raw).toBe('30.12345678.9');
-    expect(adapted.tipo_cbte).toBe(1);
+    expect(adapted.tipo_cbte).toBe('001');
   });
 
   it('Bejerman: maps "S/Tc" + splits "Nro.Comp." into punto_venta/numero (RF-05 scenario)', () => {
     const row = { 'S/Tc': 'FCC', 'Nro.Comp.': '0001-00001234' };
     const adapted = adaptRow('bejerman', row);
-    expect(adapted.tipo_cbte).toBe(3);
+    expect(adapted.tipo_cbte).toBe('005');
     expect(adapted.punto_venta_raw).toBe('1');
     expect(adapted.numero_raw).toBe('1234');
   });
@@ -32,7 +32,7 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
   it('Xubio: maps "tipo" + "importe" (RF-05 scenario)', () => {
     const row = { tipo: 'NC', importe: '1.500,00' };
     const adapted = adaptRow('xubio', row);
-    expect(adapted.tipo_cbte).toBe(3);
+    expect(adapted.tipo_cbte).toBe('005');
     expect(adapted.importe_total_raw).toBe('1.500,00');
   });
 
@@ -40,7 +40,7 @@ describe('T07 RF-05: adaptRow (column-variant adapters)', () => {
     const row = { CUIT: '30111111112', 'Tipo Comprobante': 'Factura B', Total: '2.000,00' };
     const adapted = adaptRow('contabilium', row);
     expect(adapted.cuit_emisor_raw).toBe('30111111112');
-    expect(adapted.tipo_cbte).toBe(6);
+    expect(adapted.tipo_cbte).toBe('003');
     expect(adapted.importe_total_raw).toBe('2.000,00');
   });
 
