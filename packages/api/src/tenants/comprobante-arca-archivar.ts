@@ -294,7 +294,18 @@ async function archiveOneForLote(
           'SELECT estado FROM vouchers_canonical WHERE id = $1',
           [voucherId],
         );
-        const reason: ArchivarLoteSkipReason = currentRows[0]?.estado === 'conciliado' ? 'already_conciliado' : 'already_archivado';
+        // Don't default to 'already_archivado' for every non-conciliado
+        // outcome — a row that vanished entirely in the race (e.g. deleted
+        // concurrently) has no row here at all, which is 'not_found', not
+        // a false claim that it's archivado.
+        let reason: ArchivarLoteSkipReason;
+        if (currentRows.length === 0) {
+          reason = 'not_found';
+        } else if (currentRows[0].estado === 'conciliado') {
+          reason = 'already_conciliado';
+        } else {
+          reason = 'already_archivado';
+        }
         return { voucher_id: voucherId, status: 'skipped', reason };
       }
       await logAuditEvent(client, {
