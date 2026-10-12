@@ -54,6 +54,8 @@ const pendientesHistoricoBody = {
   count_pendientes: 0,
   excluidos_previos_a_alta: [],
   count_excluidos_previos_a_alta: 0,
+  archivados: [],
+  count_archivados: 0,
 };
 
 type MockPeriodo = {
