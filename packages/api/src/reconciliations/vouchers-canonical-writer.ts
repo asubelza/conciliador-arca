@@ -74,7 +74,15 @@ function toNullableDate(fechaEmision: string): string | null {
 export async function upsertVouchersCanonical(
   client: PoolClient,
   tenantId: string,
-  periodoId: string,
+  // `string | null`: widened 2026-10-12 for manual ARCA voucher creation
+  // (POST /api/tenants/:id/comprobantes-arca, tenants/comprobante-arca-manual.ts)
+  // — a manually-registered comprobante has no período to stamp when the
+  // tenant currently has no `estado = 'abierto'` período, and
+  // `periodo_alta_id` is itself a nullable FK (015_alter_vouchers_canonical_
+  // add_estado_periodo.sql), so passing NULL through here is correct, not a
+  // workaround. Every pre-existing caller (reconciliation.worker.ts) always
+  // has a real período id and is unaffected.
+  periodoId: string | null,
   vouchers: CanonicalVoucher[],
 ): Promise<UpsertVouchersResult> {
   let upserted = 0;

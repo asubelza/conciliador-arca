@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 import { AppModule } from '../app.module';
 import {
   authHeaderFor,
+  createTestPeriodo,
   createTestTenant,
   createTestUser,
   deleteTestTenant,
@@ -97,6 +98,157 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(res.body.count_pendientes).toBe(0);
       expect(res.body.excluidos_previos_a_alta).toEqual([]);
       expect(res.body.count_excluidos_previos_a_alta).toBe(0);
+    });
+  });
+
+  describe('2026-10-12 (manual ARCA voucher creation): POST /api/tenants/:id/comprobantes-arca', () => {
+    function validBody(overrides: Partial<Record<string, unknown>> = {}) {
+      return {
+        cuit_emisor: '30111111112',
+        tipo_cbte: 1,
+        punto_venta: Math.floor(Math.random() * 1_000_000),
+        numero: Math.floor(Math.random() * 1_000_000),
+        fecha_emision: '2026-10-12',
+        importe_total_ars: 1000,
+        iva: 210,
+        ...overrides,
+      };
+    }
+
+    it('creates a pendiente ARCA voucher as admin, with periodo_alta_id null when the tenant has no abierto período', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(validBody());
+      expect(res.status).toBe(201);
+      expect(res.body.estado).toBe('pendiente');
+      expect(res.body.file_source).toBe('arca');
+      expect(res.body.periodo_alta_id).toBeNull();
+      expect(res.body.id).toBeDefined();
+    });
+
+    it('creates a voucher as colaborador', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', authHeaderFor('colaborador'))
+        .send(validBody());
+      expect(res.status).toBe(201);
+      expect(res.body.estado).toBe('pendiente');
+    });
+
+    it('returns 403 for a cliente (role check runs before any DB write)', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send(validBody());
+      expect(res.status).toBe(403);
+    });
+
+    it('resolves periodo_alta_id to the tenant\'s currently abierto período', async () => {
+      const abiertoTenantId = await createTestTenant(pool, 'comprobantes-arca.test (abierto)');
+      try {
+        const periodoId = await createTestPeriodo(pool, abiertoTenantId, '2026-10-01');
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${abiertoTenantId}/comprobantes-arca`)
+          .set('Authorization', adminAuth)
+          .send(validBody());
+        expect(res.status).toBe(201);
+        expect(res.body.periodo_alta_id).toBe(periodoId);
+      } finally {
+        await deleteTestTenant(pool, abiertoTenantId);
+      }
+    });
+
+    it('returns 400 for a missing tipo_cbte', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(validBody({ tipo_cbte: undefined }));
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/tipo_cbte/);
+    });
+
+    it('returns 400 for an unrecognized tipo_cbte code', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(validBody({ tipo_cbte: 999 }));
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/tipo_cbte/);
+    });
+
+    it('returns 400 for a malformed cuit_emisor', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(validBody({ cuit_emisor: '123' }));
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/cuit_emisor/);
+    });
+
+    it('returns 400 for a missing fecha_emision', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(validBody({ fecha_emision: undefined }));
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/fecha_emision/);
+    });
+
+    it('returns 400 for a non-numeric importe_total_ars', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(validBody({ importe_total_ars: 'lots' }));
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/importe_total_ars/);
+    });
+
+    it('returns 404 for an unknown tenant', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants/00000000-0000-0000-0000-000000000000/comprobantes-arca')
+        .set('Authorization', adminAuth)
+        .send(validBody());
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'tenant not found' });
+    });
+
+    it('returns 409 when a conciliado voucher already exists with the same composite key, instead of a false success', async () => {
+      const body = validBody();
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO vouchers_canonical (
+           tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+           iva, fecha, file_source, estado, periodo_alta_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'arca', 'conciliado', NULL)
+         RETURNING id`,
+        [tenantId, body.cuit_emisor, body.tipo_cbte, body.punto_venta, body.numero, body.importe_total_ars, body.iva, body.fecha_emision],
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(body);
+      expect(res.status).toBe(409);
+
+      // the pre-existing conciliado row must be untouched (still conciliado, no new row inserted)
+      const { rows: afterRows } = await pool.query('SELECT id, estado FROM vouchers_canonical WHERE id = $1', [rows[0].id]);
+      expect(afterRows[0].estado).toBe('conciliado');
+    });
+
+    it('a manually created voucher shows up as a normal pendiente in GET /api/tenants/:id/pendientes-historico', async () => {
+      const body = validBody({ fecha_emision: '2026-10-12' });
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(body);
+      expect(createRes.status).toBe(201);
+
+      const historicoRes = await request(app.getHttpServer())
+        .get(`/api/tenants/${tenantId}/pendientes-historico`)
+        .set('Authorization', adminAuth);
+      expect(historicoRes.status).toBe(200);
+      const ids = historicoRes.body.pendientes.map((r: { id: string }) => r.id);
+      expect(ids).toContain(createRes.body.id);
     });
   });
 
