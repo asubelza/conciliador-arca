@@ -134,6 +134,99 @@ export async function archivarComprobanteArca(
   }
 }
 
+export type DesarchivarComprobanteFailure =
+  | { code: 'TENANT_NOT_FOUND'; status: 404; error: string }
+  | { code: 'VOUCHER_NOT_FOUND'; status: 404; error: string }
+  | { code: 'NOT_ARCHIVED'; status: 409; error: string };
+
+export interface DesarchivarComprobanteResult {
+  id: string;
+  estado: 'pendiente';
+}
+
+/**
+ * 2026-10-12 ("Match manual" para filas `no_existe_en_arca`): la contraparte
+ * exacta de `archivarComprobanteArca` arriba — usada por MatchManualModal.tsx's
+ * tab "Buscar en archivados", cuando el contador encuentra ahí el comprobante
+ * ARCA que en realidad SÍ corresponde a un comprobante del sistema contable
+ * sin match (es decir, se archivó por error, o simplemente nadie lo había
+ * emparejado todavía). Pone `estado` de nuevo en 'pendiente', así vuelve a
+ * participar en matchPeriodo — que excluye 'archivado' igual que 'conciliado'
+ * (ver periodo-matching-engine.ts's `matchPeriodo`). El caller (el modal) SIEMPRE
+ * llama a este endpoint ANTES de POST /api/periodos/:id/coincidencias: una
+ * confirmación contra un voucher todavía 'archivado' no tomaría en el próximo
+ * report read, por la misma exclusión.
+ *
+ * Mismo guard atómico que `archivarComprobanteArca` (ver su comentario arriba,
+ * líneas 99-106): la condición se repite en el WHERE del UPDATE, así que un
+ * resultado de 0 filas solo puede significar que una operación concurrente ya
+ * resolvió este voucher entre el SELECT y este UPDATE — se reporta como el
+ * mismo 409, nunca como un overwrite silencioso.
+ */
+export async function desarchivarComprobanteArca(
+  pool: Pool,
+  tenantId: string,
+  voucherId: string,
+  userId: string,
+): Promise<DesarchivarComprobanteResult | DesarchivarComprobanteFailure> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    if (!(await fetchTenantExists(client, tenantId))) {
+      await client.query('ROLLBACK');
+      return { code: 'TENANT_NOT_FOUND', status: 404, error: 'tenant not found' };
+    }
+
+    const { rows: voucherRows } = await client.query<{ id: string; estado: string }>(
+      'SELECT id, estado FROM vouchers_canonical WHERE tenant_id = $1 AND id = $2',
+      [tenantId, voucherId],
+    );
+    if (voucherRows.length === 0) {
+      await client.query('ROLLBACK');
+      return {
+        code: 'VOUCHER_NOT_FOUND',
+        status: 404,
+        error: 'voucher_id must reference an existing voucher for this tenant',
+      };
+    }
+
+    const estadoActual = voucherRows[0].estado;
+    if (estadoActual !== 'archivado') {
+      await client.query('ROLLBACK');
+      return { code: 'NOT_ARCHIVED', status: 409, error: `this voucher is ${estadoActual}, not archivado` };
+    }
+
+    const { rows: updatedRows } = await client.query<{ id: string; estado: 'pendiente' }>(
+      `UPDATE vouchers_canonical SET estado = 'pendiente'
+       WHERE id = $1 AND estado = 'archivado'
+       RETURNING id, estado`,
+      [voucherId],
+    );
+    if (updatedRows.length === 0) {
+      await client.query('ROLLBACK');
+      return { code: 'NOT_ARCHIVED', status: 409, error: 'this voucher was resolved by a concurrent operation' };
+    }
+
+    await logAuditEvent(client, {
+      tenantId,
+      userId,
+      action: 'comprobante_arca_desarchivado',
+      entity: 'vouchers_canonical',
+      entityId: voucherId,
+      details: null,
+    });
+
+    await client.query('COMMIT');
+    return updatedRows[0];
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export type ArchivarLoteSkipReason = 'not_found' | 'wrong_tenant' | 'wrong_file_source' | 'already_conciliado' | 'already_archivado';
 
 export interface ArchivarLoteItemResult {
