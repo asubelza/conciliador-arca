@@ -81,29 +81,52 @@ describe('T03/T15: seed afip_tipo_map with the real AFIP tipo codes', () => {
     expect(rows.map((r) => r.codigo).sort((a, b) => a - b)).toEqual([...EXPECTED].sort((a, b) => a - b));
   });
 
-  it('re-running the seed on a database that already has the rows fails safely (PK conflict), not a silent duplicate', async () => {
-    // codigo is the real table's PRIMARY KEY (012_migrate_tipo_to_afip_integer_codes.sql),
-    // so a second insert of the same rows must be rejected by the
-    // constraint itself, not merely by application-level idempotency logic
-    // (there is none here) — this is the documented, verified real-Postgres
-    // behavior from the T15 gap fix: seed-runner.ts's caller
-    // (docker-compose.yml's migrate service) wraps this in `|| true`
-    // specifically because re-running is expected to fail this way.
+  it('re-running the seed on a database that already has all the rows is a no-op, not an error', async () => {
+    // ON CONFLICT (codigo) DO NOTHING makes this idempotent — codigo is the
+    // real table's PRIMARY KEY (012_migrate_tipo_to_afip_integer_codes.sql),
+    // so re-running must silently skip existing rows instead of aborting.
     const sql = generateSeedSql();
     const exec = (s: string) =>
       new Promise<void>((resolve, reject) => {
         db.exec(s, (err) => (err ? reject(err) : resolve()));
       });
     await exec(sql);
-    await expect(exec(sql)).rejects.toThrow(/UNIQUE constraint failed/);
+    await expect(exec(sql)).resolves.toBeUndefined();
 
     const rows: Array<{ codigo: number }> = await new Promise((resolve, reject) => {
       db.all('SELECT codigo FROM afip_tipo_map ORDER BY codigo', (err, r) =>
         err ? reject(err) : resolve(r as Array<{ codigo: number }>),
       );
     });
-    // The failed second run must not have partially inserted anything new —
-    // still exactly the first run's rows, no duplicates.
     expect(rows.length).toBe(EXPECTED.length);
+  });
+
+  it('re-running the seed on a database that already has SOME of the rows (e.g. pre-seeded by a migration) fills in the rest without aborting', async () => {
+    // This is exactly migration 022's scenario: codes 15/51/81 already
+    // present before the seed runs. A non-idempotent multi-row INSERT
+    // would abort on the first conflicting row and leave the remaining
+    // canonical codes missing — this must not happen.
+    await new Promise<void>((resolve, reject) => {
+      db.run(
+        "INSERT INTO afip_tipo_map (codigo, descripcion, activo) VALUES (15, 'RECIBO_C', 1)",
+        (err) => (err ? reject(err) : resolve()),
+      );
+    });
+
+    const inserted = await runSeed((sql) =>
+      new Promise<void>((resolve, reject) => {
+        db.exec(sql, (err) => (err ? reject(err) : resolve()));
+      }),
+    );
+    expect(inserted).toBe(EXPECTED.length);
+
+    const rows: Array<{ codigo: number }> = await new Promise((resolve, reject) => {
+      db.all('SELECT codigo FROM afip_tipo_map ORDER BY codigo', (err, r) =>
+        err ? reject(err) : resolve(r as Array<{ codigo: number }>),
+      );
+    });
+    expect(rows.map((r) => r.codigo).sort((a, b) => a - b)).toEqual(
+      [...EXPECTED].sort((a, b) => a - b),
+    );
   });
 });
