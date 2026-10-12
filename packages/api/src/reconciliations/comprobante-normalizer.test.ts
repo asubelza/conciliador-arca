@@ -41,6 +41,38 @@ describe('T08 RF-07: parseArgentineAmount', () => {
     expect(parseArgentineAmount(undefined)).toBe(0);
     expect(parseArgentineAmount('')).toBe(0);
   });
+
+  describe('PR review finding #5: dot-only thousands separator (no comma)', () => {
+    it('treats a lone dot as a thousands separator, not a decimal point ("1.500" -> 1500)', () => {
+      expect(parseArgentineAmount('1.500')).toBe(1500);
+    });
+
+    it('handles multiple thousands-grouping dots ("1.234.567" -> 1234567)', () => {
+      expect(parseArgentineAmount('1.234.567')).toBe(1234567);
+    });
+
+    it('parses a plain integer with no separators unchanged ("1500" -> 1500)', () => {
+      expect(parseArgentineAmount('1500')).toBe(1500);
+    });
+
+    it('parses a comma-decimal with no thousands grouping ("0,50" -> 0.5)', () => {
+      expect(parseArgentineAmount('0,50')).toBe(0.5);
+    });
+  });
+
+  describe('verification follow-up: a dot with fewer than 3 trailing digits is not valid Argentine grouping', () => {
+    it('parses a lone-dot value with 1 trailing digit as a decimal, not thousands ("1.5" -> 1.5)', () => {
+      expect(parseArgentineAmount('1.5')).toBe(1.5);
+    });
+
+    it('parses a lone-dot value with 2 trailing digits as a decimal, not thousands ("100.50" -> 100.5)', () => {
+      expect(parseArgentineAmount('100.50')).toBe(100.5);
+    });
+
+    it('still strips a valid 3-digit thousands group even with a leading 1-2 digit group ("12.500" -> 12500)', () => {
+      expect(parseArgentineAmount('12.500')).toBe(12500);
+    });
+  });
 });
 
 describe('T08 RF-07: parseFechaEmision / excelSerialToIsoDate', () => {
@@ -113,6 +145,58 @@ describe('T08 RF-07: normalizeRow', () => {
       moneda: 'ARS',
       file_source: 'arca',
       source_row: adapted.source_row,
+    });
+  });
+
+  describe('PR review finding #7: edge-case coverage', () => {
+    it('an empty row object {} through adaptRow -> normalizeRow does not throw, and resolves to ok=false', () => {
+      const adapted = adaptRow('tango', {});
+      const { voucher, ok } = normalizeRow('contabilidad', adapted);
+      expect(ok).toBe(false);
+      expect(voucher).toEqual({
+        cuit_emisor: '',
+        tipo_cbte: 0,
+        punto_venta: 0,
+        numero: 0,
+        fecha_emision: '',
+        importe_total_ars: 0,
+        iva: 0,
+        moneda: 'ARS',
+        file_source: 'contabilidad',
+        source_row: {},
+      });
+    });
+
+    it('non-numeric punto_venta/numero is flagged (ok=false), not silently coerced to 0', () => {
+      const adapted = adaptRow('tango', {
+        CUIT: '30111111112',
+        Tipo: 'Factura A',
+        'Punto de Venta': 'ABC',
+        'Número': '1234',
+        Importe: '1.500,00',
+      });
+      const { voucher, ok } = normalizeRow('contabilidad', adapted);
+      expect(ok).toBe(false);
+      // Garbage input still renders as 0 in the voucher (same as the
+      // unknown-tipo path), but `ok: false` is how a caller distinguishes
+      // this from a legitimately-zero punto_venta.
+      expect(voucher.punto_venta).toBe(0);
+      expect(voucher.importe_total_ars).toBe(0);
+    });
+
+    it('a legitimately-zero punto_venta/numero is NOT flagged as an error', () => {
+      const adapted = adaptRow('tango', {
+        CUIT: '30111111112',
+        Tipo: 'Factura A',
+        'Punto de Venta': '0',
+        'Número': '0',
+        Importe: '1.500,00',
+      });
+      const { voucher, ok } = normalizeRow('contabilidad', adapted);
+      expect(ok).toBe(true);
+      expect(voucher.punto_venta).toBe(0);
+      expect(voucher.numero).toBe(0);
+      expect(voucher.importe_total_ars).toBe(1500);
     });
   });
 });

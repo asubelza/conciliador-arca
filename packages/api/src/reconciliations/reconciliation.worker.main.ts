@@ -7,15 +7,13 @@
  *
  *   DATABASE_URL=... REDIS_HOST=... npx ts-node src/reconciliations/reconciliation.worker.main.ts
  */
-import { Pool } from 'pg';
+import { getPgPool } from '../db/pg-pool';
 import { createReconciliationWorker } from './reconciliation.worker';
 
 function main() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL is not set');
-  }
-  const pool = new Pool({ connectionString });
+  // Shared pool-creation path with the HTTP process (getPgPool also reads
+  // DATABASE_URL and throws if it's unset) — see packages/api/src/db/pg-pool.ts.
+  const pool = getPgPool();
   const worker = createReconciliationWorker(pool);
 
   worker.on('completed', (job) => {
