@@ -3,7 +3,13 @@
  *
  * Seeds `afip_tipo_map` with the canonical AFIP comprobante tipos sourced
  * from the shared-types catalogue (`AFIP_TIPOS_CADENCIAL` + `AFIP_TIPO_LABELS`),
- * so the seed can never drift from the canonical type list.
+ * so the seed can never drift from the canonical type list. Idempotent
+ * (`ON CONFLICT DO NOTHING`) — safe to re-run on a database that already
+ * has some or all of these rows, e.g. from migration 022 pre-inserting
+ * codes 15/51/81 ahead of a seed run. Before this, a non-idempotent
+ * multi-row INSERT aborted entirely on the first conflicting row, leaving
+ * `afip_tipo_map` partially seeded and causing downstream FK failures on
+ * `tipo_cbte` — silently, since docker-compose wraps seed-runner in `|| true`.
  *
  * `codigo` is a real AFIP integer tipo code (1=Factura A, 6=Factura B, …),
  * not the disconnected zero-padded 3-digit scheme this seed used before
@@ -50,7 +56,7 @@ export function generateSeedSql(): string {
   return (
     'INSERT INTO afip_tipo_map (codigo, descripcion, activo) VALUES\n  ' +
     tuples.join(',\n  ') +
-    ';\n'
+    '\nON CONFLICT (codigo) DO NOTHING;\n'
   );
 }
 
