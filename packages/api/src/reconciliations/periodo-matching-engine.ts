@@ -59,6 +59,7 @@
  *      unconsumed-corriente, since nothing has actually resolved it yet.
  */
 import type { Pool } from 'pg';
+import { NON_TERMINAL_ESTADO_SQL } from './voucher-estado';
 
 /**
  * T27 (conciliacion-periodica): `matchPeriodo` is called two ways — a
@@ -333,12 +334,12 @@ export async function matchPeriodo(
   const [sistemaRows, arcaCorriente, arcaHistorico, { confirmedArcaBySistemaId, descartado }] = await Promise.all([
     queryRows(
       pool,
-      `tenant_id = $1 AND file_source = 'contabilidad' AND periodo_alta_id = $2 AND estado NOT IN ('conciliado', 'archivado')`,
+      `tenant_id = $1 AND file_source = 'contabilidad' AND periodo_alta_id = $2 AND ${NON_TERMINAL_ESTADO_SQL}`,
       [tenantId, periodoId],
     ),
     queryRows(
       pool,
-      `tenant_id = $1 AND file_source = 'arca' AND periodo_alta_id = $2 AND estado NOT IN ('conciliado', 'archivado')`,
+      `tenant_id = $1 AND file_source = 'arca' AND periodo_alta_id = $2 AND ${NON_TERMINAL_ESTADO_SQL}`,
       [tenantId, periodoId],
     ),
     queryRows(

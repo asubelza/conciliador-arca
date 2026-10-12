@@ -64,6 +64,7 @@
  */
 import type { PoolClient } from 'pg';
 import type { CanonicalVoucher } from 'shared-types';
+import { NON_TERMINAL_ESTADO_SQL } from './voucher-estado';
 
 export interface UpsertVouchersResult {
   /** Rows actually inserted or updated (conflict resolved, not conciliado/archivado). */
@@ -109,7 +110,7 @@ export async function upsertVouchersCanonical(
            WHEN EXCLUDED.file_source = 'contabilidad' THEN EXCLUDED.periodo_alta_id
            ELSE vouchers_canonical.periodo_alta_id
          END
-       WHERE vouchers_canonical.estado NOT IN ('conciliado', 'archivado')
+       WHERE vouchers_canonical.${NON_TERMINAL_ESTADO_SQL}
        RETURNING id`,
       [
         tenantId,
