@@ -71,6 +71,12 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     it('defines a migration for audit_trail', () => {
       expect(files.some((f) => /audit/.test(f))).toBe(true);
     });
+    it('defines a migration for periodos (conciliacion-periodica T16)', () => {
+      expect(files.some((f) => /periodos/.test(f))).toBe(true);
+    });
+    it('defines a migration for periodo_resultados (conciliacion-periodica T27)', () => {
+      expect(files.some((f) => /periodo_resultados/.test(f))).toBe(true);
+    });
   });
 
   describe('table definitions', () => {
@@ -81,6 +87,8 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       'vouchers_canonical',
       'reconciliation_results',
       'audit_trail',
+      'periodos',
+      'periodo_resultados',
     ];
 
     tables.forEach((t) => {
@@ -96,9 +104,9 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(sqlLc).toContain('updated_at');
     });
 
-    it('afip_tipo_map has tipo, descripcion, activo boolean, created_at', () => {
+    it('afip_tipo_map has codigo (real AFIP integer, T14), descripcion, activo boolean, created_at', () => {
       expect(sqlLc).toContain('afip_tipo_map');
-      expect(sqlLc).toContain('tipo');
+      expect(sqlLc).toContain('codigo');
       expect(sqlLc).toContain('descripcion');
       expect(sqlLc).toContain('activo');
       expect(sqlLc).toContain('boolean');
@@ -135,6 +143,40 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
       expect(sqlLc).toContain('entity_id');
       expect(sqlLc).toContain('details');
     });
+
+    it('periodos has tenant_id FK, mes, estado, tolerancia_ars, cerrado_at/cerrado_por, UNIQUE(tenant_id, mes) (T16, RF-12)', () => {
+      expect(sqlLc).toContain('periodos');
+      expect(sqlLc).toContain('mes');
+      expect(sqlLc).toContain('estado');
+      expect(sqlLc).toContain('tolerancia_ars');
+      expect(sqlLc).toContain('cerrado_at');
+      expect(sqlLc).toContain('cerrado_por');
+      expect(sqlLc).toMatch(/references\s+tenants\s*\(id\)/);
+      expect(sqlLc).toMatch(/unique\s*\(\s*tenant_id\s*,\s*mes\s*\)/);
+    });
+
+    it('tenants has tolerancia_redondeo_ars, default 0.99 (T17, RF-18)', () => {
+      expect(sqlLc).toContain('tolerancia_redondeo_ars');
+      expect(sqlLc).toMatch(/tolerancia_redondeo_ars\s+numeric\(10,\s*2\)\s+not\s+null\s+default\s+0\.99/);
+    });
+
+    it('vouchers_canonical gains estado, periodo_alta_id, periodo_cierre_id + a unique composite-key index (T21, RF-15/RF-16)', () => {
+      expect(sqlLc).toMatch(/estado\s+text\s+not\s+null\s+default\s+'pendiente'/);
+      expect(sqlLc).toContain('periodo_alta_id');
+      expect(sqlLc).toContain('periodo_cierre_id');
+      expect(sqlLc).toMatch(/create\s+unique\s+index\s+idx_vouchers_tenant_key_unique/);
+      expect(sqlLc).toMatch(/idx_vouchers_tenant_key_unique\s+on\s+vouchers_canonical\s*\(\s*tenant_id\s*,\s*file_source\s*,\s*cuit_emisor\s*,\s*tipo_cbte\s*,\s*punto_venta\s*,\s*numero\s*\)/);
+    });
+
+    it('periodo_resultados references periodos, has classification CHECK + sistema_row/arca_row jsonb (T27, RF-20)', () => {
+      expect(sqlLc).toContain('periodo_resultados');
+      expect(sqlLc).toMatch(/references\s+periodos\s*\(id\)/);
+      expect(sqlLc).toContain('classification');
+      expect(sqlLc).toContain('sistema_row');
+      expect(sqlLc).toContain('arca_row');
+      expect(sqlLc).toContain("'conciliado_ok'");
+      expect(sqlLc).toContain("'pendiente_en_arca'");
+    });
   });
 
   describe('indexes', () => {
@@ -158,7 +200,14 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
   });
 
   describe('row-level security (backstop tenant isolation)', () => {
-    const tenantTables = ['vouchers_staging', 'vouchers_canonical', 'reconciliation_results', 'audit_trail'];
+    const tenantTables = [
+      'vouchers_staging',
+      'vouchers_canonical',
+      'reconciliation_results',
+      'audit_trail',
+      'periodos',
+      'periodo_resultados',
+    ];
 
     tenantTables.forEach((t) => {
       it(`enables RLS on "${t}"`, () => {
@@ -173,6 +222,10 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
 
     it('audit_trail is append-only (UPDATE/DELETE revoked from app role)', () => {
       expect(sqlLc).toMatch(/revoke\s+update\s*,\s*delete\s+on\s+audit_trail/);
+    });
+
+    it('periodo_resultados is append-only, same guarantee as audit_trail (T27, RF-20)', () => {
+      expect(sqlLc).toMatch(/revoke\s+update\s*,\s*delete\s+on\s+periodo_resultados/);
     });
   });
 
@@ -215,16 +268,118 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     });
   });
 
+  describe('017: app_role least-privilege grants (closes the gap flagged since 011)', () => {
+    const files = fs.existsSync(MIGRATIONS_DIR)
+      ? fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+      : [];
+
+    it('defines migration 017', () => {
+      expect(files.some((f) => /017_grant_app_role_remaining_tables/.test(f))).toBe(true);
+    });
+
+    // Real behavior (both the grants working and everything else still
+    // being denied) is proven against live PostgreSQL in
+    // app-role-grants.test.ts, exactly like 011's own GRANTs for
+    // audit_trail/feedback_loop have no structural regex check here either
+    // — this block only guards against someone silently deleting or
+    // truncating the migration text, not against a live privilege
+    // regression (SQLite here can't run GRANT/REVOKE for real; see this
+    // file's module doc).
+    it('grants app_role SELECT+UPDATE on tenants (no INSERT/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*update\s+on\s+tenants\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT on vouchers_staging (no UPDATE/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s+on\s+vouchers_staging\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on vouchers_canonical (no DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+vouchers_canonical\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT on reconciliation_results (no UPDATE/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s+on\s+reconciliation_results\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on periodos (no DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+periodos\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT on periodo_resultados (016 already REVOKEs UPDATE/DELETE)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s+on\s+periodo_resultados\s+to\s+app_role/);
+    });
+
+    it('never grants app_role anything on afip_tipo_map (the app never queries it at request time)', () => {
+      expect(sqlLc).not.toMatch(/grant\s+[a-z,\s]+\s+on\s+afip_tipo_map\s+to\s+app_role/);
+    });
+  });
+
+  describe('018: users + roles (autenticacion-roles, RF-14)', () => {
+    const files = fs.existsSync(MIGRATIONS_DIR)
+      ? fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+      : [];
+
+    it('defines migration 018', () => {
+      expect(files.some((f) => /018_init_users_and_roles/.test(f))).toBe(true);
+    });
+
+    it('creates users with email UNIQUE, password_hash, role CHECK, is_active', () => {
+      expect(sqlLc).toMatch(/create\s+table\s+users/);
+      expect(sqlLc).toContain('email');
+      expect(sqlLc).toMatch(/email\s+text\s+not\s+null\s+unique/);
+      expect(sqlLc).toContain('password_hash');
+      expect(sqlLc).toMatch(/role\s+in\s*\(\s*'admin'\s*,\s*'colaborador'\s*,\s*'cliente'\s*\)/);
+      expect(sqlLc).toMatch(/is_active\s+boolean\s+not\s+null\s+default\s+true/);
+    });
+
+    it('CHECKs users.email is always lowercase (so a plain lower() lookup never misses a row on case alone)', () => {
+      expect(sqlLc).toMatch(/check\s*\(\s*email\s*=\s*lower\s*\(\s*email\s*\)\s*\)/);
+    });
+
+    it('creates user_tenant_access referencing users and tenants with a composite PK', () => {
+      expect(sqlLc).toMatch(/create\s+table\s+user_tenant_access/);
+      expect(sqlLc).toMatch(/references\s+users\s*\(\s*id\s*\)/);
+      expect(sqlLc).toMatch(/primary\s+key\s*\(\s*user_id\s*,\s*tenant_id\s*\)/);
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on users (no DELETE — deactivate via is_active)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+users\s+to\s+app_role/);
+    });
+
+    it('grants app_role SELECT+INSERT+DELETE on user_tenant_access', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*delete\s+on\s+user_tenant_access\s+to\s+app_role/);
+    });
+
+    it('does NOT enable RLS/tenant_isolation on users or user_tenant_access (see migration 018\'s module doc — chicken-and-egg with tenant access resolution)', () => {
+      expect(sqlLc).not.toMatch(/alter\s+table\s+users\s+enable\s+row\s+level\s+security/);
+      expect(sqlLc).not.toMatch(/alter\s+table\s+user_tenant_access\s+enable\s+row\s+level\s+security/);
+    });
+  });
+
   describe('Prisma schema', () => {
     it('declares a postgresql datasource', () => {
       expect(schema).toMatch(/datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"postgresql"/);
     });
 
-    it('declares all six models', () => {
-      const models = ['Tenant', 'AfipTipoMap', 'VoucherStaging', 'VoucherCanonical', 'ReconciliationResult', 'AuditTrail'];
+    it('declares all eight core models', () => {
+      const models = [
+        'Tenant',
+        'AfipTipoMap',
+        'VoucherStaging',
+        'VoucherCanonical',
+        'ReconciliationResult',
+        'AuditTrail',
+        'Periodo',
+        'PeriodoResultado',
+      ];
       models.forEach((m) => {
         expect(schema).toMatch(new RegExp(`model\\s+${m}\\s*\\{`));
       });
+    });
+
+    it('declares User and UserTenantAccess (T33, autenticacion-roles)', () => {
+      expect(schema).toMatch(/model\s+User\s*\{/);
+      expect(schema).toMatch(/model\s+UserTenantAccess\s*\{/);
     });
 
     it('generates the Prisma client', () => {

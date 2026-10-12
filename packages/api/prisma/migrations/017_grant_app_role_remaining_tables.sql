@@ -1,0 +1,87 @@
+-- 017_grant_app_role_remaining_tables.sql
+-- Closes the `app_role` least-privilege gap flagged (and left open) since
+-- PR-3's "Real gap found" note in 011_grant_app_role_audit_feedback.sql:
+-- every table besides audit_trail/feedback_loop had zero GRANTs for
+-- app_role, invisible in every migration/test/dev session so far because
+-- they all connect as the superuser (`conciliador`), which bypasses
+-- privilege checks entirely. This is a real pre-deploy requirement once the
+-- app's own DATABASE_URL is switched to a role that actually is app_role
+-- (or is granted membership in it) rather than the superuser.
+--
+-- Each GRANT below is scoped to exactly what the running API/worker code
+-- does against that table today — verified by reading every INSERT/UPDATE/
+-- DELETE/COPY/SELECT ... FOR UPDATE statement in packages/api/src, not
+-- assumed. No table gets DELETE: no code path in the app deletes production
+-- rows (only test cleanup, which runs over the superuser test connection,
+-- ever does). Tables already covered by 011 (audit_trail, feedback_loop)
+-- are not touched again here.
+--
+--   tenants               SELECT, UPDATE  — GET/PUT /api/tenants/:id/config
+--                                            (tenants.controller.ts);
+--                                            periodo-cierre.ts and
+--                                            periodo-report.ts also SELECT
+--                                            tolerancia_redondeo_ars. No
+--                                            INSERT: tenant provisioning is
+--                                            an out-of-band admin action,
+--                                            not an app code path.
+--   vouchers_staging      SELECT, INSERT  — staging-writer.ts's COPY FROM
+--                                            STDIN (COPY FROM requires
+--                                            INSERT privilege, same as a
+--                                            literal INSERT) + the worker's
+--                                            own read-back within the same
+--                                            transaction.
+--   vouchers_canonical    SELECT, INSERT, — vouchers-canonical-writer.ts's
+--                          UPDATE           INSERT ... ON CONFLICT DO UPDATE
+--                                            (needs both privileges: an
+--                                            upsert is not just an INSERT);
+--                                            periodo-matching-engine.ts's
+--                                            SELECTs; periodo-cierre.ts's
+--                                            UPDATE ... SET estado =
+--                                            'conciliado', periodo_cierre_id.
+--   reconciliation_results SELECT, INSERT — results-writer.ts's COPY FROM
+--                                            STDIN + the per-job report
+--                                            endpoint's SELECT. No UPDATE/
+--                                            DELETE: the app never modifies
+--                                            a result row once written,
+--                                            same posture as periodo_
+--                                            resultados below (RF-15's own
+--                                            per-job results have no formal
+--                                            immutability requirement like
+--                                            RF-20's período snapshot does,
+--                                            but nothing in the app needs
+--                                            the privilege either way, so
+--                                            it's simply not granted).
+--   periodos               SELECT, INSERT, — periodos.controller.ts's
+--                           UPDATE           POST (create)/GET (list,
+--                                            detail); periodo-cierre.ts's
+--                                            SELECT ... FOR UPDATE (a
+--                                            row-lock read, which Postgres
+--                                            requires UPDATE privilege for,
+--                                            not just SELECT) and its final
+--                                            UPDATE ... SET estado =
+--                                            'cerrado', ...
+--   periodo_resultados     SELECT, INSERT — periodo-cierre.ts's INSERT
+--                                            (the frozen snapshot, written
+--                                            once per período) + periodo-
+--                                            report.ts's SELECT.
+--                                            016_init_periodo_resultados.sql
+--                                            already REVOKEs UPDATE/DELETE
+--                                            (append-only, same guarantee as
+--                                            audit_trail) — that REVOKE
+--                                            predates this GRANT, same
+--                                            ordering as audit_trail's own
+--                                            007-then-011 split.
+--
+--   afip_tipo_map — deliberately NOT granted anything here. Confirmed by
+--   reading afip-tipo-lookup.ts: the running app never queries this table
+--   at request time at all — the AFIP tipo catalogue is resolved from an
+--   in-memory constant (`AFIP_TIPOS_CADENCIAL`, shared-types) that seed.ts
+--   loads this table from once, out of band. Granting app_role a privilege
+--   it will never use would just be a wider attack surface for no reason.
+
+GRANT SELECT, UPDATE ON tenants TO app_role;
+GRANT SELECT, INSERT ON vouchers_staging TO app_role;
+GRANT SELECT, INSERT, UPDATE ON vouchers_canonical TO app_role;
+GRANT SELECT, INSERT ON reconciliation_results TO app_role;
+GRANT SELECT, INSERT, UPDATE ON periodos TO app_role;
+GRANT SELECT, INSERT ON periodo_resultados TO app_role;

@@ -96,11 +96,11 @@ describe('T08 RF-07: parseFechaEmision / excelSerialToIsoDate', () => {
 });
 
 describe('T08 RF-07: normalizeRow', () => {
-  it('NC carries a negative sign (RF-07 scenario: tipo "005" / NOTA_DE_CREDITO, "500,00" -> -500.00)', () => {
+  it('NC carries a negative sign (RF-07 scenario: tipo 3 / NC A, "500,00" -> -500.00)', () => {
     const adapted = adaptRow('xubio', { tipo: 'NC', importe: '500,00', cuit: '30111111112' });
     const { voucher, ok } = normalizeRow('contabilidad', adapted);
     expect(ok).toBe(true);
-    expect(voucher.tipo_cbte).toBe('005');
+    expect(voucher.tipo_cbte).toBe(3);
     expect(voucher.importe_total_ars).toBe(-500);
   });
 
@@ -113,7 +113,7 @@ describe('T08 RF-07: normalizeRow', () => {
 
   it('RF-06: unknown tipo -> ok=false, importe forced to 0', () => {
     const adapted = adaptRow('arca', {
-      'Nro. Doc. Receptor': '30-12345678-9',
+      'Nro. Doc. Emisor': '30-12345678-9',
       'Tipo de Comprobante': '99',
       'Imp. Total': '1.500,00',
     });
@@ -125,7 +125,7 @@ describe('T08 RF-07: normalizeRow', () => {
 
   it('produces a fully canonical voucher for a complete ARCA row', () => {
     const adapted = adaptRow('arca', {
-      'Nro. Doc. Receptor': '30-12345678-9',
+      'Nro. Doc. Emisor': '30-12345678-9',
       'Tipo de Comprobante': '1',
       'Punto de Venta': '1',
       'Número de Comprobante': '1234',
@@ -136,7 +136,7 @@ describe('T08 RF-07: normalizeRow', () => {
     expect(ok).toBe(true);
     expect(voucher).toEqual({
       cuit_emisor: '30123456789',
-      tipo_cbte: '001',
+      tipo_cbte: 1,
       punto_venta: 1,
       numero: 1234,
       fecha_emision: '2021-01-01',
@@ -155,7 +155,7 @@ describe('T08 RF-07: normalizeRow', () => {
       expect(ok).toBe(false);
       expect(voucher).toEqual({
         cuit_emisor: '',
-        tipo_cbte: '',
+        tipo_cbte: 0,
         punto_venta: 0,
         numero: 0,
         fecha_emision: '',

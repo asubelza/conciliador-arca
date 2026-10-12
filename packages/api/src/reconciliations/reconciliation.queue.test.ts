@@ -83,6 +83,7 @@ describe('reconciliation.queue', () => {
     const queue = getReconciliationQueue();
     const sameData = {
       tenantId: '00000000-0000-0000-0000-000000000000',
+      contabilidadSourceSystem: 'tango' as const,
       arca: { filePath: '/tmp/a.csv', originalName: 'a.csv', extension: 'csv' as const },
       contabilidad: { filePath: '/tmp/b.csv', originalName: 'b.csv', extension: 'csv' as const },
     };
@@ -110,6 +111,7 @@ describe('reconciliation.queue', () => {
     const jobId = randomUUID();
     const data = {
       tenantId: '00000000-0000-0000-0000-000000000000',
+      contabilidadSourceSystem: 'tango' as const,
       arca: { filePath: '/tmp/a.csv', originalName: 'a.csv', extension: 'csv' as const },
       contabilidad: { filePath: '/tmp/b.csv', originalName: 'b.csv', extension: 'csv' as const },
     };

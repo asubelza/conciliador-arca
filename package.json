@@ -6,8 +6,10 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "npm run build --workspace=shared-types",
     "test": "jest",
-    "test:api": "jest --config jest.api.json",
+    "test:api": "npm run test --workspace=conciliador-arca-api",
+    "test:web": "npm run test --workspace=web",
     "test:coverage": "jest --coverage",
     "build": "jest --listTests",
     "typecheck": "tsc --noEmit"

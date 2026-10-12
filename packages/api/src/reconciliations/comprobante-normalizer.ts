@@ -12,7 +12,7 @@
  *     "Unknown tipo code in input" scenario requires
  */
 import type { AdaptedRow } from './column-adapters';
-import type { AfipTipo, CanonicalVoucher } from 'shared-types';
+import type { CanonicalVoucher } from 'shared-types';
 
 export interface NormalizeOutcome {
   voucher: CanonicalVoucher;
@@ -24,14 +24,8 @@ export interface NormalizeOutcome {
   ok: boolean;
 }
 
-/**
- * Canonical AFIP tipo codes (shared-types' zero-padded strings) that are
- * Notas de Crédito or Débito, domestic or export. The canonical catalogue
- * doesn't split these by letter (A/B/C) the way the real AFIP table does —
- * see afip-tipo-lookup.ts's module doc for why — so there is exactly one
- * domestic code and one export code per NC/ND rather than per letter.
- */
-const NC_ND_TIPOS = new Set<AfipTipo>(['005', '006', '011', '014']);
+/** AFIP tipo integers that are Notas de Crédito or Débito (any letter). */
+const NC_ND_TIPOS = new Set([2, 3, 7, 8, 12, 13, 20, 21]);
 
 export function stripCuit(raw: string | undefined): string {
   if (!raw) return '';
@@ -109,7 +103,7 @@ export function parseFechaEmision(raw: string | number | undefined): string {
   return trimmed;
 }
 
-function isNcNd(tipoCbte: AfipTipo | undefined): boolean {
+function isNcNd(tipoCbte: number | undefined): boolean {
   return tipoCbte !== undefined && NC_ND_TIPOS.has(tipoCbte);
 }
 
@@ -148,10 +142,7 @@ export function normalizeRow(
 
   const voucher: CanonicalVoucher = {
     cuit_emisor: stripCuit(adapted.cuit_emisor_raw),
-    // RF-06 unknown-tipo path: no canonical code is correct here, so this
-    // is intentionally left as '' (not a real AfipTipo) rather than
-    // guessing — `ok: false` is how callers are expected to detect this.
-    tipo_cbte: adapted.tipo_cbte ?? '',
+    tipo_cbte: adapted.tipo_cbte ?? 0,
     punto_venta: puntoVentaParsed ?? 0,
     numero: numeroParsed ?? 0,
     fecha_emision: parseFechaEmision(adapted.fecha_emision_raw),

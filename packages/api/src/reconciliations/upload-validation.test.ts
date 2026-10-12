@@ -2,6 +2,8 @@ import {
   ALLOWED_EXTENSIONS,
   MAX_FILE_SIZE_BYTES,
   getAllowedExtension,
+  validateContabilidadSourceSystem,
+  validatePeriodoIdFormat,
   validateTenantId,
   validateUploadFiles,
 } from './upload-validation';
@@ -164,6 +166,50 @@ describe('T04: validateUploadFiles (RF-01, RF-02)', () => {
 
     it('rejects a non-string tenant_id', () => {
       expect(validateTenantId(123)?.code).toBe('INVALID_TENANT_ID');
+    });
+  });
+
+  describe('T10: validateContabilidadSourceSystem', () => {
+    it('accepts each known source system', () => {
+      for (const system of ['tango', 'bejerman', 'xubio', 'contabilium', 'libro_iva_compras']) {
+        expect(validateContabilidadSourceSystem(system)).toBeNull();
+      }
+    });
+
+    it('rejects a missing value', () => {
+      expect(validateContabilidadSourceSystem(undefined)?.code).toBe('INVALID_SOURCE_SYSTEM');
+    });
+
+    it('rejects an unknown source system', () => {
+      expect(validateContabilidadSourceSystem('sap')?.code).toBe('INVALID_SOURCE_SYSTEM');
+    });
+
+    it('rejects "arca" (arca has a fixed adapter, not selectable here)', () => {
+      expect(validateContabilidadSourceSystem('arca')?.code).toBe('INVALID_SOURCE_SYSTEM');
+    });
+  });
+
+  describe('T19: validatePeriodoIdFormat (RF-13, conciliacion-periodica)', () => {
+    it('accepts a well-formed UUID', () => {
+      expect(validatePeriodoIdFormat('123e4567-e89b-12d3-a456-426614174000')).toBeNull();
+    });
+
+    it('rejects a missing periodo_id', () => {
+      expect(validatePeriodoIdFormat(undefined)).toEqual({
+        code: 'INVALID_PERIODO_ID',
+        status: 400,
+        error: 'periodo_id is required and must be a UUID',
+      });
+    });
+
+    it('rejects a non-UUID periodo_id', () => {
+      const result = validatePeriodoIdFormat('not-a-uuid');
+      expect(result?.code).toBe('INVALID_PERIODO_ID');
+      expect(result?.status).toBe(400);
+    });
+
+    it('rejects a non-string periodo_id', () => {
+      expect(validatePeriodoIdFormat(123)?.code).toBe('INVALID_PERIODO_ID');
     });
   });
 });
