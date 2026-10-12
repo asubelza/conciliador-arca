@@ -367,6 +367,7 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
         </p>
       )}
 
+      <div className="grid gap-4 lg:grid-cols-2 lg:gap-6">
       {SECTION_TITLES.map(({ key, title }) => {
         const rows = showOnlyPendientesSistema
           ? report.sections[key].filter((r) => r.classification === 'no_existe_en_arca')
@@ -551,6 +552,7 @@ export function PeriodoReportViewer({ periodoId, onClosed }: PeriodoReportViewer
           </div>
         );
       })}
+      </div>
 
       {confirmingCerrar && (
         <ConfirmDialog

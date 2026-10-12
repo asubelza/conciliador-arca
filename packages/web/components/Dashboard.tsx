@@ -484,34 +484,38 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
           <PendientesHistoricoViewer tenantId={tenantId} initialResult={historicoResult ?? undefined} />
         </div>
       ) : (
-        <>
-          <SectionA
-            periodos={periodos || []}
-            userRole={userRole}
-            loading={loading}
-            error={error}
-            onRetry={refresh}
-            onOpenPeriodo={onOpenPeriodo}
-            onCreatePeriodo={(mes) => afterMutation(() => onCreatePeriodo(mes))}
-            onDeletePeriodo={(p) => afterMutation(() => onDeletePeriodo(p))}
-          />
-          <SectionB
-            periodos={periodos || []}
-            userRole={userRole}
-            loading={loading}
-            error={error}
-            onRetry={refresh}
-            onViewReport={onViewReport ?? (() => {})}
-            onReopenPeriodo={(p) => afterMutation(() => onReopenPeriodo(p))}
-          />
-          <SectionC
-            result={historicoResult}
-            error={historicoError}
-            onRetry={loadHistorico}
-            userRole={userRole}
-            onViewHistoricoCompleto={() => setShowHistoricoOverlay(true)}
-          />
-        </>
+        <div className="flex flex-col gap-8 lg:grid lg:grid-cols-3 lg:items-start lg:gap-6">
+          <div className="flex flex-col gap-8 lg:col-span-2">
+            <SectionA
+              periodos={periodos || []}
+              userRole={userRole}
+              loading={loading}
+              error={error}
+              onRetry={refresh}
+              onOpenPeriodo={onOpenPeriodo}
+              onCreatePeriodo={(mes) => afterMutation(() => onCreatePeriodo(mes))}
+              onDeletePeriodo={(p) => afterMutation(() => onDeletePeriodo(p))}
+            />
+            <SectionB
+              periodos={periodos || []}
+              userRole={userRole}
+              loading={loading}
+              error={error}
+              onRetry={refresh}
+              onViewReport={onViewReport ?? (() => {})}
+              onReopenPeriodo={(p) => afterMutation(() => onReopenPeriodo(p))}
+            />
+          </div>
+          <div className="lg:sticky lg:top-20">
+            <SectionC
+              result={historicoResult}
+              error={historicoError}
+              onRetry={loadHistorico}
+              userRole={userRole}
+              onViewHistoricoCompleto={() => setShowHistoricoOverlay(true)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );
