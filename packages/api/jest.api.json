@@ -3,8 +3,10 @@
   "testEnvironment": "node",
   "rootDir": ".",
   "moduleNameMapper": {
-    "^shared-types$": "<rootDir>/../packages/shared-types/src"
+    "^shared-types$": "<rootDir>/../shared-types/src"
   },
   "testMatch": ["<rootDir>/src/**/*.test.ts"],
-  "collectCoverageFrom": ["src/**/*.ts"]
+  "collectCoverageFrom": ["src/**/*.ts"],
+  "setupFiles": ["<rootDir>/jest.setup-env.ts"],
+  "testTimeout": 20000
 }

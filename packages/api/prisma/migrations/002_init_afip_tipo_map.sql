@@ -11,4 +11,11 @@ CREATE TABLE afip_tipo_map (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_afip_tipo ON afip_tipo_map (tipo);
+-- UNIQUE (not just indexed): 004_init_voucher_canonical.sql declares
+-- `tipo REFERENCES afip_tipo_map(tipo)`, and Postgres requires the
+-- referenced column to be backed by a unique index/constraint for a FK to
+-- be creatable at all. This never ran against a real Postgres before this
+-- fix (see openspec/progress/PR-1.md deviation #1 — no Postgres was
+-- available), so the gap was never caught; found and fixed 2026-08-21 the
+-- first time these migrations actually ran end to end against real PG.
+CREATE UNIQUE INDEX idx_afip_tipo ON afip_tipo_map (tipo);

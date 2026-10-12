@@ -32,10 +32,12 @@ model AfipTipoMap {
 }
 
 model VoucherStaging {
-  id        String   @id @default(uuid())
-  tenantId  String   @map("tenant_id")
-  rawData   Json     @map("raw_data")
-  createdAt DateTime @default(now()) @map("created_at")
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  jobId      String?  @map("job_id")
+  fileSource String   @map("file_source")
+  rawData    Json     @map("raw_data")
+  createdAt  DateTime @default(now()) @map("created_at")
 
   @@map("vouchers_staging")
 }
