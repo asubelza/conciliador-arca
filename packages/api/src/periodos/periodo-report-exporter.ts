@@ -150,6 +150,29 @@ const SECTION_STYLE: Record<keyof PeriodoExportSections, { title: string; header
   posibles_coincidencias: { title: 'Posible Coincidencia', headerFill: 'FF6D28D9', headerFont: 'FFFFFFFF' },
 };
 
+/**
+ * The one genuinely shape-independent piece of this exporter's "diseño
+ * profesional" styling — bold white-on-color header text, centered, with a
+ * thin light-gray border on all 4 sides. Extracted (2026-10-12, Histórico
+ * filters + export) so pendientes-historico-exporter.ts's flat, single-
+ * sheet export can reuse the same header look instead of re-deriving it;
+ * everything else here (per-section titles/subtitles, 4-color taxonomy,
+ * sort-by-impact) stays specific to this file's PeriodoExportRow shape.
+ */
+export function styleHeaderRow(row: ExcelJS.Row, headerFill: string, headerFont: string): void {
+  row.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: headerFont } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: headerFill } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+    };
+  });
+}
+
 function fecha_dd_mm_yyyy(iso: string | null): string {
   if (!iso) return '';
   const [y, m, d] = iso.split('-');
@@ -201,17 +224,7 @@ function writeSectionSheet(
 
   const headerRow = sheet.getRow(4);
   headerRow.values = HEADER_LABELS;
-  headerRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: style.headerFont } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style.headerFill } };
-    cell.alignment = { vertical: 'middle', horizontal: 'center' };
-    cell.border = {
-      top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-      bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-      left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-      right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-    };
-  });
+  styleHeaderRow(headerRow, style.headerFill, style.headerFont);
   sheet.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: HEADER_LABELS.length } };
 
   rows.forEach((row, i) => {

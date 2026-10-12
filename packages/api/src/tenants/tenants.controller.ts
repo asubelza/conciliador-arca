@@ -5,13 +5,14 @@
  * matching; the user chose "por tenant" over a single global value when
  * asked during the conciliacion-periodica proposal review.
  */
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { getPgPool } from '../db/pg-pool';
 import { isUuid, validateTenantIdParam, validateUpdateTenantConfigBody } from './tenants-validation';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
-import { fetchPendientesHistorico } from './pendientes-historico';
+import { fetchPendientesHistorico, fetchVouchersForExport } from './pendientes-historico';
 import { validateComprobanteArcaManualRequest } from './comprobante-arca-manual-validation';
 import { createComprobanteArcaManual } from './comprobante-arca-manual';
 import {
@@ -19,6 +20,8 @@ import {
   validateArchivarComprobantesLoteRequest,
 } from './comprobante-arca-archivar-validation';
 import { archivarComprobanteArca, archivarComprobantesArcaLote, desarchivarComprobanteArca } from './comprobante-arca-archivar';
+import { validatePendientesHistoricoExportRequest } from './pendientes-historico-export-validation';
+import { toPendientesHistoricoCsv, toPendientesHistoricoXlsxBuffer } from './pendientes-historico-exporter';
 
 export interface TenantConfigRow {
   id: string;
@@ -87,6 +90,69 @@ export class TenantsController {
       throw new HttpException({ error: result.error }, result.status);
     }
     return result;
+  }
+
+  /**
+   * 2026-10-12 (Histórico filters + export): exports an arbitrary,
+   * caller-chosen subset of pendientes-historico rows — PendientesHistoricoViewer.tsx's
+   * "Descargar Excel/CSV" buttons send exactly the `voucher_ids` currently
+   * visible after its client-side filters (across any of the 3 buckets),
+   * never the whole unfiltered dataset.
+   *
+   * Same read/export role posture as GET .../pendientes-historico above:
+   * open to all 3 roles, gated by assertTenantAccess only, no assertRole
+   * call — exporting what you can already see on screen isn't a new
+   * privilege, so this doesn't invent a stricter rule than the screen it
+   * exports from.
+   *
+   * `voucher_ids` not matching this tenant (wrong tenant, or an id that
+   * doesn't exist at all) are silently excluded from the file rather than
+   * rejected — see fetchVouchersForExport's own doc in pendientes-historico.ts.
+   */
+  @Post(':id/pendientes-historico/export')
+  @HttpCode(HttpStatus.OK)
+  async exportPendientesHistorico(
+    @Param('id') id: unknown,
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+    @Res() res: Response,
+  ) {
+    const idFailure = validateTenantIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validatePendientesHistoricoExportRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, id as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const rows = await fetchVouchersForExport(pool, id as string, validation.value.voucher_ids);
+
+    if (validation.value.format === 'xlsx') {
+      const buffer = await toPendientesHistoricoXlsxBuffer(rows);
+      res
+        .set({
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'Content-Disposition': `attachment; filename="pendientes-historico-${id}.xlsx"`,
+        })
+        .send(buffer);
+      return;
+    }
+
+    const csv = toPendientesHistoricoCsv(rows);
+    res
+      .set({
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="pendientes-historico-${id}.csv"`,
+      })
+      .send(csv);
   }
 
   /**
