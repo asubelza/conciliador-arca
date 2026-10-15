@@ -6,6 +6,7 @@ coverage/
 .engram/
 .atl/
 tmp/
+docker-compose.override.yml
 
 # packages/web (Next.js)
 .next/
