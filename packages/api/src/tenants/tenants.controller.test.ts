@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
+import ExcelJS from 'exceljs';
 import { AppModule } from '../app.module';
 import {
   authHeaderFor,
@@ -678,6 +679,182 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         .set('Authorization', adminAuth)
         .send({ voucher_ids: [voucherId] });
       expect(res.status).toBe(404);
+    });
+  });
+
+  /**
+   * 2026-10-12 (Histórico filters + export): PendientesHistoricoViewer.tsx's
+   * "Descargar Excel/CSV" buttons — exports exactly the `voucher_ids` the
+   * caller sends, no matter which of the 3 Histórico buckets they came
+   * from. Own dedicated tenant, same reasoning as the archivar/desarchivar
+   * blocks above.
+   */
+  describe('2026-10-12 (Histórico filters + export): POST .../pendientes-historico/export', () => {
+    let exportTenantId: string;
+
+    beforeAll(async () => {
+      exportTenantId = await createTestTenant(pool, 'tenants.controller.test (export)');
+    });
+
+    afterAll(async () => {
+      await deleteTestTenant(pool, exportTenantId);
+    });
+
+    async function insertVoucher(overrides: {
+      fileSource?: 'arca' | 'contabilidad';
+      estado?: 'pendiente' | 'conciliado' | 'archivado';
+      tenantId?: string;
+      cuit?: string;
+      importe?: number;
+      iva?: number;
+      fecha?: string | null;
+    } = {}): Promise<string> {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO vouchers_canonical (
+           tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+           iva, fecha, file_source, estado, periodo_alta_id
+         ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, NULL)
+         RETURNING id`,
+        [
+          overrides.tenantId ?? exportTenantId,
+          overrides.cuit ?? '30111111112',
+          Math.floor(Math.random() * 1_000_000),
+          Math.floor(Math.random() * 1_000_000),
+          overrides.importe ?? 1000,
+          overrides.iva ?? 210,
+          overrides.fecha === undefined ? '2026-10-01' : overrides.fecha,
+          overrides.fileSource ?? 'arca',
+          overrides.estado ?? 'pendiente',
+        ],
+      );
+      return rows[0].id;
+    }
+
+    it('exports an xlsx file with the correct headers and the requested rows', async () => {
+      const voucherId = await insertVoucher({ cuit: '30111111112', importe: 1234.5 });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [voucherId], format: 'xlsx' })
+        .buffer(true)
+        .parse((parseRes, cb) => {
+          const chunks: Buffer[] = [];
+          parseRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+          parseRes.on('end', () => cb(null, Buffer.concat(chunks)));
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      expect(res.headers['content-disposition']).toContain('attachment');
+      expect(res.headers['content-disposition']).toContain(`pendientes-historico-${exportTenantId}.xlsx`);
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.body as unknown as ExcelJS.Buffer);
+      const sheet = workbook.worksheets[0];
+      expect(sheet.getRow(1).getCell(1).value).toBe('CUIT Emisor');
+      expect(sheet.getRow(2).getCell(1).value).toBe('30111111112');
+      expect(sheet.getRow(2).getCell(6).value).toBe(1234.5);
+    });
+
+    it('exports a csv file with the correct headers and the requested row', async () => {
+      const voucherId = await insertVoucher({ cuit: '30222222223', importe: 500 });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [voucherId], format: 'csv' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['content-disposition']).toContain(`pendientes-historico-${exportTenantId}.csv`);
+      const csv = res.text;
+      const lines = csv.trim().split('\n');
+      expect(lines[0]).toBe('cuit_emisor,tipo_cbte,punto_venta,numero,fecha,importe_total,iva,estado,antiguedad_meses');
+      expect(lines[1]).toContain('30222222223');
+      expect(lines[1]).toContain('500.00');
+    });
+
+    it('silently excludes ids that are invalid/wrong-tenant/unknown, keeping the valid ones', async () => {
+      const validId = await insertVoucher({ cuit: '30333333334' });
+      const otherTenantId = await createTestTenant(pool, 'tenants.controller.test (export, other tenant)');
+      try {
+        const wrongTenantId = await insertVoucher({ tenantId: otherTenantId });
+        const unknownId = '00000000-0000-0000-0000-000000000000';
+
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+          .set('Authorization', adminAuth)
+          .send({ voucher_ids: [validId, wrongTenantId, unknownId], format: 'csv' });
+
+        expect(res.status).toBe(200);
+        const lines = res.text.trim().split('\n');
+        expect(lines).toHaveLength(2); // header + only the valid row
+        expect(lines[1]).toContain('30333333334');
+      } finally {
+        await deleteTestTenant(pool, otherTenantId);
+      }
+    });
+
+    it('returns 400 for an empty voucher_ids array', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [], format: 'xlsx' });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 for an invalid format value', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [voucherId], format: 'pdf' });
+      expect(res.status).toBe(400);
+    });
+
+    it('a nonexistent tenant id (admin, who always passes assertTenantAccess) exports an empty file rather than erroring, since there is no separate tenant-existence check here unlike GET .../pendientes-historico', async () => {
+      const voucherId = await insertVoucher(); // belongs to exportTenantId, not the bogus id below
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants/00000000-0000-0000-0000-000000000000/pendientes-historico/export')
+        .set('Authorization', adminAuth)
+        .send({ voucher_ids: [voucherId], format: 'csv' });
+      expect(res.status).toBe(200);
+      expect(res.text.trim().split('\n')).toHaveLength(1); // header only — no row matches tenant_id = the bogus id
+    });
+
+    it('is allowed for a cliente with access (read/export posture, same as GET .../pendientes-historico)', async () => {
+      const voucherId = await insertVoucher();
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, exportTenantId]);
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }))
+          .send({ voucher_ids: [voucherId], format: 'csv' });
+        expect(res.status).toBe(200);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('returns 403 for a cliente WITHOUT access to this tenant', async () => {
+      const voucherId = await insertVoucher();
+      const { id: userId } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+          .set('Authorization', authHeaderFor('cliente', { sub: userId }))
+          .send({ voucher_ids: [voucherId], format: 'csv' });
+        expect(res.status).toBe(403);
+      } finally {
+        await deleteTestUser(pool, userId);
+      }
+    });
+
+    it('returns 401 with no Authorization header', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
+        .send({ voucher_ids: ['00000000-0000-0000-0000-000000000000'], format: 'csv' });
+      expect(res.status).toBe(401);
     });
   });
 

@@ -141,3 +141,37 @@ export async function fetchPendientesHistorico(
     count_archivados: archivados.length,
   };
 }
+
+/**
+ * 2026-10-12 (Histórico filters + export): fetches an arbitrary,
+ * caller-chosen subset of this tenant's vouchers_canonical rows for
+ * `POST /api/tenants/:id/pendientes-historico/export` —
+ * PendientesHistoricoViewer.tsx's "Descargar Excel/CSV" buttons send
+ * exactly the ids currently visible after its client-side filters,
+ * regardless of which of the 3 buckets (pendientes/excluidos/archivados)
+ * they came from, so this intentionally has none of fetchPendientesHistorico's
+ * `estado`/`file_source`/alta-date filtering — it trusts the caller's own
+ * id list.
+ *
+ * `voucher_ids` not matching this tenant (wrong tenant, or an id that
+ * doesn't exist at all) are silently excluded from the result rather than
+ * rejected — this is deliberately "export whatever subset of these ids
+ * actually belongs to this tenant", not an all-or-nothing validation (the
+ * request-shape validation in pendientes-historico-export-validation.ts
+ * only checks that every id LOOKS like a UUID, not that it resolves).
+ */
+export async function fetchVouchersForExport(
+  pool: Pick<Pool, 'query'>,
+  tenantId: string,
+  voucherIds: string[],
+): Promise<PendientesHistoricoRow[]> {
+  const { rows } = await pool.query<VoucherCanonicalRow>(
+    `SELECT ${ROW_COLUMNS} FROM vouchers_canonical WHERE id = ANY($1::uuid[]) AND tenant_id = $2`,
+    [voucherIds, tenantId],
+  );
+  const hoy = new Date().toISOString().slice(0, 10);
+  return rows.map((row) => ({
+    ...row,
+    antiguedad_meses: row.fecha ? monthsBetween(row.fecha, hoy) : null,
+  }));
+}
