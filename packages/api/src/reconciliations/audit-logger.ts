@@ -44,6 +44,11 @@ import type { Pool, PoolClient } from 'pg';
 // /api/tenants/:id/comprobantes/:voucherId/archivar and POST
 // /api/tenants/:id/comprobantes/archivar-lote (the lote endpoint logs one
 // event per successfully-archived id, never for a skipped one).
+// 2026-10-12 ("Match manual" para no_existe_en_arca) adds
+// 'comprobante_arca_desarchivado' — logged INSIDE
+// desarchivarComprobanteArca's transaction (tenants/comprobante-arca-archivar.ts),
+// the exact inverse of 'comprobante_arca_archivado' above, for POST
+// /api/tenants/:id/comprobantes/:voucherId/desarchivar.
 export type AuditAction =
   | 'upload'
   | 'staging'
@@ -59,7 +64,8 @@ export type AuditAction =
   | 'discard_similarity'
   | 'resolve_pendiente_manual'
   | 'comprobante_arca_manual_creado'
-  | 'comprobante_arca_archivado';
+  | 'comprobante_arca_archivado'
+  | 'comprobante_arca_desarchivado';
 
 export interface AuditEvent {
   tenantId: string;

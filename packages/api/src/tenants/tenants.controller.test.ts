@@ -429,6 +429,146 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     });
   });
 
+  describe('2026-10-12 ("Match manual" para no_existe_en_arca): POST .../comprobantes/:voucherId/desarchivar', () => {
+    let desarchivarTenantId: string;
+
+    beforeAll(async () => {
+      desarchivarTenantId = await createTestTenant(pool, 'tenants.controller.test (desarchivar)');
+    });
+
+    afterAll(async () => {
+      await deleteTestTenant(pool, desarchivarTenantId);
+    });
+
+    async function insertVoucher(overrides: {
+      fileSource?: 'arca' | 'contabilidad';
+      estado?: 'pendiente' | 'conciliado' | 'archivado';
+      tenantId?: string;
+      fecha?: string;
+    } = {}): Promise<string> {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO vouchers_canonical (
+           tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+           file_source, estado, periodo_alta_id, fecha
+         ) VALUES ($1, '30111111112', 1, $2, $3, 1000, $4, $5, NULL, $6)
+         RETURNING id`,
+        [
+          overrides.tenantId ?? desarchivarTenantId,
+          Math.floor(Math.random() * 1_000_000),
+          Math.floor(Math.random() * 1_000_000),
+          overrides.fileSource ?? 'arca',
+          overrides.estado ?? 'archivado',
+          // 2099-01-01: safely >= this freshly-created tenant's alta date,
+          // so a desarchived voucher lands in the `pendientes` bucket (not
+          // `excluidos_previos_a_alta` — see pendientes-historico.ts's doc
+          // on rows with no/old fecha) when a test checks for that.
+          overrides.fecha ?? '2099-01-01',
+        ],
+      );
+      return rows[0].id;
+    }
+
+    it('desarchives an archivado voucher as admin, back to pendiente', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ id: voucherId, estado: 'pendiente' });
+
+      const { rows } = await pool.query('SELECT estado FROM vouchers_canonical WHERE id = $1', [voucherId]);
+      expect(rows[0].estado).toBe('pendiente');
+    });
+
+    it('desarchives as colaborador', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+        .set('Authorization', authHeaderFor('colaborador'))
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.estado).toBe('pendiente');
+    });
+
+    it('returns 403 for a cliente (role check runs before any DB write)', async () => {
+      const voucherId = await insertVoucher();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+        .set('Authorization', authHeaderFor('cliente'))
+        .send({});
+      expect(res.status).toBe(403);
+
+      const { rows } = await pool.query('SELECT estado FROM vouchers_canonical WHERE id = $1', [voucherId]);
+      expect(rows[0].estado).toBe('archivado');
+    });
+
+    it('returns 404 for a voucher that does not belong to this tenant', async () => {
+      const otherTenantId = await createTestTenant(pool, 'tenants.controller.test (desarchivar, other tenant)');
+      try {
+        const voucherId = await insertVoucher({ tenantId: otherTenantId });
+        const res = await request(app.getHttpServer())
+          .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+          .set('Authorization', adminAuth)
+          .send({});
+        expect(res.status).toBe(404);
+      } finally {
+        await deleteTestTenant(pool, otherTenantId);
+      }
+    });
+
+    it('returns 404 for an unknown voucher id', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/00000000-0000-0000-0000-000000000000/desarchivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 409 for a voucher that is still pendiente, naming the state in the message', async () => {
+      const voucherId = await insertVoucher({ estado: 'pendiente' });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/pendiente/);
+    });
+
+    it('returns 409 for an already-conciliado voucher, naming the state in the message', async () => {
+      const voucherId = await insertVoucher({ estado: 'conciliado' });
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/conciliado/);
+    });
+
+    it('returns 400 for a malformed voucher id', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/not-a-uuid/desarchivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('a desarchived voucher shows up in the pendientes bucket of GET .../pendientes-historico, not archivados', async () => {
+      const voucherId = await insertVoucher();
+      await request(app.getHttpServer())
+        .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
+        .set('Authorization', adminAuth)
+        .send({});
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/tenants/${desarchivarTenantId}/pendientes-historico`)
+        .set('Authorization', adminAuth);
+      expect(res.status).toBe(200);
+      expect(res.body.pendientes.map((r: { id: string }) => r.id)).toContain(voucherId);
+      expect(res.body.archivados.map((r: { id: string }) => r.id)).not.toContain(voucherId);
+    });
+  });
+
   describe('2026-10-12 (Histórico filters + "Archivar"): POST .../comprobantes/archivar-lote', () => {
     let loteTenantId: string;
 

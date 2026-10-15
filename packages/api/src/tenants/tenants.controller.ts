@@ -18,7 +18,7 @@ import {
   validateArchivarComprobanteRequest,
   validateArchivarComprobantesLoteRequest,
 } from './comprobante-arca-archivar-validation';
-import { archivarComprobanteArca, archivarComprobantesArcaLote } from './comprobante-arca-archivar';
+import { archivarComprobanteArca, archivarComprobantesArcaLote, desarchivarComprobanteArca } from './comprobante-arca-archivar';
 
 export interface TenantConfigRow {
   id: string;
@@ -174,6 +174,50 @@ export class TenantsController {
     }
 
     const result = await archivarComprobanteArca(pool, id as string, voucherId as string, validation.value.nota, req.user!.id);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * 2026-10-12 ("Match manual" para filas `no_existe_en_arca`): la
+   * contraparte exacta del endpoint anterior — usada por
+   * MatchManualModal.tsx's tab "Buscar en archivados", cuando el comprobante
+   * ARCA correcto para una fila `no_existe_en_arca` resulta estar en el
+   * bucket de archivados (se archivó por error, o nadie lo había emparejado
+   * todavía). Vuelve el voucher a `estado = 'pendiente'` para que
+   * matchPeriodo pueda volver a considerarlo; el frontend SIEMPRE llama a
+   * este endpoint ANTES de POST /api/periodos/:id/coincidencias — ver
+   * comprobante-arca-archivar.ts's desarchivarComprobanteArca doc.
+   */
+  @Post(':id/comprobantes/:voucherId/desarchivar')
+  @HttpCode(HttpStatus.OK)
+  async desarchivarComprobante(
+    @Param('id') id: unknown,
+    @Param('voucherId') voucherId: unknown,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const idFailure = validateTenantIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+    if (!isUuid(voucherId)) {
+      throw new HttpException({ error: 'voucher id must be a UUID' }, HttpStatus.BAD_REQUEST);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, id as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const result = await desarchivarComprobanteArca(pool, id as string, voucherId as string, req.user!.id);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }
