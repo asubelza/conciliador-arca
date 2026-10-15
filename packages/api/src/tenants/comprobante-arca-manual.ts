@@ -100,11 +100,22 @@ export async function createComprobanteArcaManual(
 
     const writeResult = await upsertVouchersCanonical(client, tenantId, periodoAltaId, [voucher]);
     if (writeResult.skippedConciliado > 0) {
+      // Look up the actual blocking row's estado instead of hardcoding
+      // "conciliado" in the message below — upsertVouchersCanonical's skip
+      // guard is the single source of truth for which estado(s) are
+      // terminal, so this stays correct even if that set changes later.
+      const { rows: blockingRows } = await client.query<{ estado: string }>(
+        `SELECT estado FROM vouchers_canonical
+          WHERE tenant_id = $1 AND file_source = 'arca' AND cuit_emisor = $2
+            AND tipo_cbte = $3 AND punto_venta = $4 AND numero = $5`,
+        [tenantId, voucher.cuit_emisor, voucher.tipo_cbte, voucher.punto_venta, voucher.numero],
+      );
+      const blockingEstado = blockingRows[0]?.estado ?? 'conciliado';
       await client.query('ROLLBACK');
       return {
         code: 'CONCILIADO_CONFLICT',
         status: 409,
-        error: 'ya existe un comprobante ARCA conciliado con esa clave',
+        error: `ya existe un comprobante ARCA con estado '${blockingEstado}' y esa clave`,
       };
     }
 
