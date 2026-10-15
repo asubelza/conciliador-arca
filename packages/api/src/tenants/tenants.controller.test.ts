@@ -108,7 +108,11 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         tipo_cbte: 1,
         punto_venta: Math.floor(Math.random() * 1_000_000),
         numero: Math.floor(Math.random() * 1_000_000),
-        fecha_emision: '2026-10-12',
+        // Must stay on-or-after the test tenant's created_at (set to `now()`
+        // by createTestTenant) or fetchPendientesHistorico buckets it into
+        // excluidos_previos_a_alta instead of pendientes — a hardcoded past
+        // date here is a time bomb that breaks once "today" moves past it.
+        fecha_emision: new Date().toISOString().slice(0, 10),
         importe_total_ars: 1000,
         iva: 210,
         ...overrides,
@@ -236,7 +240,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     });
 
     it('a manually created voucher shows up as a normal pendiente in GET /api/tenants/:id/pendientes-historico', async () => {
-      const body = validBody({ fecha_emision: '2026-10-12' });
+      const body = validBody();
       const createRes = await request(app.getHttpServer())
         .post(`/api/tenants/${tenantId}/comprobantes-arca`)
         .set('Authorization', adminAuth)
