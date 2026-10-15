@@ -98,6 +98,38 @@ const reportWithNoExiste = {
 };
 
 /**
+ * 2026-10-12 ("Match manual" para no_existe_en_arca): a con_divergencia row
+ * in the SAME section (discrepancias_y_alertas) as noExisteRow — used to
+ * prove "Match manual" only shows up on the no_existe_en_arca row, not on
+ * every row of that section.
+ */
+const divergenciaRow = {
+  classification: 'con_divergencia',
+  composite_key: '30111111112|1|1|600',
+  sistema: { id: 's6', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 600, importe_total: 1000, iva: null, fecha: null, file_source: 'contabilidad', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
+  arca: { id: 'a6', cuit_emisor: '30111111112', tipo_cbte: 1, punto_venta: 1, numero: 600, importe_total: 1012.5, iva: null, fecha: null, file_source: 'arca', estado: 'pendiente', periodo_alta_id: PERIODO_ID },
+  divergencia_ars: 12.5,
+  antiguedad_meses: null,
+  similarity_reason: null,
+  feedback_previo: null,
+};
+
+const reportWithMixedDiscrepancias = {
+  ...openReportBody,
+  sections: { ...openReportBody.sections, discrepancias_y_alertas: [noExisteRow, divergenciaRow] },
+};
+
+const emptyPendientesHistorico = {
+  tenant: { id: 't1', name: 'Tenant', created_at: '2026-01-01T00:00:00.000Z' },
+  pendientes: [],
+  count_pendientes: 0,
+  excluidos_previos_a_alta: [],
+  count_excluidos_previos_a_alta: 0,
+  archivados: [],
+  count_archivados: 0,
+};
+
+/**
  * T39 (Fase 3, autenticacion-roles): CSV/Excel are buttons now (an `<a
  * href>` can't carry the Authorization header every report endpoint has
  * required since Fase 2 — see lib/api.ts's downloadAuthenticated), and the
@@ -497,6 +529,65 @@ describe('T31: PeriodoReportViewer', () => {
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
       expect(await screen.findByText(/posible coincidencia \(1\)/i)).toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: /marcar como resuelto/i })).toHaveLength(1);
+    });
+  });
+
+  describe('2026-10-12 ("Match manual" para no_existe_en_arca)', () => {
+    it('shows "Match manual" only on the no_existe_en_arca row within Discrepancias y Alertas, not on con_divergencia', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithMixedDiscrepancias }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      expect(await screen.findByText(/discrepancias y alertas \(2\)/i)).toBeInTheDocument();
+
+      expect(screen.getAllByRole('button', { name: /^match manual$/i })).toHaveLength(1);
+    });
+
+    it('does not show "Match manual" for a cliente (read-only, RF-14)', async () => {
+      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithNoExiste }) as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      expect(await screen.findByText(/discrepancias y alertas \(1\)/i)).toBeInTheDocument();
+
+      expect(screen.queryByRole('button', { name: /^match manual$/i })).not.toBeInTheDocument();
+    });
+
+    it('opens MatchManualModal with this row\'s sistema id, the periodoId, and the report\'s tenant_id', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => reportWithNoExiste }) // report load
+        .mockResolvedValueOnce({ ok: true, json: async () => emptyPendientesHistorico }); // modal's own fetch on mount
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const matchManualButton = await screen.findByRole('button', { name: /^match manual$/i });
+      await userEvent.click(matchManualButton);
+
+      expect(await screen.findByRole('dialog', { name: /match manual/i })).toBeInTheDocument();
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenLastCalledWith(
+          expect.stringContaining(`/api/tenants/${openReportBody.periodo.tenant_id}/pendientes-historico`),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it('closing the modal does not reload the report, but a successful match does', async () => {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => reportWithNoExiste }) // report load
+        .mockResolvedValueOnce({ ok: true, json: async () => emptyPendientesHistorico }); // modal's own fetch on mount
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
+      const matchManualButton = await screen.findByRole('button', { name: /^match manual$/i });
+      await userEvent.click(matchManualButton);
+      const dialog = await screen.findByRole('dialog', { name: /match manual/i });
+
+      await userEvent.click(within(dialog).getByRole('button', { name: /cerrar/i }));
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(2); // report load + modal's own fetch — no extra report reload
     });
   });
 });
