@@ -5,15 +5,20 @@
  * matching; the user chose "por tenant" over a single global value when
  * asked during the conciliacion-periodica proposal review.
  */
-import { Body, Controller, Get, HttpException, HttpStatus, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { getPgPool } from '../db/pg-pool';
-import { validateTenantIdParam, validateUpdateTenantConfigBody } from './tenants-validation';
+import { isUuid, validateTenantIdParam, validateUpdateTenantConfigBody } from './tenants-validation';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
 import { fetchPendientesHistorico } from './pendientes-historico';
 import { validateComprobanteArcaManualRequest } from './comprobante-arca-manual-validation';
 import { createComprobanteArcaManual } from './comprobante-arca-manual';
+import {
+  validateArchivarComprobanteRequest,
+  validateArchivarComprobantesLoteRequest,
+} from './comprobante-arca-archivar-validation';
+import { archivarComprobanteArca, archivarComprobantesArcaLote } from './comprobante-arca-archivar';
 
 export interface TenantConfigRow {
   id: string;
@@ -119,6 +124,100 @@ export class TenantsController {
     }
 
     const result = await createComprobanteArcaManual(pool, id as string, validation.value, req.user!.id);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * 2026-10-12 (Histórico filters + "Archivar", client dashboard feedback):
+   * marks a single pendiente ARCA voucher as "no longer relevant" —
+   * same validation/role/auth pipeline shape as periodos.controller.ts's
+   * resolverPendienteArca (that endpoint's own closest precedent): voucher
+   * must belong to this tenant (404), must be file_source='arca' (400), and
+   * must not already be conciliado/archivado (409). See
+   * comprobante-arca-archivar.ts for why "not found" and "wrong tenant" are
+   * deliberately collapsed into the same 404 here (unlike the bulk endpoint
+   * below).
+   */
+  @Post(':id/comprobantes/:voucherId/archivar')
+  @HttpCode(HttpStatus.OK)
+  async archivarComprobante(
+    @Param('id') id: unknown,
+    @Param('voucherId') voucherId: unknown,
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const idFailure = validateTenantIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+    if (!isUuid(voucherId)) {
+      throw new HttpException({ error: 'voucher id must be a UUID' }, HttpStatus.BAD_REQUEST);
+    }
+
+    const validation = validateArchivarComprobanteRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, id as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const result = await archivarComprobanteArca(pool, id as string, voucherId as string, validation.value.nota, req.user!.id);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * 2026-10-12 (Histórico filters + "Archivar"): bulk version of the
+   * endpoint above — applies the same single-archive logic to each
+   * `voucher_ids` entry, but reports a per-id result rather than an
+   * all-or-nothing rollback (RNF-07 "nunca ocultar" — see
+   * comprobante-arca-archivar.ts's own module doc).
+   */
+  @Post(':id/comprobantes/archivar-lote')
+  @HttpCode(HttpStatus.OK)
+  async archivarComprobantesLote(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validateTenantIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validateArchivarComprobantesLoteRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, id as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const result = await archivarComprobantesArcaLote(
+      pool,
+      id as string,
+      validation.value.voucher_ids,
+      validation.value.nota,
+      req.user!.id,
+    );
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }

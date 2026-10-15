@@ -37,6 +37,13 @@ import type { Pool, PoolClient } from 'pg';
 // createComprobanteArcaManual's transaction (tenants/comprobante-arca-manual.ts)
 // per POST /api/tenants/:id/comprobantes-arca, so a rollback (e.g. the
 // already-conciliado 409 case) removes the audit row too.
+// 2026-10-12 (Histórico filters + "Archivar") adds
+// 'comprobante_arca_archivado' — logged INSIDE
+// archivarComprobanteArca's transaction (tenants/comprobante-arca-archivar.ts),
+// once per voucher actually archived, for both POST
+// /api/tenants/:id/comprobantes/:voucherId/archivar and POST
+// /api/tenants/:id/comprobantes/archivar-lote (the lote endpoint logs one
+// event per successfully-archived id, never for a skipped one).
 export type AuditAction =
   | 'upload'
   | 'staging'
@@ -51,7 +58,8 @@ export type AuditAction =
   | 'confirm_similarity'
   | 'discard_similarity'
   | 'resolve_pendiente_manual'
-  | 'comprobante_arca_manual_creado';
+  | 'comprobante_arca_manual_creado'
+  | 'comprobante_arca_archivado';
 
 export interface AuditEvent {
   tenantId: string;

@@ -51,6 +51,20 @@ export interface PendientesHistoricoResult {
   count_pendientes: number;
   excluidos_previos_a_alta: PendientesHistoricoRow[];
   count_excluidos_previos_a_alta: number;
+  /**
+   * 2026-10-12 (Histórico filters + "Archivar"): every ARCA voucher a
+   * contador has deliberately archived (POST
+   * /api/tenants/:id/comprobantes/:voucherId/archivar or .../archivar-lote)
+   * — a third, equally visible bucket so "ver archivados" on the Histórico
+   * screen can show exactly what was archived and when, instead of those
+   * rows simply disappearing from `pendientes` with no trace (same RNF-07
+   * "nunca ocultar" posture as excluidos_previos_a_alta above). Not
+   * filtered by the alta-date boundary — unlike `pendientes`/
+   * `excluidos_previos_a_alta`, archiving is an explicit human decision, so
+   * there's no "predates the tool" ambiguity to split on here.
+   */
+  archivados: PendientesHistoricoRow[];
+  count_archivados: number;
 }
 
 const ROW_COLUMNS = `
@@ -91,19 +105,31 @@ export async function fetchPendientesHistorico(
   );
 
   const hoy = new Date().toISOString().slice(0, 10);
+  const withAntiguedad = (row: VoucherCanonicalRow): PendientesHistoricoRow => ({
+    ...row,
+    antiguedad_meses: row.fecha ? monthsBetween(row.fecha, hoy) : null,
+  });
+
   const pendientes: PendientesHistoricoRow[] = [];
   const excluidos: PendientesHistoricoRow[] = [];
   for (const row of rows) {
-    const withAntiguedad: PendientesHistoricoRow = {
-      ...row,
-      antiguedad_meses: row.fecha ? monthsBetween(row.fecha, hoy) : null,
-    };
     if (row.fecha && row.fecha >= altaFecha) {
-      pendientes.push(withAntiguedad);
+      pendientes.push(withAntiguedad(row));
     } else {
-      excluidos.push(withAntiguedad);
+      excluidos.push(withAntiguedad(row));
     }
   }
+
+  // 2026-10-12 (Histórico filters + "Archivar"): a separate, unfiltered
+  // bucket — see PendientesHistoricoResult.archivados' own doc above for
+  // why this one isn't split by alta date the way pendientes/excluidos is.
+  const { rows: archivadoRows } = await pool.query<VoucherCanonicalRow>(
+    `SELECT ${ROW_COLUMNS} FROM vouchers_canonical
+     WHERE tenant_id = $1 AND file_source = 'arca' AND estado = 'archivado'
+     ORDER BY fecha ASC NULLS FIRST`,
+    [tenantId],
+  );
+  const archivados = archivadoRows.map(withAntiguedad);
 
   return {
     tenant,
@@ -111,5 +137,7 @@ export async function fetchPendientesHistorico(
     count_pendientes: pendientes.length,
     excluidos_previos_a_alta: excluidos,
     count_excluidos_previos_a_alta: excluidos.length,
+    archivados,
+    count_archivados: archivados.length,
   };
 }

@@ -44,25 +44,32 @@
  * voucher's real fecha de emisión, not upload timing, so periodo_alta_id's
  * only remaining job is the corriente/histórico split.
  *
- * ## Immutability once conciliado (RF-15's third scenario)
+ * ## Immutability once conciliado or archivado (RF-15's third scenario)
  *
- * The `DO UPDATE ... WHERE vouchers_canonical.estado <> 'conciliado'`
- * clause means a conflicting upsert against an already-`conciliado` row is
- * silently a no-op — Postgres evaluates the WHERE per proposed row and
- * simply leaves it untouched (verified empirically: `RETURNING` produces
- * zero rows for a skipped conflict, which is exactly how this module tells
- * "upserted" apart from "skipped" without a second query). Nothing here
- * classifies that situation as a duplicate — that's
- * `periodo-matching-engine.ts`'s RF-17 check, which runs at *match* time,
- * not at upsert time.
+ * The `DO UPDATE ... WHERE vouchers_canonical.estado NOT IN ('conciliado',
+ * 'archivado')` clause means a conflicting upsert against an already-
+ * `conciliado` OR already-`archivado` row is silently a no-op — Postgres
+ * evaluates the WHERE per proposed row and simply leaves it untouched
+ * (verified empirically: `RETURNING` produces zero rows for a skipped
+ * conflict, which is exactly how this module tells "upserted" apart from
+ * "skipped" without a second query). `'archivado'` was added 2026-10-12
+ * (Histórico filters + "Archivar", 024_alter_vouchers_canonical_estado_add_archivado.sql)
+ * for the same reason `'conciliado'` was already here: a re-upload of the
+ * same ARCA range must never silently resurrect/overwrite a voucher the
+ * contador explicitly archived via POST
+ * /api/tenants/:id/comprobantes/:voucherId/archivar — see
+ * comprobante-arca-archivar.ts. Nothing here classifies either situation as
+ * a duplicate — that's `periodo-matching-engine.ts`'s RF-17 check, which
+ * runs at *match* time, not at upsert time.
  */
 import type { PoolClient } from 'pg';
 import type { CanonicalVoucher } from 'shared-types';
+import { NON_TERMINAL_ESTADO_SQL } from './voucher-estado';
 
 export interface UpsertVouchersResult {
-  /** Rows actually inserted or updated (conflict resolved, not conciliado). */
+  /** Rows actually inserted or updated (conflict resolved, not conciliado/archivado). */
   upserted: number;
-  /** Rows left untouched because the existing row was already conciliado. */
+  /** Rows left untouched because the existing row was already conciliado OR archivado (see this module's header doc). */
   skippedConciliado: number;
 }
 
@@ -103,7 +110,7 @@ export async function upsertVouchersCanonical(
            WHEN EXCLUDED.file_source = 'contabilidad' THEN EXCLUDED.periodo_alta_id
            ELSE vouchers_canonical.periodo_alta_id
          END
-       WHERE vouchers_canonical.estado <> 'conciliado'
+       WHERE vouchers_canonical.${NON_TERMINAL_ESTADO_SQL}
        RETURNING id`,
       [
         tenantId,

@@ -1,6 +1,8 @@
 import { Pool } from 'pg';
 import { matchPeriodo } from './periodo-matching-engine';
+import { upsertVouchersCanonical } from './vouchers-canonical-writer';
 import { createTestPeriodo, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+import type { CanonicalVoucher } from 'shared-types';
 
 async function insertConfirmation(
   pool: Pool,
@@ -36,7 +38,7 @@ async function insertVoucher(
     numero?: number;
     importeTotal?: number;
     fileSource: 'arca' | 'contabilidad';
-    estado?: 'pendiente' | 'conciliado';
+    estado?: 'pendiente' | 'conciliado' | 'archivado';
     periodoAltaId: string;
     /** Fecha de emisión (RF-19's antiguedad_meses is computed from this, not periodoAltaId — see periodo-matching-engine.ts's fetchViewedPeriodoYearMonth doc). */
     fecha?: string;
@@ -258,6 +260,83 @@ describe('T23–T26: matchPeriodo (RF-16, RF-17, RF-18, RF-19)', () => {
       expect(summary.counts.conciliado_ok).toBe(0);
     } finally {
       await deleteTestTenant(pool, otherTenantId);
+    }
+  });
+
+  /**
+   * 2026-10-12 (Histórico filters + "Archivar",
+   * 024_alter_vouchers_canonical_estado_add_archivado.sql): an `archivado`
+   * ARCA row must get the exact same treatment as `conciliado` in this
+   * engine — never offered as a match candidate, never counted as
+   * pendiente_en_arca, in either the corriente or histórico pool.
+   */
+  it('an archivado voucher never appears as pendiente_en_arca (corriente pool), and never matches a sistema row', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    const arcaId = await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      estado: 'archivado',
+      importeTotal: 1000,
+    });
+    await insertVoucher(pool, tenantId, { fileSource: 'contabilidad', periodoAltaId: p1, importeTotal: 1000 });
+
+    const summary = await matchPeriodo(pool, tenantId, p1, 0.99);
+    // The sistema row found no ARCA counterpart at all (the archivado row is
+    // invisible to the corriente pool query) — reported no_existe_en_arca,
+    // not conciliado_ok nor pendiente_en_arca.
+    expect(summary.counts.conciliado_ok).toBe(0);
+    expect(summary.counts.pendiente_en_arca).toBe(0);
+    expect(summary.counts.no_existe_en_arca).toBe(1);
+    expect(summary.results.some((r) => r.arca?.id === arcaId)).toBe(false);
+  });
+
+  it('an archivado voucher from an earlier período never appears as pendiente_en_arca (histórico pool) in a later período', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    const p2 = await createTestPeriodo(pool, tenantId, '2026-02-01');
+    const arcaId = await insertVoucher(pool, tenantId, {
+      fileSource: 'arca',
+      periodoAltaId: p1,
+      estado: 'archivado',
+    });
+
+    const summary = await matchPeriodo(pool, tenantId, p2, 0.99);
+    expect(summary.counts.pendiente_en_arca).toBe(0);
+    expect(summary.results.some((r) => r.arca?.id === arcaId)).toBe(false);
+  });
+
+  it('re-running the upload/upsert path with the same composite key does NOT flip an archivado row back to pendiente', async () => {
+    const p1 = await createTestPeriodo(pool, tenantId, '2026-01-01');
+    const client = await pool.connect();
+    try {
+      const voucher: CanonicalVoucher = {
+        cuit_emisor: '30111111112',
+        tipo_cbte: 1,
+        punto_venta: 1,
+        numero: 100,
+        fecha_emision: '2026-01-10',
+        importe_total_ars: 1000,
+        iva: 0,
+        moneda: 'ARS',
+        file_source: 'arca',
+        source_row: {},
+      };
+      await upsertVouchersCanonical(client, tenantId, p1, [voucher]);
+      await pool.query("UPDATE vouchers_canonical SET estado = 'archivado' WHERE tenant_id = $1", [tenantId]);
+
+      // Same composite key, different importe — simulates re-uploading the
+      // same ARCA file/range after the voucher was archived.
+      const result = await upsertVouchersCanonical(client, tenantId, p1, [
+        { ...voucher, importe_total_ars: 9999 },
+      ]);
+      expect(result).toEqual({ upserted: 0, skippedConciliado: 1 });
+
+      const { rows } = await pool.query(
+        "SELECT estado, importe_total::float AS importe_total FROM vouchers_canonical WHERE tenant_id = $1",
+        [tenantId],
+      );
+      expect(rows).toEqual([{ estado: 'archivado', importe_total: 1000 }]);
+    } finally {
+      client.release();
     }
   });
 });
