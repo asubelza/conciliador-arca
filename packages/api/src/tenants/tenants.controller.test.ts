@@ -241,6 +241,28 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(afterRows[0].estado).toBe('conciliado');
     });
 
+    it('returns a 409 naming "archivado" (not "conciliado") when the blocking row is archivado', async () => {
+      const body = validBody();
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO vouchers_canonical (
+           tenant_id, cuit_emisor, tipo_cbte, punto_venta, numero, importe_total,
+           iva, fecha, file_source, estado, periodo_alta_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'arca', 'archivado', NULL)
+         RETURNING id`,
+        [tenantId, body.cuit_emisor, body.tipo_cbte, body.punto_venta, body.numero, body.importe_total_ars, body.iva, body.fecha_emision],
+      );
+
+      const res = await request(app.getHttpServer())
+        .post(`/api/tenants/${tenantId}/comprobantes-arca`)
+        .set('Authorization', adminAuth)
+        .send(body);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('archivado');
+
+      const { rows: afterRows } = await pool.query('SELECT id, estado FROM vouchers_canonical WHERE id = $1', [rows[0].id]);
+      expect(afterRows[0].estado).toBe('archivado');
+    });
+
     it('a manually created voucher shows up as a normal pendiente in GET /api/tenants/:id/pendientes-historico', async () => {
       const body = validBody();
       const createRes = await request(app.getHttpServer())
