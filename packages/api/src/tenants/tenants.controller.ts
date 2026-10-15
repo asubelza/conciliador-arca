@@ -5,13 +5,15 @@
  * matching; the user chose "por tenant" over a single global value when
  * asked during the conciliacion-periodica proposal review.
  */
-import { Body, Controller, Get, HttpException, HttpStatus, Param, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpException, HttpStatus, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { getPgPool } from '../db/pg-pool';
 import { validateTenantIdParam, validateUpdateTenantConfigBody } from './tenants-validation';
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
 import { fetchPendientesHistorico } from './pendientes-historico';
+import { validateComprobanteArcaManualRequest } from './comprobante-arca-manual-validation';
+import { createComprobanteArcaManual } from './comprobante-arca-manual';
 
 export interface TenantConfigRow {
   id: string;
@@ -76,6 +78,47 @@ export class TenantsController {
     }
 
     const result = await fetchPendientesHistorico(pool, id as string);
+    if ('code' in result) {
+      throw new HttpException({ error: result.error }, result.status);
+    }
+    return result;
+  }
+
+  /**
+   * 2026-10-12: "manual ARCA voucher creation" — a contador sometimes finds
+   * a comprobante directly in AFIP's own portal that was never captured by
+   * any uploaded ARCA file; this registers it by hand so it enters the
+   * normal matching engine as a regular pendiente ARCA voucher. Tenant-wide
+   * (not período-scoped), same home as pendientes-historico — `periodo_alta_id`
+   * is resolved internally from the tenant's current `abierto` período (or
+   * NULL if it has none) by createComprobanteArcaManual.ts, which also
+   * delegates actual persistence to upsertVouchersCanonical, the SAME
+   * writer every uploaded-file job uses.
+   */
+  @Post(':id/comprobantes-arca')
+  async createComprobanteArca(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validateTenantIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validateComprobanteArcaManualRequest(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const authFailure = await assertTenantAccess(pool, req.user!, id as string);
+    if (authFailure) {
+      throw new HttpException({ error: authFailure.error }, authFailure.status);
+    }
+
+    const result = await createComprobanteArcaManual(pool, id as string, validation.value, req.user!.id);
     if ('code' in result) {
       throw new HttpException({ error: result.error }, result.status);
     }

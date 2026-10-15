@@ -81,6 +81,12 @@ export default function Home() {
     return <LoginForm />;
   }
 
+  // Hoisted out of `user` itself (rather than inlining `user.role` at every
+  // call site) because the `function renderX()` declarations below are
+  // hoisted closures — TS can't carry the `if (!user)` narrowing above into
+  // them, even though they only ever execute after this point.
+  const userRole = user.role as 'admin' | 'colaborador' | 'cliente';
+
   // AD-6: PeriodoSelector now only yields a tenantId — período selection
   // moved into Dashboard's sections A/B (RF-24..RF-26).
   function handleTenantSelected(selectedTenantId: string) {
@@ -261,7 +267,7 @@ export default function Home() {
         )}
 
         {periodo.estado === 'cerrado' && showPendientesHistorico && (
-          <PendientesHistoricoViewer tenantId={tenantId} />
+          <PendientesHistoricoViewer tenantId={tenantId} userRole={userRole} />
         )}
       </div>
     );
@@ -277,7 +283,7 @@ export default function Home() {
   // When in 'pendientes-historico' view, show the historical viewer
   function renderPendientesHistoricoView() {
     return periodo && tenantId && (
-      <PendientesHistoricoViewer tenantId={tenantId} />
+      <PendientesHistoricoViewer tenantId={tenantId} userRole={userRole} />
     );
   }
 
@@ -375,7 +381,7 @@ export default function Home() {
             {view === 'dashboard' && (
               <Dashboard
                 tenantId={tenantId}
-                userRole={user.role as 'admin' | 'colaborador' | 'cliente'}
+                userRole={userRole}
                 onOpenPeriodo={handleOpenPeriodo}
                 onChangeTenant={handleChangeTenant}
                 onCreatePeriodo={async (mes) => {

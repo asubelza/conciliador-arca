@@ -580,6 +580,56 @@ export async function getPendientesHistorico(tenantId: string): Promise<Pendient
   return res.json();
 }
 
+/**
+ * 2026-10-12 (manual ARCA voucher creation): request body for
+ * POST /api/tenants/:id/comprobantes-arca — a comprobante the contador
+ * found directly in AFIP's own portal, never captured by any uploaded
+ * ARCA file, registered by hand so it enters the normal matching engine as
+ * a regular pendiente ARCA voucher. `iva` is optional (defaults to 0
+ * server-side, see comprobante-arca-manual-validation.ts).
+ */
+export interface ComprobanteArcaManualRequest {
+  cuit_emisor: string;
+  tipo_cbte: number;
+  punto_venta: number;
+  numero: number;
+  fecha_emision: string;
+  importe_total_ars: number;
+  iva?: number;
+}
+
+/** Mirrors PeriodoVoucherRow's shape — the created/upserted vouchers_canonical row. */
+export interface ComprobanteArcaManualResponse {
+  id: string;
+  cuit_emisor: string;
+  tipo_cbte: number;
+  punto_venta: number;
+  numero: number;
+  importe_total: number | null;
+  iva: number | null;
+  fecha: string | null;
+  file_source: 'arca';
+  estado: 'pendiente' | 'conciliado';
+  periodo_alta_id: string | null;
+}
+
+/** 2026-10-12 (manual ARCA voucher creation): registers a comprobante by hand — see tenants.controller.ts's createComprobanteArca. */
+export async function createVoucherArcaManual(
+  tenantId: string,
+  payload: ComprobanteArcaManualRequest,
+): Promise<ComprobanteArcaManualResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/comprobantes-arca`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Comprobante ARCA manual failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /** The API requires both fields on every PUT (see tenants-validation.ts) — tolerancia_dias_fecha is not optional here either. */
 export async function updateTenantConfig(
   tenantId: string,

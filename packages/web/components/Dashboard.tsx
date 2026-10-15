@@ -481,7 +481,7 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
           >
             ← Volver al dashboard
           </button>
-          <PendientesHistoricoViewer tenantId={tenantId} initialResult={historicoResult ?? undefined} />
+          <PendientesHistoricoViewer tenantId={tenantId} initialResult={historicoResult ?? undefined} userRole={userRole} />
         </div>
       ) : (
         <div className="flex flex-col gap-8 lg:grid lg:grid-cols-3 lg:items-start lg:gap-6">

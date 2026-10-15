@@ -32,6 +32,11 @@ import type { Pool, PoolClient } from 'pg';
 // transaction (periodo-reapertura.ts), so a rollback removes the audit row
 // and only committed reopens are audited. RF-36..RF-38 likewise add
 // 'delete' for eliminarPeriodo's committed physical deletes.
+// 2026-10-12 (manual ARCA voucher creation) adds
+// 'comprobante_arca_manual_creado' — logged INSIDE
+// createComprobanteArcaManual's transaction (tenants/comprobante-arca-manual.ts)
+// per POST /api/tenants/:id/comprobantes-arca, so a rollback (e.g. the
+// already-conciliado 409 case) removes the audit row too.
 export type AuditAction =
   | 'upload'
   | 'staging'
@@ -45,7 +50,8 @@ export type AuditAction =
   | 'delete'
   | 'confirm_similarity'
   | 'discard_similarity'
-  | 'resolve_pendiente_manual';
+  | 'resolve_pendiente_manual'
+  | 'comprobante_arca_manual_creado';
 
 export interface AuditEvent {
   tenantId: string;
