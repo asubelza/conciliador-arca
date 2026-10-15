@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   archivarComprobanteArca,
   archivarComprobantesArcaLote,
+  downloadPendientesHistoricoExcel,
   getPendientesHistorico,
   type ArchivarLoteSkipReason,
   type PendientesHistoricoResult,
@@ -318,6 +319,8 @@ export function PendientesHistoricoViewer({ tenantId, initialResult, userRole }:
   const [confirmingBulkArchivar, setConfirmingBulkArchivar] = useState(false);
   const [archivando, setArchivando] = useState(false);
   const [archivarError, setArchivarError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -422,6 +425,34 @@ export function PendientesHistoricoViewer({ tenantId, initialResult, userRole }:
     }
   }
 
+  /**
+   * 2026-10-12 (Histórico filters + export): exports exactly what's
+   * currently ON SCREEN — the 3 already-computed filtered arrays, with
+   * `filteredArchivados` only included while "ver archivados" is checked
+   * (matching exactly what the "Ver archivados" toggle shows/hides above),
+   * never the whole unfiltered tenant dataset.
+   */
+  // Same ids the "Descargar" buttons below are disabled on when empty —
+  // computed once so both agree on exactly what's exportable, instead of
+  // the button's disabled check and handleDownload's payload drifting.
+  const exportIds = [
+    ...filteredPendientes.map((row) => row.id),
+    ...filteredExcluidos.map((row) => row.id),
+    ...(showArchivados ? filteredArchivados.map((row) => row.id) : []),
+  ];
+
+  async function handleDownload(format: 'xlsx' | 'csv') {
+    setDownloadError(null);
+    setDownloading(true);
+    try {
+      await downloadPendientesHistoricoExcel(tenantId, exportIds, format);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (error) {
     return (
       <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
@@ -458,6 +489,33 @@ export function PendientesHistoricoViewer({ tenantId, initialResult, userRole }:
       )}
 
       <FilterBar filters={filters} onChange={setFilters} />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => handleDownload('csv')}
+          disabled={downloading || exportIds.length === 0}
+          title={exportIds.length === 0 ? 'No hay filas para exportar con los filtros actuales' : undefined}
+          className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+        >
+          Descargar CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => handleDownload('xlsx')}
+          disabled={downloading || exportIds.length === 0}
+          title={exportIds.length === 0 ? 'No hay filas para exportar con los filtros actuales' : undefined}
+          className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+        >
+          Descargar Excel
+        </button>
+      </div>
+
+      {downloadError && (
+        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
+          {downloadError}
+        </p>
+      )}
 
       <label className="inline-flex items-center gap-2 self-start text-sm font-medium text-slate-600 dark:text-slate-400">
         <input
