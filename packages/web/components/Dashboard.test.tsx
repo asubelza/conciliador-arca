@@ -41,6 +41,8 @@ const historicoVacio: PendientesHistoricoResult = {
   count_pendientes: 0,
   excluidos_previos_a_alta: [],
   count_excluidos_previos_a_alta: 0,
+  archivados: [],
+  count_archivados: 0,
 };
 
 const historicoConDatos: PendientesHistoricoResult = {
@@ -64,6 +66,8 @@ const historicoConDatos: PendientesHistoricoResult = {
   count_pendientes: 1,
   excluidos_previos_a_alta: [],
   count_excluidos_previos_a_alta: 3,
+  archivados: [],
+  count_archivados: 0,
 };
 
 function renderDashboard(overrides: Partial<Parameters<typeof DashboardShell>[0]> = {}) {

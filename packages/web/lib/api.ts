@@ -370,7 +370,9 @@ export interface PeriodoVoucherRow {
   iva: number | null;
   fecha: string | null;
   file_source: 'arca' | 'contabilidad';
-  estado: 'pendiente' | 'conciliado';
+  // 'archivado' added 2026-10-12 (Histórico filters + "Archivar") — a
+  // pendiente ARCA voucher the contador marked as no longer relevant.
+  estado: 'pendiente' | 'conciliado' | 'archivado';
   periodo_alta_id: string;
 }
 
@@ -567,6 +569,9 @@ export interface PendientesHistoricoResult {
   count_pendientes: number;
   excluidos_previos_a_alta: PendientesHistoricoRow[];
   count_excluidos_previos_a_alta: number;
+  /** 2026-10-12 (Histórico filters + "Archivar"): vouchers the contador deliberately archived — see pendientes-historico.ts's own doc on this bucket. */
+  archivados: PendientesHistoricoRow[];
+  count_archivados: number;
 }
 
 export async function getPendientesHistorico(tenantId: string): Promise<PendientesHistoricoResult> {
@@ -626,6 +631,70 @@ export async function createVoucherArcaManual(
   if (!res.ok) {
     handleUnauthorized(res);
     throw new Error(await readErrorMessage(res, `Comprobante ARCA manual failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/** Response for the single-voucher archive endpoint — mirrors ResolverPendienteResponse's shape (that action's own closest precedent). */
+export interface ArchivarComprobanteResponse {
+  id: string;
+  estado: 'archivado';
+}
+
+/**
+ * 2026-10-12 (Histórico filters + "Archivar"): marks one pendiente ARCA
+ * voucher as "no longer relevant" — see tenants.controller.ts's
+ * archivarComprobante for the validation/role/409 rules this enforces
+ * server-side.
+ */
+export async function archivarComprobanteArca(
+  tenantId: string,
+  voucherId: string,
+  nota?: string,
+): Promise<ArchivarComprobanteResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/comprobantes/${voucherId}/archivar`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ nota: nota ?? null }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Archivar comprobante failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export type ArchivarLoteSkipReason = 'not_found' | 'wrong_tenant' | 'wrong_file_source' | 'already_conciliado' | 'already_archivado';
+
+export interface ArchivarLoteItemResult {
+  voucher_id: string;
+  status: 'archived' | 'skipped';
+  reason?: ArchivarLoteSkipReason;
+}
+
+export interface ArchivarComprobantesLoteResponse {
+  results: ArchivarLoteItemResult[];
+}
+
+/**
+ * 2026-10-12 (Histórico filters + "Archivar"): bulk version — never an
+ * all-or-nothing rollback server-side (RNF-07 "nunca ocultar"), so the
+ * caller always gets a per-id result back, even for a batch that's a mix
+ * of valid and invalid ids.
+ */
+export async function archivarComprobantesArcaLote(
+  tenantId: string,
+  voucherIds: string[],
+  nota?: string,
+): Promise<ArchivarComprobantesLoteResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}/comprobantes/archivar-lote`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ voucher_ids: voucherIds, nota: nota ?? null }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Archivar comprobantes (lote) failed (${res.status})`));
   }
   return res.json();
 }
