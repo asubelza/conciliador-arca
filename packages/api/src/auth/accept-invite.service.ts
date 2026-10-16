@@ -80,7 +80,7 @@ function checkInviteState(invite: InviteRow | undefined): AcceptInviteFailure | 
 async function claimInvite(client: PoolClient, rawToken: string): Promise<InviteRow | undefined> {
   const { rows } = await client.query<InviteRow>(
     `UPDATE user_invites ui
-     SET consumed_at = now()
+     SET consumed_at = now(), accepted_at = now()
      FROM users u
      WHERE ui.token_hash = $1
        AND u.id = ui.user_id
