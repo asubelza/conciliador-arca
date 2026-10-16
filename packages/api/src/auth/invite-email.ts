@@ -26,8 +26,25 @@ function buildInviteUrl(rawToken: string): string {
   return `${getAppBaseUrl().replace(/\/+$/, '')}/?invite_token=${rawToken}`;
 }
 
+/**
+ * display_name is admin-supplied free text (users-validation.ts only
+ * checks it's a non-empty string, no character restrictions) — it must
+ * never be trusted as HTML when interpolated into buildInviteHtml()'s
+ * template. inviteUrl itself needs no escaping: it's built entirely from
+ * trusted inputs (APP_BASE_URL, an env var, and rawToken, always
+ * /^[0-9a-f]{64}$/ — neither can contain HTML metacharacters).
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function buildInviteHtml(displayName: string | null, inviteUrl: string): string {
-  const greeting = displayName ? `Hola ${displayName},` : 'Hola,';
+  const greeting = displayName ? `Hola ${escapeHtml(displayName)},` : 'Hola,';
   return [
     `<p>${greeting}</p>`,
     '<p>Te invitamos a sumarte a Conciliador ARCA. Hacé clic en el siguiente link para elegir tu contraseña:</p>',

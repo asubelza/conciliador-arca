@@ -57,6 +57,16 @@ describe('invite-email: sendInviteEmail', () => {
     expect(html).toContain('<p>Hola,</p>');
   });
 
+  it('HTML-escapes display_name — an admin-supplied value is never trusted as markup', async () => {
+    sendEmailMock.mockResolvedValue(undefined);
+
+    await sendInviteEmail('user@example.com', '<img src=x onerror=alert(1)>', 'tok');
+
+    const html = sendEmailMock.mock.calls[0][0].html as string;
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+
   it('returns {sent:false, error} without throwing when sendEmail rejects (Resend outage)', async () => {
     sendEmailMock.mockRejectedValue(new Error('Resend API responded with 500: internal error'));
 
