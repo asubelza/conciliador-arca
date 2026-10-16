@@ -127,6 +127,106 @@ describe('T39: app/page.tsx (auth gate)', () => {
 });
 
 /**
+ * Backoffice self-service (invitación por email, PR4): the `?invite_token=`
+ * check must win even over an existing session (approved plan, decision 5)
+ * — SetPasswordPage.tsx itself is tested in isolation
+ * (SetPasswordPage.test.tsx); this only proves app/page.tsx's own
+ * precedence/gating around it.
+ */
+describe('backoffice self-service: ?invite_token= precedence over the login/session gate', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+    window.history.pushState({}, '', '/');
+  });
+
+  it('shows SetPasswordPage instead of LoginForm when there is no session but an invite_token is present', async () => {
+    window.history.pushState({}, '', `/?invite_token=${'a'.repeat(64)}`);
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ email: 'invitee@example.com', display_name: null }) }) as unknown as typeof fetch;
+
+    render(<Home />);
+
+    expect(await screen.findByRole('heading', { name: 'Activar tu cuenta' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
+  });
+
+  it('shows SetPasswordPage instead of the main app when an invite_token is present even with an active session', async () => {
+    window.history.pushState({}, '', `/?invite_token=${'a'.repeat(64)}`);
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ email: 'invitee@example.com', display_name: null }) }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+
+    expect(await screen.findByRole('heading', { name: 'Activar tu cuenta' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+  });
+
+  it('with no invite_token in the URL, a session goes straight to the main app as before', () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+
+    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Backoffice self-service (PR4): the "Backoffice" header button is
+ * admin-only and swaps the whole tenant/período flow for BackofficeView —
+ * BackofficeView's own tabs are covered in BackofficeView.test.tsx, this
+ * only proves the admin-only visibility and the swap.
+ */
+describe('backoffice self-service: admin-only "Backoffice" header button', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('is visible for an admin and swaps the tenant/período flow for BackofficeView', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Backoffice' }));
+    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+    expect(await screen.findByText('No hay tenants todavía.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Volver' }));
+    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+  });
+
+  it('is hidden for a non-admin role', () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-2', { id: 'u2', email: 'colab@estudio.com', role: 'colaborador', display_name: 'Colaborador' });
+
+    render(<Home />);
+    expect(screen.queryByRole('button', { name: 'Backoffice' })).not.toBeInTheDocument();
+  });
+
+  it('regression: does not leak BackofficeView to a non-admin who logs in right after an admin toggled it on, in the same tab', async () => {
+    // `showBackoffice` is local component state — clearSession()/setSession()
+    // only change the session snapshot, they don't unmount Home or reset
+    // this state, so the render itself (not just the header button) must
+    // re-check the role every time.
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+
+    render(<Home />);
+    await userEvent.click(screen.getByRole('button', { name: 'Backoffice' }));
+    expect(await screen.findByText('No hay tenants todavía.')).toBeInTheDocument();
+
+    clearSession();
+    setSession('tok-2', { id: 'u2', email: 'colab@estudio.com', role: 'colaborador', display_name: 'Colaborador' });
+
+    await waitFor(() => expect(screen.queryByText('No hay tenants todavía.')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Backoffice' })).not.toBeInTheDocument();
+  });
+});
+
+/**
  * AD-6 (dashboard-principal): PeriodoSelector now only yields a tenantId —
  * período selection happens through Dashboard's own sections A/B. This
  * helper walks: paste UUID -> Ingresar -> Continuar al dashboard, landing

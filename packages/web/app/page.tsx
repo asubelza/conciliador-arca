@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PeriodoSelector } from '@/components/PeriodoSelector';
 import { UploadForm } from '@/components/UploadForm';
 import { StatusPoller } from '@/components/StatusPoller';
@@ -11,6 +11,8 @@ import { PendientesHistoricoViewer } from '@/components/PendientesHistoricoViewe
 import { DashboardShell as Dashboard } from '@/components/Dashboard';
 import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { BackofficeView } from '@/components/BackofficeView';
+import { SetPasswordPage } from '@/components/SetPasswordPage';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
 import {
@@ -72,6 +74,29 @@ export default function Home() {
   const [showPeriodoReport, setShowPeriodoReport] = useState(false);
   const [showPendientesHistorico, setShowPendientesHistorico] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  // Backoffice self-service (invitación por email): starts `null` (matching
+  // what the server/static-prerendered HTML for `/` always renders) and is
+  // only ever set from a `useEffect` below, never from this initializer —
+  // reading `window.location.search` here instead would diverge from the
+  // prerendered markup on the very first client render and trip a React
+  // hydration-mismatch error (#418/#423/#425), since this page is
+  // statically prerendered at build time with no token in scope.
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [showBackoffice, setShowBackoffice] = useState(false);
+
+  // Runs once after hydration completes — safe to read `window` here.
+  useEffect(() => {
+    setInviteToken(new URLSearchParams(window.location.search).get('invite_token'));
+  }, []);
+
+  // Backoffice self-service (approved plan, decision 5): a `?invite_token=`
+  // link wins even over an existing session — e.g. an admin testing the
+  // flow while already logged in as themselves should still land on
+  // SetPasswordPage, not skip straight to the main app. Must run before the
+  // `if (!user)` gate below, not after it.
+  if (inviteToken) {
+    return <SetPasswordPage token={inviteToken} onAccepted={() => setInviteToken(null)} />;
+  }
 
   // T39 (Fase 3, autenticacion-roles): no session (never logged in, logged
   // out, or a 401 auto-cleared it — see lib/api.ts's handleUnauthorized) ->
@@ -315,6 +340,15 @@ export default function Home() {
               </span>
             </div>
             <ThemeToggle />
+            {userRole === 'admin' && (
+              <button
+                type="button"
+                onClick={() => setShowBackoffice((v) => !v)}
+                className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-card hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                {showBackoffice ? 'Volver' : 'Backoffice'}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => clearSession()}
@@ -328,9 +362,16 @@ export default function Home() {
       </header>
 
       <main className="mx-auto flex max-w-screen-2xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
-        {!tenantId && <PeriodoSelector onSelected={handleTenantSelected} />}
+        {/* Guarded here too (not just at the header button) — `showBackoffice`
+            is local state that survives a logout/login in the same tab
+            (clearSession() doesn't unmount Home or reset it), so without this
+            check a non-admin who logs in right after an admin toggled it on
+            would see the admin-only BackofficeView. */}
+        {showBackoffice && userRole === 'admin' && <BackofficeView />}
 
-        {tenantId && (
+        {!(showBackoffice && userRole === 'admin') && !tenantId && <PeriodoSelector onSelected={handleTenantSelected} />}
+
+        {!(showBackoffice && userRole === 'admin') && tenantId && (
           <div className="flex flex-col gap-6">
             {/* Nav tabs only make sense once a período round-trips into the
                 existing circuit/report — Dashboard is the entry point.
