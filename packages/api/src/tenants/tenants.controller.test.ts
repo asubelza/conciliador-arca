@@ -72,6 +72,99 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     });
   });
 
+  describe('backoffice self-service: GET/POST /api/tenants, PUT /api/tenants/:id', () => {
+    it('GET /api/tenants lists tenants (includes the one created in beforeAll)', async () => {
+      const res = await request(app.getHttpServer()).get('/api/tenants').set('Authorization', adminAuth);
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.some((t: { id: string }) => t.id === tenantId)).toBe(true);
+    });
+
+    it('GET /api/tenants as colaborador returns 403 (backoffice is admin-only)', async () => {
+      const res = await request(app.getHttpServer()).get('/api/tenants').set('Authorization', authHeaderFor('colaborador'));
+      expect(res.status).toBe(403);
+    });
+
+    it('GET /api/tenants with no Authorization header returns 401', async () => {
+      const res = await request(app.getHttpServer()).get('/api/tenants');
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /api/tenants creates a tenant with name + cuit', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Backoffice Test Tenant', cuit: '20-11111111-2' });
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({ name: 'Backoffice Test Tenant', cuit: '20111111112' });
+      await deleteTestTenant(pool, res.body.id);
+    });
+
+    it('POST /api/tenants allows an omitted cuit (nullable column)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Backoffice Test Tenant No Cuit' });
+      expect(res.status).toBe(201);
+      expect(res.body.cuit).toBeNull();
+      await deleteTestTenant(pool, res.body.id);
+    });
+
+    it('POST /api/tenants rejects an empty name', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', adminAuth)
+        .send({ name: '' });
+      expect(res.status).toBe(400);
+    });
+
+    it('POST /api/tenants rejects a malformed cuit', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Bad Cuit Tenant', cuit: '123' });
+      expect(res.status).toBe(400);
+    });
+
+    it('POST /api/tenants as colaborador returns 403', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', authHeaderFor('colaborador'))
+        .send({ name: 'Should Not Be Created' });
+      expect(res.status).toBe(403);
+    });
+
+    it('PUT /api/tenants/:id updates name + cuit', async () => {
+      const editId = await createTestTenant(pool, 'Editable Tenant');
+      try {
+        const res = await request(app.getHttpServer())
+          .put(`/api/tenants/${editId}`)
+          .set('Authorization', adminAuth)
+          .send({ name: 'Renamed Tenant', cuit: '30111111112' });
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ id: editId, name: 'Renamed Tenant', cuit: '30111111112' });
+      } finally {
+        await deleteTestTenant(pool, editId);
+      }
+    });
+
+    it('PUT /api/tenants/:id returns 404 for an unknown tenant', async () => {
+      const res = await request(app.getHttpServer())
+        .put('/api/tenants/00000000-0000-0000-0000-000000000000')
+        .set('Authorization', adminAuth)
+        .send({ name: 'Nobody' });
+      expect(res.status).toBe(404);
+    });
+
+    it('PUT /api/tenants/:id as colaborador returns 403', async () => {
+      const res = await request(app.getHttpServer())
+        .put(`/api/tenants/${tenantId}`)
+        .set('Authorization', authHeaderFor('colaborador'))
+        .send({ name: 'Should Not Rename' });
+      expect(res.status).toBe(403);
+    });
+  });
+
   describe('2026-08-23 (feature 3 de 3): GET /api/tenants/:id/pendientes-historico', () => {
     it('returns 404 for an unknown tenant', async () => {
       const res = await request(app.getHttpServer())

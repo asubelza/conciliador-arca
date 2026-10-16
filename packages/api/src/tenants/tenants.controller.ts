@@ -22,11 +22,20 @@ import {
 import { archivarComprobanteArca, archivarComprobantesArcaLote, desarchivarComprobanteArca } from './comprobante-arca-archivar';
 import { validatePendientesHistoricoExportRequest } from './pendientes-historico-export-validation';
 import { toPendientesHistoricoCsv, toPendientesHistoricoXlsxBuffer } from './pendientes-historico-exporter';
+import { validateCreateTenantBody, validateUpdateTenantBody } from './tenants-admin-validation';
 
 export interface TenantConfigRow {
   id: string;
   tolerancia_redondeo_ars: string;
   tolerancia_dias_fecha: number;
+}
+
+export interface TenantRow {
+  id: string;
+  name: string;
+  cuit: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /**
@@ -40,6 +49,91 @@ export interface TenantConfigRow {
 @Controller('api/tenants')
 @UseGuards(AuthGuard)
 export class TenantsController {
+  /**
+   * Backoffice self-service (admin-only): list every tenant. No tenant `:id`
+   * to scope by, so there's no assertTenantAccess call here — admin already
+   * sees every tenant implicitly (same posture assertTenantAccess itself
+   * grants admin/colaborador), this just exposes that same visibility as a
+   * real endpoint instead of only being true "by omission" inside
+   * assertTenantAccess.
+   */
+  @Get()
+  async listTenants(@Req() req: AuthenticatedRequest) {
+    const roleFailure = assertRole(req.user!, ['admin']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const { rows } = await pool.query<TenantRow>(
+      'SELECT id, name, cuit, created_at, updated_at FROM tenants ORDER BY name ASC',
+    );
+    return rows;
+  }
+
+  /** Backoffice self-service (admin-only): create a tenant (name + cuit only — see tenants-admin-validation.ts). */
+  @Post()
+  async createTenant(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const validation = validateCreateTenantBody(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const { rows } = await pool.query<TenantRow>(
+      'INSERT INTO tenants (name, cuit) VALUES ($1, $2) RETURNING id, name, cuit, created_at, updated_at',
+      [validation.value.name, validation.value.cuit],
+    );
+    return rows[0];
+  }
+
+  /**
+   * Backoffice self-service (admin-only): edit a tenant's name/cuit.
+   * Separate from PUT :id/config below (that one edits matching-tolerance
+   * settings, this one edits identity fields) — different resource,
+   * different body shape, kept as its own route rather than overloading
+   * :id/config with unrelated fields.
+   *
+   * No assertTenantAccess call here (unlike the :id-scoped GET routes
+   * below): assertRole already restricts this route to 'admin', and
+   * assertTenantAccess unconditionally no-ops for 'admin', so calling it
+   * would only be dead code pretending to be a scoping check.
+   */
+  @Put(':id')
+  async updateTenant(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    const idFailure = validateTenantIdParam(id);
+    if (idFailure) {
+      throw new HttpException({ error: idFailure.error }, idFailure.status);
+    }
+
+    const validation = validateUpdateTenantBody(body);
+    if (!validation.ok) {
+      throw new HttpException({ error: validation.failure.error }, validation.failure.status);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const pool = getPgPool();
+    const { rows } = await pool.query<TenantRow>(
+      `UPDATE tenants SET name = $1, cuit = $2, updated_at = now()
+       WHERE id = $3
+       RETURNING id, name, cuit, created_at, updated_at`,
+      [validation.value.name, validation.value.cuit, id],
+    );
+    if (rows.length === 0) {
+      throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
+    }
+    return rows[0];
+  }
+
   @Get(':id/config')
   async getConfig(@Param('id') id: unknown, @Req() req: AuthenticatedRequest) {
     const failure = validateTenantIdParam(id);

@@ -572,6 +572,50 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   return res.json();
 }
 
+/** Backoffice self-service (admin-only): tenant identity fields — separate from TenantConfig above (matching-tolerance settings). */
+export interface TenantRow {
+  id: string;
+  name: string;
+  cuit: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listTenants(): Promise<TenantRow[]> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants`, { headers: authHeaders() });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Tenants fetch failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function createTenant(name: string, cuit?: string | null): Promise<TenantRow> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name, cuit: cuit ?? null }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Tenant creation failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function updateTenant(tenantId: string, name: string, cuit: string | null): Promise<TenantRow> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name, cuit }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Tenant update failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /**
  * 2026-08-23 (client request, feature 3 de 3): "pantalla donde muestre el
  * resumen de unmatch de arca... tomando como filtro desde el mes en que
