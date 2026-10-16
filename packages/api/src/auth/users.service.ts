@@ -142,10 +142,60 @@ export async function resendInvite(
   return { email: user.email, invite_email_sent: emailResult.sent };
 }
 
-export async function setUserActive(pool: Pool, userId: string, isActive: boolean): Promise<{ id: string; is_active: boolean } | null> {
+export type SetUserActiveResult = { id: string; is_active: boolean } | 'NOT_FOUND' | 'NEVER_ONBOARDED';
+
+/**
+ * Activating (isActive=true) is refused with NEVER_ONBOARDED for a user
+ * who has at least one invite on record but has never genuinely ACCEPTED
+ * one (`user_invites.accepted_at IS NULL` on every row) — i.e. created
+ * through createUser()'s invite flow and never completed it. Their
+ * password_hash is still createUser()'s throwaway hash (nobody knows it),
+ * and accept-invite.service.ts's claimInvite() (PR3) requires
+ * is_active=false to claim ANY invite — so activating first would make the
+ * account unrecoverable without deactivating it again first.
+ *
+ * Checked against `accepted_at` (026), NOT `consumed_at` (025):
+ * invite-tokens.ts's createInviteToken() also sets consumed_at on a
+ * still-valid PRIOR invite purely to invalidate it when a fresh one is
+ * issued (e.g. a resend) — that is not acceptance. `accepted_at` is only
+ * ever set by claimInvite's own atomic UPDATE on a genuine accept, so a
+ * resend can never make this guard think a never-accepted account is
+ * fine to activate.
+ *
+ * A user with ZERO invite rows (created directly — the hand-seeded
+ * admin@admin.com/test@test.com accounts, or any createTestUser() test
+ * fixture) was never put through this flow at all and is unaffected.
+ * Deactivating (isActive=false), and reactivating a user who has
+ * genuinely accepted at least once, have no such restriction.
+ */
+async function updateIsActive(pool: Pool, userId: string, isActive: boolean): Promise<{ id: string; is_active: boolean } | undefined> {
   const { rows } = await pool.query<{ id: string; is_active: boolean }>(
     'UPDATE users SET is_active = $1, updated_at = now() WHERE id = $2 RETURNING id, is_active',
     [isActive, userId],
   );
-  return rows[0] ?? null;
+  return rows[0];
+}
+
+export async function setUserActive(pool: Pool, userId: string, isActive: boolean): Promise<SetUserActiveResult> {
+  if (!isActive) {
+    return (await updateIsActive(pool, userId, false)) ?? 'NOT_FOUND';
+  }
+
+  const { rows: checkRows } = await pool.query<{ id: string; has_any_invite: boolean; has_accepted_invite: boolean }>(
+    `SELECT u.id,
+            EXISTS (SELECT 1 FROM user_invites WHERE user_id = u.id) AS has_any_invite,
+            EXISTS (SELECT 1 FROM user_invites WHERE user_id = u.id AND accepted_at IS NOT NULL) AS has_accepted_invite
+     FROM users u WHERE u.id = $1`,
+    [userId],
+  );
+  const check = checkRows[0];
+  if (!check) return 'NOT_FOUND';
+  if (check.has_any_invite && !check.has_accepted_invite) return 'NEVER_ONBOARDED';
+
+  // No `?? 'NOT_FOUND'` fallback here, unlike the deactivate branch above:
+  // the check above already confirmed this row exists, and nothing in this
+  // codebase can delete a user (018_init_users_and_roles.sql's own
+  // "deactivate, never delete" posture) — a fallback for that gap would be
+  // untested dead code for a state that can't occur.
+  return (await updateIsActive(pool, userId, true))!;
 }

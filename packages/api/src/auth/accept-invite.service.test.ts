@@ -63,11 +63,16 @@ describe('accept-invite.service: acceptInvite / peekInvite', () => {
       expect(rows[0].is_active).toBe(true);
       expect(await verifyPassword('brand-new-password', rows[0].password_hash)).toBe(true);
 
-      const { rows: inviteRows } = await pool.query<{ consumed_at: Date | null }>(
-        'SELECT consumed_at FROM user_invites WHERE token_hash = $1',
+      const { rows: inviteRows } = await pool.query<{ consumed_at: Date | null; accepted_at: Date | null }>(
+        'SELECT consumed_at, accepted_at FROM user_invites WHERE token_hash = $1',
         [hashInviteToken(rawToken)],
       );
       expect(inviteRows[0].consumed_at).not.toBeNull();
+      // accepted_at (026) is distinct from consumed_at: it's only ever set
+      // by a genuine accept here, never by createInviteToken()'s own
+      // invalidate-on-resend UPDATE — see users.service.ts's setUserActive
+      // NEVER_ONBOARDED guard, which relies on exactly this distinction.
+      expect(inviteRows[0].accepted_at).not.toBeNull();
     });
 
     it('returns INVITE_NOT_FOUND for a well-formed but unknown token, without changing the user', async () => {

@@ -193,6 +193,20 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
       expect(res.body).toEqual({ id: user.id, is_active: true });
     });
 
+    it('returns 409 when activating a user created via POST /api/users who never accepted their invite', async () => {
+      const createRes = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', adminAuth)
+        .send({ email: email('never-onboarded'), role: 'admin' });
+      createdUserIds.push(createRes.body.id);
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/users/${createRes.body.id}`)
+        .set('Authorization', adminAuth)
+        .send({ is_active: true });
+      expect(res.status).toBe(409);
+    });
+
     it('returns 400 for a non-boolean is_active', async () => {
       const user = await createTestUser(pool);
       createdUserIds.push(user.id);
