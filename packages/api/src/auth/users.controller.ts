@@ -1,23 +1,24 @@
 /**
  * users.controller.ts — backoffice self-service (admin-only): list/create
- * users and toggle active/inactive. Invite-email sending and the
- * resend-invite endpoint land in PR3 (email/resend-client.ts,
- * invite-email.ts) — this controller only writes the invite token today
- * (see invite-tokens.ts via users.service.ts), it never sends anything.
+ * users, toggle active/inactive, and resend an invite. Actually sending
+ * the email happens in users.service.ts (createUser/resendInvite) via
+ * invite-email.ts/resend-client.ts.
  *
- * createUser's response deliberately omits the raw invite token — it only
- * ever exists in the DB (hashed) until PR3's email actually ships it to
- * the invited user. Manual verification before PR3 reads the raw token
- * straight from user_invites in Postgres, never from this response.
+ * createUser/resendInvite's responses deliberately omit the raw invite
+ * token — it only ever exists in the DB (hashed); the admin only sees
+ * `invite_email_sent` (whether Resend accepted it), never the token
+ * itself. Manual verification without a real Resend account reads the raw
+ * token straight from user_invites in Postgres, never from these
+ * responses.
  */
-import { Body, Controller, Get, HttpException, HttpStatus, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { getPgPool } from '../db/pg-pool';
 import { isForeignKeyViolation, isUniqueViolation } from '../db/pg-errors';
 import { isUuid } from '../tenants/tenants-validation';
 import { AuthGuard, type AuthenticatedRequest } from './auth-guard';
 import { assertRole } from './role-check';
 import { validateCreateUserBody } from './users-validation';
-import { createUser, listUsers, setUserActive } from './users.service';
+import { createUser, listUsers, resendInvite, setUserActive } from './users.service';
 
 @Controller('api/users')
 @UseGuards(AuthGuard)
@@ -79,5 +80,28 @@ export class UsersController {
       throw new HttpException({ error: 'user not found' }, HttpStatus.NOT_FOUND);
     }
     return updated;
+  }
+
+  /** Admin-only: mints a fresh invite token (invalidating any still-valid one) and sends it — refused for an already-active user. */
+  @Post(':id/resend-invite')
+  @HttpCode(HttpStatus.OK)
+  async resendInvite(@Param('id') id: unknown, @Req() req: AuthenticatedRequest) {
+    if (!isUuid(id)) {
+      throw new HttpException({ error: 'user id must be a UUID' }, HttpStatus.BAD_REQUEST);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const result = await resendInvite(getPgPool(), id as string);
+    if (result === 'NOT_FOUND') {
+      throw new HttpException({ error: 'user not found' }, HttpStatus.NOT_FOUND);
+    }
+    if (result === 'ALREADY_ACTIVE') {
+      throw new HttpException({ error: 'user is already active' }, HttpStatus.CONFLICT);
+    }
+    return result;
   }
 }

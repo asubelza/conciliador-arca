@@ -10,14 +10,16 @@
  * !user.is_active, before ever reaching verifyPassword — so this hash is
  * never evaluated. The user row, its user_tenant_access rows (role
  * 'cliente' only), and the invite token are all written in one
- * transaction. Sending the actual invite email is PR3's job
- * (invite-email.ts), called by the controller after this resolves — a
- * Resend outage must never roll back or block account creation.
+ * transaction. sendInviteEmail() is called AFTER that transaction commits
+ * — it never throws (see invite-email.ts), so a Resend outage can't roll
+ * back or block the account that's already committed; invite_email_sent
+ * on the result lets the admin know if it actually went out.
  */
 import { randomUUID } from 'crypto';
 import type { Pool } from 'pg';
 import { hashPassword } from './password';
 import { createInviteToken, type InviteToken } from './invite-tokens';
+import { sendInviteEmail } from './invite-email';
 import type { UserRole } from './users-types';
 import type { CreateUserRequestBody } from './users-validation';
 
@@ -39,6 +41,7 @@ export interface CreatedUser {
   is_active: boolean;
   created_at: string;
   invite: InviteToken;
+  invite_email_sent: boolean;
 }
 
 export async function listUsers(pool: Pool): Promise<UserListRow[]> {
@@ -61,24 +64,19 @@ export async function listUsers(pool: Pool): Promise<UserListRow[]> {
  */
 export async function createUser(pool: Pool, input: CreateUserRequestBody): Promise<CreatedUser> {
   const client = await pool.connect();
+  let user: { id: string; email: string; role: UserRole; display_name: string | null; is_active: boolean; created_at: string };
+  let invite: InviteToken;
   try {
     await client.query('BEGIN');
 
     const throwawayPasswordHash = await hashPassword(randomUUID());
-    const { rows } = await client.query<{
-      id: string;
-      email: string;
-      role: UserRole;
-      display_name: string | null;
-      is_active: boolean;
-      created_at: string;
-    }>(
+    const { rows } = await client.query<typeof user>(
       `INSERT INTO users (email, password_hash, role, display_name, is_active)
        VALUES ($1, $2, $3, $4, false)
        RETURNING id, email, role, display_name, is_active, created_at`,
       [input.email, throwawayPasswordHash, input.role, input.display_name],
     );
-    const user = rows[0];
+    user = rows[0];
 
     if (input.role === 'cliente') {
       for (const tenantId of input.tenant_ids) {
@@ -86,16 +84,62 @@ export async function createUser(pool: Pool, input: CreateUserRequestBody): Prom
       }
     }
 
-    const invite = await createInviteToken(client, user.id);
+    invite = await createInviteToken(client, user.id);
 
     await client.query('COMMIT');
-    return { ...user, invite };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
   }
+
+  const emailResult = await sendInviteEmail(user.email, user.display_name, invite.rawToken);
+  return { ...user, invite, invite_email_sent: emailResult.sent };
+}
+
+/**
+ * Resends the invite — invalidates any still-valid invite for this user
+ * (createInviteToken's own job) and mints/sends a fresh one. Admin-only,
+ * refused for an already-active user (nothing to invite them to anymore).
+ */
+export async function resendInvite(
+  pool: Pool,
+  userId: string,
+): Promise<{ email: string; invite_email_sent: boolean } | 'NOT_FOUND' | 'ALREADY_ACTIVE'> {
+  const client = await pool.connect();
+  let user: { email: string; display_name: string | null } | undefined;
+  let invite: InviteToken | undefined;
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query<{ email: string; display_name: string | null; is_active: boolean }>(
+      'SELECT email, display_name, is_active FROM users WHERE id = $1',
+      [userId],
+    );
+    const found = rows[0];
+    if (!found) {
+      await client.query('ROLLBACK');
+      return 'NOT_FOUND';
+    }
+    if (found.is_active) {
+      await client.query('ROLLBACK');
+      return 'ALREADY_ACTIVE';
+    }
+    user = { email: found.email, display_name: found.display_name };
+
+    invite = await createInviteToken(client, userId);
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const emailResult = await sendInviteEmail(user.email, user.display_name, invite.rawToken);
+  return { email: user.email, invite_email_sent: emailResult.sent };
 }
 
 export async function setUserActive(pool: Pool, userId: string, isActive: boolean): Promise<{ id: string; is_active: boolean } | null> {
