@@ -76,8 +76,14 @@ export class UsersController {
     }
 
     const updated = await setUserActive(getPgPool(), id, b.is_active);
-    if (!updated) {
+    if (updated === 'NOT_FOUND') {
       throw new HttpException({ error: 'user not found' }, HttpStatus.NOT_FOUND);
+    }
+    if (updated === 'NEVER_ONBOARDED') {
+      throw new HttpException(
+        { error: 'cannot activate a user who has not accepted their invite yet — resend the invite instead' },
+        HttpStatus.CONFLICT,
+      );
     }
     return updated;
   }
