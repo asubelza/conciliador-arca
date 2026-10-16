@@ -356,6 +356,32 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     });
   });
 
+  describe('025: user_invites (backoffice self-service, invitación por email)', () => {
+    const files = fs.existsSync(MIGRATIONS_DIR)
+      ? fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+      : [];
+
+    it('defines migration 025', () => {
+      expect(files.some((f) => /025_init_user_invites/.test(f))).toBe(true);
+    });
+
+    it('creates user_invites referencing users, with a unique token_hash and consumed_at for single-use', () => {
+      expect(sqlLc).toMatch(/create\s+table\s+user_invites/);
+      expect(sqlLc).toMatch(/references\s+users\s*\(\s*id\s*\)/);
+      expect(sqlLc).toMatch(/token_hash\s+text\s+not\s+null\s+unique/);
+      expect(sqlLc).toContain('expires_at');
+      expect(sqlLc).toContain('consumed_at');
+    });
+
+    it('grants app_role SELECT+INSERT+UPDATE on user_invites (no DELETE — invalidate via consumed_at, same posture as users)', () => {
+      expect(sqlLc).toMatch(/grant\s+select\s*,\s*insert\s*,\s*update\s+on\s+user_invites\s+to\s+app_role/);
+    });
+
+    it('does NOT enable RLS on user_invites (no tenant_id, same posture as users/user_tenant_access)', () => {
+      expect(sqlLc).not.toMatch(/alter\s+table\s+user_invites\s+enable\s+row\s+level\s+security/);
+    });
+  });
+
   describe('Prisma schema', () => {
     it('declares a postgresql datasource', () => {
       expect(schema).toMatch(/datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"postgresql"/);
@@ -380,6 +406,10 @@ describe('T02: Prisma schema + migrations with RLS (multi-tenant)', () => {
     it('declares User and UserTenantAccess (T33, autenticacion-roles)', () => {
       expect(schema).toMatch(/model\s+User\s*\{/);
       expect(schema).toMatch(/model\s+UserTenantAccess\s*\{/);
+    });
+
+    it('declares UserInvite (backoffice self-service, invitación por email)', () => {
+      expect(schema).toMatch(/model\s+UserInvite\s*\{/);
     });
 
     it('generates the Prisma client', () => {

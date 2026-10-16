@@ -29,8 +29,7 @@ import { NON_TERMINAL_ESTADO_SQL, isTerminalVoucherEstado } from '../reconciliat
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
-
-const UNIQUE_VIOLATION = '23505';
+import { isUniqueViolation } from '../db/pg-errors';
 
 export interface PeriodoRow {
   id: string;
@@ -49,10 +48,6 @@ export interface PeriodoRow {
 // under a non-UTC server TZ. Casting to text keeps the API contract a
 // plain, unambiguous 'YYYY-MM-DD' regardless of the server's TZ config.
 const PERIODO_COLUMNS = "id, tenant_id, mes::text AS mes, estado, tolerancia_ars, cerrado_at, cerrado_por, created_at";
-
-function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === UNIQUE_VIOLATION;
-}
 
 /**
  * T38 (Fase 2): a cheap, dedicated lookup for the one thing detail/cerrar/

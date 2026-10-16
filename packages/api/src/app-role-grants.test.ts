@@ -292,6 +292,53 @@ describe('017_grant_app_role_remaining_tables: real privilege checks', () => {
     });
   });
 
+  describe('025: user_invites SELECT+INSERT+UPDATE granted; no DELETE (backoffice self-service)', () => {
+    it('app_role can SELECT, INSERT, and UPDATE user_invites (invalidate via consumed_at, same posture as users)', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: userRows } = await client.query(
+          `INSERT INTO users (email, password_hash, role) VALUES ($1, 'hash', 'cliente') RETURNING id`,
+          [`app-role-grants-test-invite-${Date.now()}@example.com`],
+        );
+        await client.query('SET ROLE app_role');
+        const { rows: inviteRows } = await client.query(
+          `INSERT INTO user_invites (user_id, token_hash, expires_at) VALUES ($1, 'tokenhash', now() + interval '7 days') RETURNING id`,
+          [userRows[0].id],
+        );
+        await expect(client.query('SELECT id FROM user_invites WHERE id = $1', [inviteRows[0].id])).resolves.toBeTruthy();
+        await expect(
+          client.query('UPDATE user_invites SET consumed_at = now() WHERE id = $1', [inviteRows[0].id]),
+        ).resolves.toBeTruthy();
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    });
+
+    it('app_role cannot DELETE user_invites', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: userRows } = await client.query(
+          `INSERT INTO users (email, password_hash, role) VALUES ($1, 'hash', 'cliente') RETURNING id`,
+          [`app-role-grants-test-invite-del-${Date.now()}@example.com`],
+        );
+        const { rows: inviteRows } = await client.query(
+          `INSERT INTO user_invites (user_id, token_hash, expires_at) VALUES ($1, 'tokenhash2', now() + interval '7 days') RETURNING id`,
+          [userRows[0].id],
+        );
+        await client.query('SET ROLE app_role');
+        await expect(client.query('DELETE FROM user_invites WHERE id = $1', [inviteRows[0].id])).rejects.toThrow(
+          /permission denied/i,
+        );
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    });
+  });
+
   describe('afip_tipo_map: deliberately not granted anything', () => {
     it('app_role cannot even SELECT afip_tipo_map (the app never queries it at request time — see afip-tipo-lookup.ts)', async () => {
       await expect(runAsAppRole('SELECT codigo FROM afip_tipo_map LIMIT 1', [])).rejects.toThrow(/permission denied/i);
