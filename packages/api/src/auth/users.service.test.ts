@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { createUser, listUsers, setUserActive } from './users.service';
+import { createInviteToken } from './invite-tokens';
 import { createTestTenant, createTestUser, deleteTestTenant, deleteTestUser } from '../test-support/pg-test-helpers';
 
 /**
@@ -112,6 +113,11 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
   });
 
   describe('setUserActive', () => {
+    // createTestUser() never creates a user_invites row — this also
+    // documents that a user with zero invite rows (e.g. a hand-seeded
+    // account like admin@admin.com, or any createTestUser() fixture) is
+    // never treated as NEVER_ONBOARDED, since that guard only applies to
+    // users who went through createUser()'s invite flow at all.
     it('activates a user and returns the updated row', async () => {
       const user = await createTestUser(pool, { isActive: false });
       createdUserIds.push(user.id);
@@ -128,9 +134,58 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
       expect(updated).toEqual({ id: user.id, is_active: false });
     });
 
-    it('returns null for an unknown user id', async () => {
+    it("returns 'NOT_FOUND' for an unknown user id", async () => {
       const updated = await setUserActive(pool, randomUUID(), true);
-      expect(updated).toBeNull();
+      expect(updated).toBe('NOT_FOUND');
+    });
+
+    it("refuses to activate a user created via createUser() who never accepted their invite ('NEVER_ONBOARDED'), without touching is_active", async () => {
+      const created = await createUser(pool, { email: email('never-onboarded'), role: 'admin', display_name: null, tenant_ids: [] });
+      createdUserIds.push(created.id);
+
+      const updated = await setUserActive(pool, created.id, true);
+      expect(updated).toBe('NEVER_ONBOARDED');
+
+      const { rows } = await pool.query<{ is_active: boolean }>('SELECT is_active FROM users WHERE id = $1', [created.id]);
+      expect(rows[0].is_active).toBe(false);
+    });
+
+    it('allows reactivating a user who genuinely accepted an invite at least once, even after being deactivated', async () => {
+      const created = await createUser(pool, { email: email('reactivate'), role: 'admin', display_name: null, tenant_ids: [] });
+      createdUserIds.push(created.id);
+      // Simulates having gone through accept-invite (PR3) at least once —
+      // that service doesn't exist yet on this branch, so this marks the
+      // same user_invites.accepted_at (+ consumed_at) columns it would have
+      // set on a genuine accept.
+      await pool.query('UPDATE user_invites SET consumed_at = now(), accepted_at = now() WHERE user_id = $1', [created.id]);
+      await setUserActive(pool, created.id, false); // e.g. offboarded, then reconsidered
+
+      const updated = await setUserActive(pool, created.id, true);
+      expect(updated).toEqual({ id: created.id, is_active: true });
+    });
+
+    it("regression: a RESEND (createInviteToken called again) must NOT look like acceptance — still 'NEVER_ONBOARDED' even though the old invite's consumed_at is now set", async () => {
+      const created = await createUser(pool, { email: email('resent-not-accepted'), role: 'admin', display_name: null, tenant_ids: [] });
+      createdUserIds.push(created.id);
+
+      // Mints a fresh invite the same way PR3's resend-invite endpoint will
+      // — createInviteToken() invalidates the first invite by setting ITS
+      // consumed_at, which must not be mistaken for a real accept.
+      const client = await pool.connect();
+      try {
+        await createInviteToken(client, created.id);
+      } finally {
+        client.release();
+      }
+
+      const { rows: consumedRows } = await pool.query<{ consumed_at: Date | null }>(
+        'SELECT consumed_at FROM user_invites WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
+        [created.id],
+      );
+      expect(consumedRows[0].consumed_at).not.toBeNull(); // the invalidated first invite
+
+      const updated = await setUserActive(pool, created.id, true);
+      expect(updated).toBe('NEVER_ONBOARDED');
     });
   });
 });
