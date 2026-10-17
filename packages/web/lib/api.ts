@@ -616,6 +616,112 @@ export async function updateTenant(tenantId: string, name: string, cuit: string 
   return res.json();
 }
 
+// --- backoffice self-service: users + email-invite flow (PR4) ---
+
+export type UserRole = 'admin' | 'colaborador' | 'cliente';
+
+/** Backoffice self-service (admin-only): a row from GET /api/users. */
+export interface UserRow {
+  id: string;
+  email: string;
+  role: UserRole;
+  display_name: string | null;
+  is_active: boolean;
+  created_at: string;
+  tenant_ids: string[];
+}
+
+/** POST /api/users never returns tenant_ids (that's a listUsers()-only join) or the raw invite token — only whether Resend accepted the email. */
+export interface CreateUserResult {
+  id: string;
+  email: string;
+  role: UserRole;
+  display_name: string | null;
+  is_active: boolean;
+  created_at: string;
+  invite_email_sent: boolean;
+}
+
+export async function listUsers(): Promise<UserRow[]> {
+  const res = await fetch(`${API_BASE_URL}/api/users`, { headers: authHeaders() });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Users fetch failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function createUser(input: {
+  email: string;
+  role: UserRole;
+  display_name: string | null;
+  tenant_ids: string[];
+}): Promise<CreateUserResult> {
+  const res = await fetch(`${API_BASE_URL}/api/users`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `User creation failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function setUserActive(userId: string, isActive: boolean): Promise<{ id: string; is_active: boolean }> {
+  const res = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `User update failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/** Mints a fresh invite (invalidating any still-valid one) and sends it — refused server-side (409) for an already-active user. */
+export async function resendInvite(userId: string): Promise<{ email: string; invite_email_sent: boolean }> {
+  const res = await fetch(`${API_BASE_URL}/api/users/${userId}/resend-invite`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Resend invite failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export interface PeekedInvite {
+  email: string;
+  display_name: string | null;
+}
+
+/** No bearer token — same reasoning as login(): whoever follows an invite link has no session yet, so handleUnauthorized's "clear session" doesn't apply here either. */
+export async function peekInvite(token: string): Promise<PeekedInvite> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/invite/${encodeURIComponent(token)}`);
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Invite lookup failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/** No bearer token, same reason as peekInvite()/login(). Returns a LoginResponse so the caller can setSession() immediately — no separate login step. */
+export async function acceptInvite(token: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/accept-invite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, `Accept invite failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /**
  * 2026-08-23 (client request, feature 3 de 3): "pantalla donde muestre el
  * resumen de unmatch de arca... tomando como filtro desde el mes en que
