@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
-import { createUser, listUsers, setUserActive } from './users.service';
-import { createInviteToken } from './invite-tokens';
+import { createUser, listUsers, resendInvite, setUserActive } from './users.service';
 import { createTestTenant, createTestUser, deleteTestTenant, deleteTestUser } from '../test-support/pg-test-helpers';
 
 /**
@@ -36,13 +35,14 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
   }
 
   describe('createUser', () => {
-    it('creates an admin with is_active=false, a throwaway password hash, and a fresh invite token', async () => {
+    it('creates an admin with is_active=false, a throwaway password hash, and a fresh invite token (invite_email_sent:false — no RESEND_API_KEY/APP_BASE_URL in this test env, documents the graceful-degradation contract from invite-email.ts)', async () => {
       const created = await createUser(pool, { email: email('admin'), role: 'admin', display_name: 'Admin User', tenant_ids: [] });
       createdUserIds.push(created.id);
 
       expect(created.is_active).toBe(false);
       expect(created.display_name).toBe('Admin User');
       expect(created.invite.rawToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(created.invite_email_sent).toBe(false);
 
       const { rows } = await pool.query<{ password_hash: string; is_active: boolean }>(
         'SELECT password_hash, is_active FROM users WHERE id = $1',
@@ -164,19 +164,11 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
       expect(updated).toEqual({ id: created.id, is_active: true });
     });
 
-    it("regression: a RESEND (createInviteToken called again) must NOT look like acceptance — still 'NEVER_ONBOARDED' even though the old invite's consumed_at is now set", async () => {
+    it("regression: resendInvite() must NOT look like acceptance — still 'NEVER_ONBOARDED' even though it sets consumed_at on the invalidated first invite", async () => {
       const created = await createUser(pool, { email: email('resent-not-accepted'), role: 'admin', display_name: null, tenant_ids: [] });
       createdUserIds.push(created.id);
 
-      // Mints a fresh invite the same way PR3's resend-invite endpoint will
-      // — createInviteToken() invalidates the first invite by setting ITS
-      // consumed_at, which must not be mistaken for a real accept.
-      const client = await pool.connect();
-      try {
-        await createInviteToken(client, created.id);
-      } finally {
-        client.release();
-      }
+      await resendInvite(pool, created.id);
 
       const { rows: consumedRows } = await pool.query<{ consumed_at: Date | null }>(
         'SELECT consumed_at FROM user_invites WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
@@ -186,6 +178,40 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
 
       const updated = await setUserActive(pool, created.id, true);
       expect(updated).toBe('NEVER_ONBOARDED');
+    });
+  });
+
+  describe('resendInvite', () => {
+    it('mints a fresh invite for an inactive user, invalidating the previous one', async () => {
+      const created = await createUser(pool, { email: email('resend'), role: 'admin', display_name: null, tenant_ids: [] });
+      createdUserIds.push(created.id);
+
+      const result = await resendInvite(pool, created.id);
+      expect(result).toEqual({ email: created.email, invite_email_sent: false });
+
+      const { rows } = await pool.query<{ consumed_at: Date | null }>(
+        'SELECT consumed_at FROM user_invites WHERE user_id = $1 ORDER BY created_at ASC',
+        [created.id],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows[0].consumed_at).not.toBeNull(); // the invite createUser() already made
+      expect(rows[1].consumed_at).toBeNull(); // the fresh one from resendInvite()
+    });
+
+    it("returns 'ALREADY_ACTIVE' for an active user, without touching user_invites", async () => {
+      const user = await createTestUser(pool, { isActive: true });
+      createdUserIds.push(user.id);
+
+      const result = await resendInvite(pool, user.id);
+      expect(result).toBe('ALREADY_ACTIVE');
+
+      const { rows } = await pool.query('SELECT id FROM user_invites WHERE user_id = $1', [user.id]);
+      expect(rows).toHaveLength(0);
+    });
+
+    it("returns 'NOT_FOUND' for an unknown user id", async () => {
+      const result = await resendInvite(pool, randomUUID());
+      expect(result).toBe('NOT_FOUND');
     });
   });
 });

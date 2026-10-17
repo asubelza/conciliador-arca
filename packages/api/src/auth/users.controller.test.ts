@@ -245,4 +245,39 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
       expect(res.status).toBe(403);
     });
   });
+
+  describe('POST /api/users/:id/resend-invite', () => {
+    it('mints a fresh invite for an inactive user and returns invite_email_sent (false — no Resend configured in tests)', async () => {
+      const user = await createTestUser(pool, { isActive: false });
+      createdUserIds.push(user.id);
+
+      const res = await request(app.getHttpServer()).post(`/api/users/${user.id}/resend-invite`).set('Authorization', adminAuth);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ email: user.email, invite_email_sent: false });
+
+      const { rows } = await pool.query('SELECT id FROM user_invites WHERE user_id = $1', [user.id]);
+      expect(rows).toHaveLength(1);
+    });
+
+    it('returns 409 for an already-active user', async () => {
+      const user = await createTestUser(pool, { isActive: true });
+      createdUserIds.push(user.id);
+
+      const res = await request(app.getHttpServer()).post(`/api/users/${user.id}/resend-invite`).set('Authorization', adminAuth);
+      expect(res.status).toBe(409);
+    });
+
+    it('returns 404 for an unknown user id', async () => {
+      const res = await request(app.getHttpServer()).post(`/api/users/${randomUUID()}/resend-invite`).set('Authorization', adminAuth);
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 403 as colaborador', async () => {
+      const user = await createTestUser(pool, { isActive: false });
+      createdUserIds.push(user.id);
+
+      const res = await request(app.getHttpServer()).post(`/api/users/${user.id}/resend-invite`).set('Authorization', colaboradorAuth);
+      expect(res.status).toBe(403);
+    });
+  });
 });

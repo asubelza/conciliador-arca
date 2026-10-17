@@ -81,6 +81,19 @@ services:
       # POSTGRES_PASSWORD above) -- rotate it if this ever needs to survive
       # being shared beyond this machine.
       JWT_SECRET: "5lwvp8aTXVBhlUED1Syq12iL19kBnUGonwXfd/9X5TMlkMRv+Fmeea83aCCKFts0"
+      # Backoffice self-service (invitación por email): RESEND_API_KEY/
+      # RESEND_FROM_EMAIL are empty here on purpose -- there's no real
+      # Resend account configured for this local stack yet. invite-email.ts
+      # never throws on a missing/failing send (see its module doc), so
+      # user creation still works; it just logs the failed send and
+      # reports invite_email_sent:false. Fill in real values once a Resend
+      # account + verified sending domain exist. APP_BASE_URL mirrors
+      # NEXT_PUBLIC_API_URL's own reasoning above `web`'s build args: must
+      # be reachable from the end user's browser, so localhost:3001 (the
+      # web service's published port), not http://web:3001.
+      RESEND_API_KEY: ""
+      RESEND_FROM_EMAIL: ""
+      APP_BASE_URL: "http://localhost:3001"
     ports:
       - "3002:3000"
     volumes:

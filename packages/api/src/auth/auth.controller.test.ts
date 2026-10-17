@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -5,6 +6,7 @@ import { Pool } from 'pg';
 import { AppModule } from '../app.module';
 import { createTestUser, deleteTestUser } from '../test-support/pg-test-helpers';
 import { signToken } from './jwt';
+import { hashInviteToken } from './invite-tokens';
 
 /**
  * T35/T36 — integration coverage for the real HTTP wiring of
@@ -116,6 +118,84 @@ describe('T35/T36: /api/auth (integration)', () => {
         await pool.query('UPDATE users SET is_active = false WHERE id = $1', [id]);
         const res = await request(app.getHttpServer()).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
         expect(res.status).toBe(200);
+      } finally {
+        await deleteTestUser(pool, id);
+      }
+    });
+  });
+
+  describe('GET /api/auth/invite/:token + POST /api/auth/accept-invite (backoffice self-service, no guard)', () => {
+    async function insertInvite(userId: string, overrides: { expiresInMs?: number; consumedAt?: Date } = {}): Promise<string> {
+      const rawToken = randomBytes(32).toString('hex');
+      await pool.query('INSERT INTO user_invites (user_id, token_hash, expires_at, consumed_at) VALUES ($1, $2, $3, $4)', [
+        userId,
+        hashInviteToken(rawToken),
+        new Date(Date.now() + (overrides.expiresInMs ?? 7 * 24 * 60 * 60 * 1000)),
+        overrides.consumedAt ?? null,
+      ]);
+      return rawToken;
+    }
+
+    it('GET /api/auth/invite/:token returns the invited email for a valid invite, no Authorization header needed', async () => {
+      const { id } = await createTestUser(pool, { isActive: false, email: 'invitee@example.com' });
+      try {
+        const rawToken = await insertInvite(id);
+        const res = await request(app.getHttpServer()).get(`/api/auth/invite/${rawToken}`);
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ email: 'invitee@example.com', display_name: null });
+      } finally {
+        await deleteTestUser(pool, id);
+      }
+    });
+
+    it('GET /api/auth/invite/:token returns 400 for a malformed token (never reaches the DB)', async () => {
+      const res = await request(app.getHttpServer()).get('/api/auth/invite/not-a-token');
+      expect(res.status).toBe(400);
+    });
+
+    it('GET /api/auth/invite/:token returns 404 for a well-formed but unknown token', async () => {
+      const res = await request(app.getHttpServer()).get(`/api/auth/invite/${'a'.repeat(64)}`);
+      expect(res.status).toBe(404);
+    });
+
+    it('POST /api/auth/accept-invite activates the user and returns a working token, no Authorization header needed', async () => {
+      const { id } = await createTestUser(pool, { isActive: false });
+      try {
+        const rawToken = await insertInvite(id);
+        const res = await request(app.getHttpServer()).post('/api/auth/accept-invite').send({ token: rawToken, password: 'a-brand-new-password' });
+        expect(res.status).toBe(200);
+        expect(typeof res.body.token).toBe('string');
+        expect(res.body.user).toMatchObject({ id });
+
+        const meRes = await request(app.getHttpServer()).get('/api/auth/me').set('Authorization', `Bearer ${res.body.token}`);
+        expect(meRes.status).toBe(200);
+      } finally {
+        await deleteTestUser(pool, id);
+      }
+    });
+
+    it('POST /api/auth/accept-invite returns 400 for a password shorter than 8 characters (never reaches the DB)', async () => {
+      const res = await request(app.getHttpServer()).post('/api/auth/accept-invite').send({ token: 'a'.repeat(64), password: 'short' });
+      expect(res.status).toBe(400);
+    });
+
+    it('POST /api/auth/accept-invite returns 410 for an expired invite', async () => {
+      const { id } = await createTestUser(pool, { isActive: false });
+      try {
+        const rawToken = await insertInvite(id, { expiresInMs: -1000 });
+        const res = await request(app.getHttpServer()).post('/api/auth/accept-invite').send({ token: rawToken, password: 'a-brand-new-password' });
+        expect(res.status).toBe(410);
+      } finally {
+        await deleteTestUser(pool, id);
+      }
+    });
+
+    it('POST /api/auth/accept-invite returns 410 for an already-used invite', async () => {
+      const { id } = await createTestUser(pool, { isActive: false });
+      try {
+        const rawToken = await insertInvite(id, { consumedAt: new Date() });
+        const res = await request(app.getHttpServer()).post('/api/auth/accept-invite').send({ token: rawToken, password: 'a-brand-new-password' });
+        expect(res.status).toBe(410);
       } finally {
         await deleteTestUser(pool, id);
       }
