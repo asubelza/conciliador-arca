@@ -1,0 +1,18 @@
+-- 026_alter_user_invites_add_accepted_at.sql
+-- Backoffice self-service (invitación por email): user_invites.consumed_at
+-- is overloaded between two different meanings — invite-tokens.ts's
+-- createInviteToken() sets it on a still-valid PRIOR invite purely to
+-- invalidate it when a fresh one is issued (e.g. resending), which is NOT
+-- the same event as the user genuinely accepting the invite. Code that
+-- needs to know "did this user ever actually complete the invite flow"
+-- (users.service.ts's setUserActive() NEVER_ONBOARDED guard) can't rely on
+-- consumed_at alone without false-positiving on an invalidated-by-resend
+-- row.
+--
+-- accepted_at disambiguates: it is set ONLY by accept-invite.service.ts's
+-- claimInvite (PR3), in the same atomic UPDATE that already sets
+-- consumed_at on a genuine accept — never touched by createInviteToken()'s
+-- invalidation UPDATE. consumed_at keeps its existing meaning ("this row
+-- is no longer a valid pending invite, for any reason"); accepted_at means
+-- specifically "this row was the one actually used to set a password."
+ALTER TABLE user_invites ADD COLUMN accepted_at TIMESTAMPTZ;
