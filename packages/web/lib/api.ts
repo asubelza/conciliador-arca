@@ -577,6 +577,7 @@ export interface TenantRow {
   id: string;
   name: string;
   cuit: string | null;
+  active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -608,6 +609,19 @@ export async function updateTenant(tenantId: string, name: string, cuit: string 
     method: 'PUT',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ name, cuit }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Tenant update failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function setTenantActive(tenantId: string, active: boolean): Promise<{ id: string; active: boolean }> {
+  const res = await fetch(`${API_BASE_URL}/api/tenants/${tenantId}`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ active }),
   });
   if (!res.ok) {
     handleUnauthorized(res);

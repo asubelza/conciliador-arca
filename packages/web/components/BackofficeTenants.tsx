@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { listTenants, type TenantRow } from '@/lib/api';
+import { listTenants, setTenantActive, type TenantRow } from '@/lib/api';
+import { ConfirmDialog } from './ConfirmDialog';
 import { SpinnerIcon } from './icons';
 import { TenantFormDialog } from './TenantFormDialog';
 
@@ -17,6 +18,8 @@ export function BackofficeTenants() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dialogState, setDialogState] = useState<{ tenant?: TenantRow } | null>(null);
+  const [toggleTarget, setToggleTarget] = useState<TenantRow | null>(null);
+  const [toggling, setToggling] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,6 +40,20 @@ export function BackofficeTenants() {
 
   function handleSaved() {
     void load();
+  }
+
+  async function handleToggleConfirm() {
+    if (!toggleTarget) return;
+    setToggling(true);
+    try {
+      await setTenantActive(toggleTarget.id, !toggleTarget.active);
+      setToggleTarget(null);
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo actualizar el tenant');
+    } finally {
+      setToggling(false);
+    }
   }
 
   return (
@@ -72,6 +89,7 @@ export function BackofficeTenants() {
               <tr>
                 <th className="px-4 py-2 font-medium">Nombre</th>
                 <th className="px-4 py-2 font-medium">CUIT</th>
+                <th className="px-4 py-2 font-medium">Estado</th>
                 <th className="px-4 py-2 font-medium" />
               </tr>
             </thead>
@@ -80,14 +98,34 @@ export function BackofficeTenants() {
                 <tr key={tenant.id}>
                   <td className="px-4 py-2 text-slate-800 dark:text-slate-200">{tenant.name}</td>
                   <td className="px-4 py-2 text-slate-600 dark:text-slate-400">{tenant.cuit ?? '—'}</td>
-                  <td className="px-4 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setDialogState({ tenant })}
-                      className="focus-ring rounded text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                  <td className="px-4 py-2">
+                    <span
+                      className={
+                        tenant.active
+                          ? 'inline-block rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                          : 'inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                      }
                     >
-                      Editar
-                    </button>
+                      {tenant.active ? 'Activo' : 'Inactivo'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <div className="flex items-center justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setDialogState({ tenant })}
+                        className="focus-ring rounded text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setToggleTarget(tenant)}
+                        className="focus-ring rounded text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                      >
+                        {tenant.active ? 'Desactivar' : 'Activar'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -98,6 +136,16 @@ export function BackofficeTenants() {
 
       {dialogState && (
         <TenantFormDialog tenant={dialogState.tenant} onClose={() => setDialogState(null)} onSaved={handleSaved} />
+      )}
+
+      {toggleTarget && (
+        <ConfirmDialog
+          title={toggleTarget.active ? 'Desactivar tenant' : 'Activar tenant'}
+          text={`¿Estás seguro de que deseas ${toggleTarget.active ? 'desactivar' : 'activar'} a ${toggleTarget.name}?`}
+          onConfirm={handleToggleConfirm}
+          onCancel={() => setToggleTarget(null)}
+          isLoading={toggling}
+        />
       )}
     </div>
   );

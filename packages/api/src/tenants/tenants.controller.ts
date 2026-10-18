@@ -5,7 +5,7 @@
  * matching; the user chose "por tenant" over a single global value when
  * asked during the conciliacion-periodica proposal review.
  */
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Patch, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { getPgPool } from '../db/pg-pool';
 import { isUuid, validateTenantIdParam, validateUpdateTenantConfigBody } from './tenants-validation';
@@ -34,6 +34,7 @@ export interface TenantRow {
   id: string;
   name: string;
   cuit: string | null;
+  active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -66,7 +67,7 @@ export class TenantsController {
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
-      'SELECT id, name, cuit, created_at, updated_at FROM tenants ORDER BY name ASC',
+      'SELECT id, name, cuit, active, created_at, updated_at FROM tenants ORDER BY name ASC',
     );
     return rows;
   }
@@ -86,7 +87,7 @@ export class TenantsController {
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
-      'INSERT INTO tenants (name, cuit) VALUES ($1, $2) RETURNING id, name, cuit, created_at, updated_at',
+      'INSERT INTO tenants (name, cuit) VALUES ($1, $2) RETURNING id, name, cuit, active, created_at, updated_at',
       [validation.value.name, validation.value.cuit],
     );
     return rows[0];
@@ -125,8 +126,46 @@ export class TenantsController {
     const { rows } = await pool.query<TenantRow>(
       `UPDATE tenants SET name = $1, cuit = $2, updated_at = now()
        WHERE id = $3
-       RETURNING id, name, cuit, created_at, updated_at`,
+       RETURNING id, name, cuit, active, created_at, updated_at`,
       [validation.value.name, validation.value.cuit, id],
+    );
+    if (rows.length === 0) {
+      throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
+    }
+    return rows[0];
+  }
+
+  /**
+   * Backoffice self-service (admin-only): disable/enable a tenant, mirroring
+   * users.controller.ts's PATCH :id setActive. A different HTTP verb than
+   * PUT :id above (that one edits name/cuit; this one only flips `active`) —
+   * no NEVER_ONBOARDED-style guard is needed here, unlike setUserActive:
+   * enabling a tenant has no extra precondition.
+   *
+   * Disabling only blocks `cliente`-role access to this tenant
+   * (tenant-access.ts's assertTenantAccess, cliente branch) — admin/colaborador
+   * are unaffected, so they can still reactivate it or do cleanup.
+   */
+  @Patch(':id')
+  async setActive(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
+    if (!isUuid(id)) {
+      throw new HttpException({ error: 'tenant id must be a UUID' }, HttpStatus.BAD_REQUEST);
+    }
+
+    const roleFailure = assertRole(req.user!, ['admin']);
+    if (roleFailure) {
+      throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+    }
+
+    const b = (body ?? {}) as Record<string, unknown>;
+    if (typeof b.active !== 'boolean') {
+      throw new HttpException({ error: 'active is required and must be a boolean' }, HttpStatus.BAD_REQUEST);
+    }
+
+    const pool = getPgPool();
+    const { rows } = await pool.query<{ id: string; active: boolean }>(
+      'UPDATE tenants SET active = $1, updated_at = now() WHERE id = $2 RETURNING id, active',
+      [b.active, id],
     );
     if (rows.length === 0) {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
