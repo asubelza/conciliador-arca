@@ -10,7 +10,7 @@
 import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { getPgPool } from '../db/pg-pool';
 import { validateLoginBody } from './auth-validation';
-import { login } from './auth.service';
+import { listMyTenants, login } from './auth.service';
 import { validateAcceptInviteBody, validateInviteTokenParam } from './accept-invite-validation';
 import { acceptInvite, peekInvite } from './accept-invite.service';
 import { AuthGuard, type AuthenticatedRequest } from './auth-guard';
@@ -38,6 +38,19 @@ export class AuthController {
   @UseGuards(AuthGuard)
   me(@Req() req: AuthenticatedRequest) {
     return { user: req.user };
+  }
+
+  /**
+   * Fase 3 (tenant-discovery): lets the frontend show a dropdown of tenant
+   * NAMES instead of making every role paste a raw tenant UUID into
+   * PeriodoSelector.tsx. A different path segment than `me` above, so
+   * NestJS routing has no ambiguity to resolve here (unlike, say, `:id`
+   * params that could collide with a literal segment).
+   */
+  @Get('me/tenants')
+  @UseGuards(AuthGuard)
+  async myTenants(@Req() req: AuthenticatedRequest) {
+    return listMyTenants(getPgPool(), req.user!);
   }
 
   /** No guard — lets the no-session "set your password" page (SetPasswordPage, PR4) show who the invite is for before the user submits anything. */

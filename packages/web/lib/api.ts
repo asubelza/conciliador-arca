@@ -111,6 +111,27 @@ export interface LoginResponse {
   user: SessionUser;
 }
 
+/**
+ * tenant-discovery: backs PeriodoSelector.tsx's tenant dropdown — lets a
+ * logged-in user see which tenant(s) they actually belong to instead of
+ * pasting a raw UUID. See auth.service.ts's listMyTenants for the
+ * role-scoped visibility rule (admin/colaborador: every tenant; cliente:
+ * only their own active ones).
+ */
+export interface MyTenantRow {
+  id: string;
+  name: string;
+}
+
+export async function listMyTenants(): Promise<MyTenantRow[]> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/me/tenants`, { headers: authHeaders() });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Tenants fetch failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /** POST /api/auth/login is the one endpoint that never needs a bearer token — it's what issues one. */
 export async function login(email: string, password: string): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE_URL}/api/auth/login`, {

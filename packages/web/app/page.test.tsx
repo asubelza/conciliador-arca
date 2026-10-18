@@ -4,7 +4,10 @@ import { setSession, clearSession } from '@/lib/session';
 import Home from './page';
 
 const TENANT_ID = '33333333-3333-3333-3333-333333333333';
+const TENANT_NAME = 'Tenant de prueba';
 const PERIODO_ID = '44444444-4444-4444-4444-444444444444';
+const MY_TENANTS_URL = '/api/auth/me/tenants';
+const myTenantsResponse = () => Promise.resolve({ ok: true, json: async () => [{ id: TENANT_ID, name: TENANT_NAME }] });
 
 const cerradoPeriodo = {
   id: PERIODO_ID,
@@ -71,6 +74,9 @@ type MockPeriodo = {
 function mockFetchByUrl(periodos: MockPeriodo[] = [cerradoPeriodo]) {
   return jest.fn((input) => {
     const url = typeof input === 'string' ? input : input.toString();
+    if (url.includes(MY_TENANTS_URL)) {
+      return myTenantsResponse();
+    }
     if (url.includes('/api/periodos?tenant_id=')) {
       return Promise.resolve({ ok: true, json: async () => ({ periodos }) });
     }
@@ -101,15 +107,15 @@ describe('T39: app/page.tsx (auth gate)', () => {
     render(<Home />);
     expect(screen.getByRole('heading', { name: /conciliador inteligente de comprobantes/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/^email$/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant/i)).not.toBeInTheDocument();
   });
 
-  it('shows the main app + user info + logout once a session exists', () => {
+  it('shows the main app + user info + logout once a session exists', async () => {
     global.fetch = mockFetchByUrl();
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
     render(<Home />);
 
-    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
     expect(screen.getByText('Ana')).toBeInTheDocument();
     expect(screen.getByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /cerrar sesión/i })).toBeInTheDocument();
@@ -122,7 +128,7 @@ describe('T39: app/page.tsx (auth gate)', () => {
     // tests in the same file.
     render(<Home />);
     expect(screen.getByRole('heading', { name: /conciliador inteligente de comprobantes/i })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant/i)).not.toBeInTheDocument();
   });
 });
 
@@ -158,16 +164,16 @@ describe('backoffice self-service: ?invite_token= precedence over the login/sess
     render(<Home />);
 
     expect(await screen.findByRole('heading', { name: 'Activar tu cuenta' })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant/i)).not.toBeInTheDocument();
   });
 
-  it('with no invite_token in the URL, a session goes straight to the main app as before', () => {
+  it('with no invite_token in the URL, a session goes straight to the main app as before', async () => {
     global.fetch = mockFetchByUrl();
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
 
     render(<Home />);
 
-    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
   });
 });
 
@@ -184,18 +190,22 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
   });
 
   it('is visible for an admin and swaps the tenant/período flow for BackofficeView', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    global.fetch = jest.fn((input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(MY_TENANTS_URL)) return myTenantsResponse();
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }) as unknown as typeof fetch;
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
 
     render(<Home />);
-    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Backoffice' }));
-    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant/i)).not.toBeInTheDocument();
     expect(await screen.findByText('No hay tenants todavía.')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Volver' }));
-    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
   });
 
   it('is hidden for a non-admin role', () => {
@@ -211,7 +221,11 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
     // only change the session snapshot, they don't unmount Home or reset
     // this state, so the render itself (not just the header button) must
     // re-check the role every time.
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    global.fetch = jest.fn((input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(MY_TENANTS_URL)) return myTenantsResponse();
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }) as unknown as typeof fetch;
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
 
     render(<Home />);
@@ -234,7 +248,8 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
  * today").
  */
 async function enterTenant() {
-  await userEvent.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+  const select = await screen.findByLabelText(/tenant/i);
+  await userEvent.selectOptions(select, TENANT_ID);
   await userEvent.click(screen.getByRole('button', { name: /ingresar/i }));
   await userEvent.click(await screen.findByRole('button', { name: /continuar al dashboard/i }));
 }
@@ -334,7 +349,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
     // Back at Dashboard for the SAME tenant — not bounced to tenant-entry.
     expect(await screen.findByRole('heading', { name: /Histórico/i })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/tenant id/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant/i)).not.toBeInTheDocument();
   });
 
   it('navigates to report view via the nav tab', async () => {
@@ -428,7 +443,7 @@ describe('role-based access control', () => {
 
   // The nav buttons (Dashboard/Circuito/Reporte/Histórico) only appear after
   // a período is selected, so roles must go through the same flow the app
-  // actually requires: paste tenant id -> Ingresar -> Continuar al dashboard
+  // actually requires: pick a tenant -> Ingresar -> Continuar al dashboard
   // -> Abrir the (single, abierto) período from the Dashboard.
   async function searchAndSelectPeriodo() {
     await enterTenant();
@@ -501,7 +516,7 @@ describe('zero-período tenant is not a dead end', () => {
     expect(await screen.findByText(/todavía no tiene períodos/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /Cambiar tenant/i }));
 
-    expect(await screen.findByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
   });
 });
 
@@ -522,7 +537,11 @@ describe('2026-10-11: Dashboard has a way back to tenant entry on fetch error', 
 
   it('shows "Cambiar tenant" on a listPeriodos failure and returns to PeriodoSelector on click', async () => {
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
-    global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'db down' }) })) as unknown as typeof fetch;
+    global.fetch = jest.fn((input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(MY_TENANTS_URL)) return myTenantsResponse();
+      return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'db down' }) });
+    }) as unknown as typeof fetch;
 
     render(<Home />);
     await enterTenant();
@@ -531,7 +550,7 @@ describe('2026-10-11: Dashboard has a way back to tenant entry on fetch error', 
 
     await userEvent.click(screen.getByRole('button', { name: /cambiar tenant/i }));
 
-    expect(screen.getByLabelText(/tenant id/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
     expect(screen.queryByText(/db down/i)).not.toBeInTheDocument();
   });
 });
@@ -553,6 +572,9 @@ describe('Dashboard mutation failures surface an accessible banner, not alert()'
     global.fetch = jest.fn((input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
       const method = (init as RequestInit | undefined)?.method ?? 'GET';
+      if (url.includes(MY_TENANTS_URL)) {
+        return myTenantsResponse();
+      }
       if (url.includes('/api/periodos?tenant_id=')) {
         return Promise.resolve({ ok: true, json: async () => ({ periodos: [] }) });
       }
@@ -606,6 +628,9 @@ describe('Fix 1 (2026-10-11): "Crear nuevo período" sends the local month, not 
     let createdBody: { tenant_id: string; mes: string } | null = null;
     global.fetch = jest.fn((input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(MY_TENANTS_URL)) {
+        return myTenantsResponse();
+      }
       if (url.includes('/api/periodos?tenant_id=')) {
         return Promise.resolve({ ok: true, json: async () => ({ periodos: [] }) });
       }
@@ -618,7 +643,8 @@ describe('Fix 1 (2026-10-11): "Crear nuevo período" sends the local month, not 
     setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
 
     render(<Home />);
-    await user.type(screen.getByLabelText(/tenant id/i), TENANT_ID);
+    const select = await screen.findByLabelText(/tenant/i);
+    await user.selectOptions(select, TENANT_ID);
     await user.click(screen.getByRole('button', { name: /ingresar/i }));
     await user.click(await screen.findByRole('button', { name: /continuar al dashboard/i }));
     await user.click(await screen.findByRole('button', { name: /Crear nuevo período/i }));
@@ -643,6 +669,9 @@ describe('Fix 2 (2026-10-11): opening a período clears a stale dashboardError b
   it('clears the dashboardError banner left by a failed "Reabrir" once a healthy período is opened', async () => {
     global.fetch = jest.fn((input) => {
       const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(MY_TENANTS_URL)) {
+        return myTenantsResponse();
+      }
       if (url.includes('/api/periodos?tenant_id=')) {
         return Promise.resolve({ ok: true, json: async () => ({ periodos: [abiertoPeriodo, cerradoPeriodo] }) });
       }

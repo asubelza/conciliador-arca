@@ -4,7 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { AppModule } from '../app.module';
-import { createTestUser, deleteTestUser } from '../test-support/pg-test-helpers';
+import { createTestUser, deleteTestUser, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
 import { signToken } from './jwt';
 import { hashInviteToken } from './invite-tokens';
 
@@ -120,6 +120,49 @@ describe('T35/T36: /api/auth (integration)', () => {
         expect(res.status).toBe(200);
       } finally {
         await deleteTestUser(pool, id);
+      }
+    });
+  });
+
+  describe('GET /api/auth/me/tenants (tenant-discovery)', () => {
+    it('returns 401 with no Authorization header', async () => {
+      const res = await request(app.getHttpServer()).get('/api/auth/me/tenants');
+      expect(res.status).toBe(401);
+    });
+
+    it('admin gets every tenant, as a plain array of {id, name}', async () => {
+      const tenantId = await createTestTenant(pool, 'Integration Admin Co');
+      const { id, email, password } = await createTestUser(pool, { role: 'admin' });
+      try {
+        const loginRes = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password });
+        const res = await request(app.getHttpServer())
+          .get('/api/auth/me/tenants')
+          .set('Authorization', `Bearer ${loginRes.body.token}`);
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body).toEqual(expect.arrayContaining([{ id: tenantId, name: 'Integration Admin Co' }]));
+      } finally {
+        await deleteTestUser(pool, id);
+        await deleteTestTenant(pool, tenantId);
+      }
+    });
+
+    it('cliente only gets their own active tenants', async () => {
+      const ownTenantId = await createTestTenant(pool, 'Integration Own Co');
+      const otherTenantId = await createTestTenant(pool, 'Integration Other Co');
+      const { id, email, password } = await createTestUser(pool, { role: 'cliente' });
+      try {
+        await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [id, ownTenantId]);
+        const loginRes = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password });
+        const res = await request(app.getHttpServer())
+          .get('/api/auth/me/tenants')
+          .set('Authorization', `Bearer ${loginRes.body.token}`);
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([{ id: ownTenantId, name: 'Integration Own Co' }]);
+      } finally {
+        await deleteTestUser(pool, id);
+        await deleteTestTenant(pool, ownTenantId);
+        await deleteTestTenant(pool, otherTenantId);
       }
     });
   });
