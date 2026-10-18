@@ -6,6 +6,7 @@ const TENANT = {
   id: '11111111-1111-1111-1111-111111111111',
   name: 'Existing Tenant',
   cuit: '30111111112',
+  active: true,
   created_at: '2026-01-01T00:00:00.000Z',
   updated_at: '2026-01-01T00:00:00.000Z',
 };
@@ -51,6 +52,31 @@ describe('BackofficeTenants', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(await screen.findByText('Brand New')).toBeInTheDocument();
+  });
+
+  it('toggles a tenant active/inactive via ConfirmDialog', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => [TENANT] }) // initial list
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: TENANT.id, active: false }) }) // PATCH
+      .mockResolvedValueOnce({ ok: true, json: async () => [{ ...TENANT, active: false }] }); // reload
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<BackofficeTenants />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Desactivar' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/Desactivar tenant/)).toBeInTheDocument();
+    await act(async () => {
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Confirmar' }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/api/tenants/${TENANT.id}`),
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ active: false }) }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByText('Inactivo')).toBeInTheDocument();
   });
 
   it('opens the edit dialog, prefilled, from a row\'s "Editar" link', async () => {

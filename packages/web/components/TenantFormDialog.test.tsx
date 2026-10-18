@@ -6,6 +6,7 @@ const TENANT = {
   id: '11111111-1111-1111-1111-111111111111',
   name: 'Existing Tenant',
   cuit: '30111111112',
+  active: true,
   created_at: '2026-01-01T00:00:00.000Z',
   updated_at: '2026-01-01T00:00:00.000Z',
 };

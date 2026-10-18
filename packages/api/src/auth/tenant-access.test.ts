@@ -47,6 +47,20 @@ describe('T37: assertTenantAccess (real Postgres)', () => {
     }
   });
 
+  it('cliente with a user_tenant_access row for a DISABLED tenant gets a 403, same shape as no membership', async () => {
+    const tenantId = await createTestTenant(pool);
+    const { id, email } = await createTestUser(pool, { role: 'cliente' });
+    try {
+      await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [id, tenantId]);
+      await pool.query('UPDATE tenants SET active = false WHERE id = $1', [tenantId]);
+      const result = await assertTenantAccess(pool, { id, email, role: 'cliente' }, tenantId);
+      expect(result).toEqual({ status: 403, error: 'no tenés acceso a este tenant' });
+    } finally {
+      await deleteTestUser(pool, id);
+      await deleteTestTenant(pool, tenantId);
+    }
+  });
+
   it('cliente with NO user_tenant_access row for that tenant gets a 403, not a 404 (never confirms/denies existence)', async () => {
     const tenantId = await createTestTenant(pool);
     const { id, email } = await createTestUser(pool, { role: 'cliente' });

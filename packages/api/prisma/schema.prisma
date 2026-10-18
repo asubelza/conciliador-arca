@@ -18,6 +18,10 @@ model Tenant {
   // T17 (RF-18, conciliacion-periodica): per-tenant amount-comparison
   // tolerance — see 014_alter_tenants_add_tolerancia.sql.
   toleranciaRedondeoArs Decimal  @default(0.99) @map("tolerancia_redondeo_ars") @db.Decimal(10, 2)
+  // Disable/enable toggle (backoffice self-service) — see
+  // 027_alter_tenants_add_active.sql. Blocks only `cliente`-role access
+  // (tenant-access.ts); admin/colaborador stay unaffected.
+  active                Boolean  @default(true)
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
