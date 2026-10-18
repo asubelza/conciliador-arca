@@ -466,7 +466,7 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   return (
     <div className="space-y-8">
       {showChangeTenantEscape && (
-        <div className="flex items-center justify-between gap-4">
+        <div className={`flex items-center gap-4 ${showClienteNoPeriodosYet ? 'justify-between' : 'justify-end'}`}>
           {showClienteNoPeriodosYet && (
             <p role="status" className="text-sm text-slate-600 dark:text-slate-300">
               Todavía no hay períodos para este tenant. Contactá a tu estudio contable para que cargue el primero.

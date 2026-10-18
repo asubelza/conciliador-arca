@@ -136,6 +136,19 @@ describe('DashboardShell', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  it('regresión: "Cambiar tenant" se mantiene alineado a la derecha cuando NO hay advertencia de cliente', async () => {
+    // El wrapper pasó de `justify-end` a una clase condicional para dejarle
+    // lugar al mensaje de arriba — con un solo hijo, `justify-between` lo
+    // empuja al extremo IZQUIERDO en vez de mantenerlo a la derecha.
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    renderDashboard();
+
+    const changeTenantBtn = await screen.findByRole('button', { name: /Cambiar tenant/i });
+    expect(changeTenantBtn.parentElement).toHaveClass('justify-end');
+    expect(changeTenantBtn.parentElement).not.toHaveClass('justify-between');
+  });
+
   it('cliente es de solo lectura pero puede seguir abriendo su período abierto (RF-28)', async () => {
     mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
     mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
