@@ -1,0 +1,14 @@
+-- 029_alter_tenants_add_estudio_id.sql
+-- Multi-estudio pivot, step 2 (028_init_estudios.sql added the table itself):
+-- links every tenant to the estudio it belongs to.
+--
+-- Nullable only TRANSIENTLY: every existing `tenants` row predates this
+-- column and has no estudio to point to yet.
+-- 031_seed_bootstrap_estudio_and_backfill.sql backfills every row to the
+-- bootstrap estudio and then locks this column NOT NULL in the same
+-- migration — by the time 031 finishes, `estudio_id` is a required,
+-- non-optional fact about every tenant. Split across two migrations only so
+-- each step (add column / seed+backfill+lock) stays independently
+-- reviewable, same "one change per file" style this repo already uses for
+-- other multi-step column additions.
+ALTER TABLE tenants ADD COLUMN estudio_id UUID REFERENCES estudios(id);

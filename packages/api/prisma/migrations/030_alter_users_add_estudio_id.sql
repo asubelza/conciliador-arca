@@ -1,0 +1,23 @@
+-- 030_alter_users_add_estudio_id.sql
+-- Multi-estudio pivot, step 3: links each user to the estudio they operate
+-- inside of.
+--
+-- Unlike tenants.estudio_id (029_alter_tenants_add_estudio_id.sql), this
+-- column stays nullable FOREVER, by design — it is NOT the same transient
+-- "not backfilled yet" state that column is in before 031 locks it NOT
+-- NULL. Here, NULL is a permanent, meaningful value:
+--   - `estudio_id IS NULL`  → platform-level staff: administers the SaaS
+--     itself (estudios, not tenants), with NO implicit access to any
+--     estudio's tenants. This is the new top-level role the pivot adds.
+--   - `estudio_id` set      → this user's existing role (`admin` /
+--     `colaborador` / `cliente` — the enum itself is unchanged by this
+--     pivot) applies scoped to that one estudio, same semantics as today
+--     but now bounded to a single estudio instead of implicitly "the only
+--     estudio there is".
+--
+-- 031_seed_bootstrap_estudio_and_backfill.sql backfills every user that
+-- exists *today* to the bootstrap estudio (so nobody's access regresses),
+-- but that backfill is a one-time migration of pre-existing rows, not a
+-- statement about the column's long-term nullability — new platform-staff
+-- accounts created after this point are expected to have estudio_id = NULL.
+ALTER TABLE users ADD COLUMN estudio_id UUID REFERENCES estudios(id);
