@@ -458,10 +458,20 @@ export function DashboardShell({ tenantId, userRole, onOpenPeriodo, onCreatePeri
   // different tenant.
   const showChangeTenantEscape = !loading && (!!error || (periodos !== null && periodos.length === 0));
 
+  // A cliente can't create períodos (admin/colaborador-only) — without this,
+  // a brand-new tenant with zero períodos leaves a cliente looking at 3
+  // empty-state cards (SectionA/B/C) with no indication of what to do next.
+  const showClienteNoPeriodosYet = userRole === 'cliente' && !loading && !error && periodos !== null && periodos.length === 0;
+
   return (
     <div className="space-y-8">
       {showChangeTenantEscape && (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between gap-4">
+          {showClienteNoPeriodosYet && (
+            <p role="status" className="text-sm text-slate-600 dark:text-slate-300">
+              Todavía no hay períodos para este tenant. Contactá a tu estudio contable para que cargue el primero.
+            </p>
+          )}
           <button
             type="button"
             onClick={onChangeTenant}
