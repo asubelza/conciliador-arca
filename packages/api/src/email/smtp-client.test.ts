@@ -50,6 +50,15 @@ describe('smtp-client: sendEmail', () => {
     });
   });
 
+  it('uses secure:true when SMTP_PORT is 465 (implicit TLS)', async () => {
+    process.env.SMTP_PORT = '465';
+    sendMailMock.mockResolvedValue(undefined);
+
+    await sendEmail({ to: 'user@example.com', subject: 's', html: 'h' });
+
+    expect(createTransportMock).toHaveBeenCalledWith(expect.objectContaining({ port: 465, secure: true }));
+  });
+
   it('falls back to SMTP_USER as the from address when SMTP_FROM is not set', async () => {
     sendMailMock.mockResolvedValue(undefined);
 

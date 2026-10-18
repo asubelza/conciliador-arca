@@ -2,12 +2,12 @@
  * users.controller.ts — backoffice self-service (admin-only): list/create
  * users, toggle active/inactive, and resend an invite. Actually sending
  * the email happens in users.service.ts (createUser/resendInvite) via
- * invite-email.ts/resend-client.ts.
+ * invite-email.ts/smtp-client.ts.
  *
  * createUser/resendInvite's responses deliberately omit the raw invite
  * token — it only ever exists in the DB (hashed); the admin only sees
- * `invite_email_sent` (whether Resend accepted it), never the token
- * itself. Manual verification without a real Resend account reads the raw
+ * `invite_email_sent` (whether the SMTP send succeeded), never the token
+ * itself. Manual verification without SMTP configured reads the raw
  * token straight from user_invites in Postgres, never from these
  * responses.
  */

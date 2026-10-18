@@ -38,7 +38,10 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
   const transporter = nodemailer.createTransport({
     host,
     port,
-    secure: false,
+    // 465 is Gmail's implicit-TLS SMTPS port (needs secure:true); every
+    // other port (587 by default) uses STARTTLS, which nodemailer expects
+    // secure:false for.
+    secure: port === 465,
     auth: { user, pass: password },
   });
 

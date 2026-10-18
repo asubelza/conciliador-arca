@@ -67,12 +67,12 @@ describe('invite-email: sendInviteEmail', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
-  it('returns {sent:false, error} without throwing when sendEmail rejects (Resend outage)', async () => {
-    sendEmailMock.mockRejectedValue(new Error('Resend API responded with 500: internal error'));
+  it('returns {sent:false, error} without throwing when sendEmail rejects (SMTP outage)', async () => {
+    sendEmailMock.mockRejectedValue(new Error('SMTP connection refused'));
 
     const result = await sendInviteEmail('user@example.com', null, 'tok');
 
-    expect(result).toEqual({ sent: false, error: 'Resend API responded with 500: internal error' });
+    expect(result).toEqual({ sent: false, error: 'SMTP connection refused' });
   });
 
   it('returns {sent:false, error} without throwing when APP_BASE_URL is not set', async () => {

@@ -35,7 +35,7 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
   }
 
   describe('createUser', () => {
-    it('creates an admin with is_active=false, a throwaway password hash, and a fresh invite token (invite_email_sent:false — no RESEND_API_KEY/APP_BASE_URL in this test env, documents the graceful-degradation contract from invite-email.ts)', async () => {
+    it('creates an admin with is_active=false, a throwaway password hash, and a fresh invite token (invite_email_sent:false — no SMTP_USER/SMTP_PASSWORD/APP_BASE_URL in this test env, documents the graceful-degradation contract from invite-email.ts)', async () => {
       const created = await createUser(pool, { email: email('admin'), role: 'admin', display_name: 'Admin User', tenant_ids: [] });
       createdUserIds.push(created.id);
 
