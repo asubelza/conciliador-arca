@@ -11,7 +11,7 @@
  * never evaluated. The user row, its user_tenant_access rows (role
  * 'cliente' only), and the invite token are all written in one
  * transaction. sendInviteEmail() is called AFTER that transaction commits
- * — it never throws (see invite-email.ts), so a Resend outage can't roll
+ * — it never throws (see invite-email.ts), so an SMTP outage can't roll
  * back or block the account that's already committed; invite_email_sent
  * on the result lets the admin know if it actually went out.
  */

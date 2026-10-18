@@ -247,7 +247,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
   });
 
   describe('POST /api/users/:id/resend-invite', () => {
-    it('mints a fresh invite for an inactive user and returns invite_email_sent (false — no Resend configured in tests)', async () => {
+    it('mints a fresh invite for an inactive user and returns invite_email_sent (false — no SMTP configured in tests)', async () => {
       const user = await createTestUser(pool, { isActive: false });
       createdUserIds.push(user.id);
 

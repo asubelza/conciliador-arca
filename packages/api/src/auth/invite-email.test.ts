@@ -1,11 +1,11 @@
-import { sendEmail } from '../email/resend-client';
+import { sendEmail } from '../email/smtp-client';
 import { sendInviteEmail } from './invite-email';
 
-jest.mock('../email/resend-client');
+jest.mock('../email/smtp-client');
 
 /**
- * invite-email.test.ts — mocks resend-client.ts (already proven against a
- * real `fetch` mock in resend-client.test.ts), per this PR's own
+ * invite-email.test.ts — mocks smtp-client.ts (already proven against a
+ * real `nodemailer` mock in smtp-client.test.ts), per this PR's own
  * convention: only one file mocks the genuine external boundary, everyone
  * built on top of it mocks that module instead.
  */
@@ -67,12 +67,12 @@ describe('invite-email: sendInviteEmail', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
-  it('returns {sent:false, error} without throwing when sendEmail rejects (Resend outage)', async () => {
-    sendEmailMock.mockRejectedValue(new Error('Resend API responded with 500: internal error'));
+  it('returns {sent:false, error} without throwing when sendEmail rejects (SMTP outage)', async () => {
+    sendEmailMock.mockRejectedValue(new Error('SMTP connection refused'));
 
     const result = await sendInviteEmail('user@example.com', null, 'tok');
 
-    expect(result).toEqual({ sent: false, error: 'Resend API responded with 500: internal error' });
+    expect(result).toEqual({ sent: false, error: 'SMTP connection refused' });
   });
 
   it('returns {sent:false, error} without throwing when APP_BASE_URL is not set', async () => {
