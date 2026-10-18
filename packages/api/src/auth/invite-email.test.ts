@@ -1,11 +1,11 @@
-import { sendEmail } from '../email/resend-client';
+import { sendEmail } from '../email/smtp-client';
 import { sendInviteEmail } from './invite-email';
 
-jest.mock('../email/resend-client');
+jest.mock('../email/smtp-client');
 
 /**
- * invite-email.test.ts — mocks resend-client.ts (already proven against a
- * real `fetch` mock in resend-client.test.ts), per this PR's own
+ * invite-email.test.ts — mocks smtp-client.ts (already proven against a
+ * real `nodemailer` mock in smtp-client.test.ts), per this PR's own
  * convention: only one file mocks the genuine external boundary, everyone
  * built on top of it mocks that module instead.
  */

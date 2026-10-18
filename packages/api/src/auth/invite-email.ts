@@ -1,13 +1,13 @@
 /**
  * invite-email.ts — backoffice self-service (invitación por email): sends
- * the "elegí tu contraseña" email via resend-client.ts. Never throws — a
- * Resend outage, or a deploy missing RESEND_API_KEY/RESEND_FROM_EMAIL/
+ * the "elegí tu contraseña" email via smtp-client.ts (Gmail SMTP). Never
+ * throws — an SMTP outage, or a deploy missing SMTP_USER/SMTP_PASSWORD/
  * APP_BASE_URL, must never roll back or block account creation (the user
  * + invite token are already committed by the time users.service.ts calls
  * this). Failures are logged and returned as {sent:false, error}, never
  * surfaced to the admin as an error on user creation itself.
  */
-import { sendEmail } from '../email/resend-client';
+import { sendEmail } from '../email/smtp-client';
 
 export interface InviteEmailResult {
   sent: boolean;
