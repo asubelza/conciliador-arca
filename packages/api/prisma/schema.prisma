@@ -22,10 +22,27 @@ model Tenant {
   // 027_alter_tenants_add_active.sql. Blocks only `cliente`-role access
   // (tenant-access.ts); admin/colaborador stay unaffected.
   active                Boolean  @default(true)
+  // Multi-estudio pivot: which estudio this tenant belongs to. NOT NULL —
+  // see 029_alter_tenants_add_estudio_id.sql (nullable only transiently)
+  // and 031_seed_bootstrap_estudio_and_backfill.sql (backfill + lock).
+  estudioId             String   @map("estudio_id")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
   @@map("tenants")
+}
+
+// Multi-estudio pivot: the new top level above `tenants` — other accounting
+// firms get their own estudios row. See 028_init_estudios.sql's module doc.
+// No FK of its own; nothing sits above it.
+model Estudio {
+  id        String   @id @default(uuid())
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("estudios")
 }
 
 // T14 (RF-14, conciliacion-periodica, 2026-08-22): `codigo` is a real AFIP
@@ -164,6 +181,12 @@ model User {
   role         String
   displayName  String?  @map("display_name")
   isActive     Boolean  @default(true) @map("is_active")
+  // Multi-estudio pivot: nullable FOREVER, by design — NULL means
+  // platform-level staff (no implicit access to any estudio's tenants); a
+  // value scopes this user's existing `role` to that one estudio. See
+  // 030_alter_users_add_estudio_id.sql's module doc for the full reasoning
+  // (this is NOT the same transient nullability as Tenant.estudioId).
+  estudioId    String?  @map("estudio_id")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
