@@ -10,7 +10,7 @@
 import type { Pool } from 'pg';
 import { verifyPassword } from './password';
 import { signToken } from './jwt';
-import type { UserRow, UserRole } from './users-types';
+import type { AuthenticatedUser, UserRow, UserRole } from './users-types';
 
 export type LoginFailure = { code: 'INVALID_CREDENTIALS'; status: 401; error: string };
 
@@ -45,4 +45,36 @@ export async function login(pool: Pool, email: string, password: string): Promis
     token,
     user: { id: user.id, email: user.email, role: user.role, display_name: user.display_name },
   };
+}
+
+export interface MyTenantRow {
+  id: string;
+  name: string;
+}
+
+/**
+ * listMyTenants — surfaces which tenant(s) a logged-in user belongs to, so
+ * the frontend (PeriodoSelector.tsx) can offer a dropdown of names instead
+ * of making every role paste a raw tenant UUID. Mirrors the exact
+ * visibility rule tenant-access.ts's assertTenantAccess already encodes:
+ * admin/colaborador see every tenant REGARDLESS of active (a single
+ * estudio's staff), cliente only sees tenants they have a
+ * user_tenant_access row for AND that are active (a disabled tenant already
+ * blocks a cliente via assertTenantAccess, so there's no point listing it
+ * here only to have it rejected on the next request).
+ */
+export async function listMyTenants(pool: Pool, user: AuthenticatedUser): Promise<MyTenantRow[]> {
+  if (user.role === 'admin' || user.role === 'colaborador') {
+    const { rows } = await pool.query<MyTenantRow>('SELECT id, name FROM tenants ORDER BY name ASC');
+    return rows;
+  }
+
+  const { rows } = await pool.query<MyTenantRow>(
+    `SELECT t.id, t.name FROM tenants t
+     JOIN user_tenant_access uta ON uta.tenant_id = t.id
+     WHERE uta.user_id = $1 AND t.active = true
+     ORDER BY t.name ASC`,
+    [user.id],
+  );
+  return rows;
 }
