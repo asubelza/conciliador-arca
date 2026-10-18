@@ -116,6 +116,39 @@ describe('DashboardShell', () => {
     expect(await screen.findByText(/todavía no tiene períodos/i)).toBeInTheDocument();
   });
 
+  it('cliente ve una advertencia explícita (no solo "vacío") cuando el tenant no tiene ningún período todavía', async () => {
+    // Un cliente no puede crear períodos (solo admin/colaborador) — sin este
+    // aviso, un tenant nuevo sin períodos le deja solo 3 tarjetas vacías sin
+    // ninguna pista de qué hacer al respecto.
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    renderDashboard({ userRole: 'cliente' });
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/todavía no hay períodos.*contactá a tu estudio contable/i);
+  });
+
+  it('admin NO ve la advertencia de cliente cuando el tenant no tiene períodos (ya tiene "Crear nuevo período")', async () => {
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    renderDashboard();
+
+    await screen.findByText(/todavía no tiene períodos/i);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('regresión: "Cambiar tenant" se mantiene alineado a la derecha cuando NO hay advertencia de cliente', async () => {
+    // El wrapper pasó de `justify-end` a una clase condicional para dejarle
+    // lugar al mensaje de arriba — con un solo hijo, `justify-between` lo
+    // empuja al extremo IZQUIERDO en vez de mantenerlo a la derecha.
+    mockedListPeriodos.mockResolvedValue([]);
+    mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
+    renderDashboard();
+
+    const changeTenantBtn = await screen.findByRole('button', { name: /Cambiar tenant/i });
+    expect(changeTenantBtn.parentElement).toHaveClass('justify-end');
+    expect(changeTenantBtn.parentElement).not.toHaveClass('justify-between');
+  });
+
   it('cliente es de solo lectura pero puede seguir abriendo su período abierto (RF-28)', async () => {
     mockedListPeriodos.mockResolvedValue([abiertoPeriodo]);
     mockedGetPendientesHistorico.mockResolvedValue(historicoVacio);
