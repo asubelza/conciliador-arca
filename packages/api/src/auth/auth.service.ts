@@ -16,7 +16,7 @@ export type LoginFailure = { code: 'INVALID_CREDENTIALS'; status: 401; error: st
 
 export interface LoginResult {
   token: string;
-  user: { id: string; email: string; role: UserRole; display_name: string | null };
+  user: { id: string; email: string; role: UserRole; display_name: string | null; estudio_id: string | null };
 }
 
 const INVALID_CREDENTIALS: LoginFailure = {
@@ -27,7 +27,7 @@ const INVALID_CREDENTIALS: LoginFailure = {
 
 export async function login(pool: Pool, email: string, password: string): Promise<LoginResult | LoginFailure> {
   const { rows } = await pool.query<UserRow>(
-    'SELECT id, email, password_hash, role, display_name, is_active FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, role, display_name, is_active, estudio_id FROM users WHERE email = $1',
     [email.trim().toLowerCase()],
   );
   const user = rows[0];
@@ -40,10 +40,10 @@ export async function login(pool: Pool, email: string, password: string): Promis
     return INVALID_CREDENTIALS;
   }
 
-  const token = signToken({ sub: user.id, role: user.role, email: user.email });
+  const token = signToken({ sub: user.id, role: user.role, email: user.email, estudio_id: user.estudio_id });
   return {
     token,
-    user: { id: user.id, email: user.email, role: user.role, display_name: user.display_name },
+    user: { id: user.id, email: user.email, role: user.role, display_name: user.display_name, estudio_id: user.estudio_id },
   };
 }
 
@@ -56,25 +56,35 @@ export interface MyTenantRow {
  * listMyTenants — surfaces which tenant(s) a logged-in user belongs to, so
  * the frontend (PeriodoSelector.tsx) can offer a dropdown of names instead
  * of making every role paste a raw tenant UUID. Mirrors the exact
- * visibility rule tenant-access.ts's assertTenantAccess already encodes:
- * admin/colaborador see every tenant REGARDLESS of active (a single
- * estudio's staff), cliente only sees tenants they have a
- * user_tenant_access row for AND that are active (a disabled tenant already
- * blocks a cliente via assertTenantAccess, so there's no point listing it
- * here only to have it rejected on the next request).
+ * visibility rule tenant-access.ts's assertTenantAccess already encodes,
+ * now estudio-scoped (multi-estudio pivot): a platform-level staff user
+ * (estudio_id === null) has no implicit access to any estudio's tenants, so
+ * this returns an empty list for them with no query at all. Otherwise
+ * admin/colaborador see every tenant WITHIN THEIR OWN estudio (REGARDLESS
+ * of active), cliente only sees tenants they have a user_tenant_access row
+ * for, that are active, AND that belong to their own estudio (defense-in-
+ * depth — a cliente's tenant_ids should never cross estudios by
+ * construction, but enforced here too, same as assertTenantAccess).
  */
 export async function listMyTenants(pool: Pool, user: AuthenticatedUser): Promise<MyTenantRow[]> {
+  if (user.estudio_id === null) {
+    return [];
+  }
+
   if (user.role === 'admin' || user.role === 'colaborador') {
-    const { rows } = await pool.query<MyTenantRow>('SELECT id, name FROM tenants ORDER BY name ASC');
+    const { rows } = await pool.query<MyTenantRow>(
+      'SELECT id, name FROM tenants WHERE estudio_id = $1 ORDER BY name ASC',
+      [user.estudio_id],
+    );
     return rows;
   }
 
   const { rows } = await pool.query<MyTenantRow>(
     `SELECT t.id, t.name FROM tenants t
      JOIN user_tenant_access uta ON uta.tenant_id = t.id
-     WHERE uta.user_id = $1 AND t.active = true
+     WHERE uta.user_id = $1 AND t.active = true AND t.estudio_id = $2
      ORDER BY t.name ASC`,
-    [user.id],
+    [user.id, user.estudio_id],
   );
   return rows;
 }

@@ -4,7 +4,14 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { AppModule } from '../app.module';
-import { createTestUser, deleteTestUser, createTestTenant, deleteTestTenant } from '../test-support/pg-test-helpers';
+import {
+  createTestUser,
+  deleteTestUser,
+  createTestTenant,
+  deleteTestTenant,
+  createTestEstudio,
+  deleteTestEstudio,
+} from '../test-support/pg-test-helpers';
 import { signToken } from './jwt';
 import { hashInviteToken } from './invite-tokens';
 
@@ -32,15 +39,17 @@ describe('T35/T36: /api/auth (integration)', () => {
 
   describe('POST /api/auth/login', () => {
     it('a correct email/password returns 200 with a token and the user (no password_hash leaked)', async () => {
-      const { id, email, password } = await createTestUser(pool, { role: 'colaborador' });
+      const estudioId = await createTestEstudio(pool);
+      const { id, email, password } = await createTestUser(pool, { role: 'colaborador', estudioId });
       try {
         const res = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password });
         expect(res.status).toBe(200);
         expect(typeof res.body.token).toBe('string');
-        expect(res.body.user).toEqual({ id, email, role: 'colaborador', display_name: null });
+        expect(res.body.user).toEqual({ id, email, role: 'colaborador', display_name: null, estudio_id: estudioId });
         expect(res.body.user.password_hash).toBeUndefined();
       } finally {
         await deleteTestUser(pool, id);
+        await deleteTestEstudio(pool, estudioId);
       }
     });
 
@@ -62,14 +71,16 @@ describe('T35/T36: /api/auth (integration)', () => {
 
   describe('GET /api/auth/me (AuthGuard)', () => {
     it('a valid token returns the authenticated user', async () => {
-      const { id, email, password } = await createTestUser(pool, { role: 'admin' });
+      const estudioId = await createTestEstudio(pool);
+      const { id, email, password } = await createTestUser(pool, { role: 'admin', estudioId });
       try {
         const loginRes = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password });
         const res = await request(app.getHttpServer()).get('/api/auth/me').set('Authorization', `Bearer ${loginRes.body.token}`);
         expect(res.status).toBe(200);
-        expect(res.body.user).toEqual({ id, email, role: 'admin' });
+        expect(res.body.user).toEqual({ id, email, role: 'admin', estudio_id: estudioId });
       } finally {
         await deleteTestUser(pool, id);
+        await deleteTestEstudio(pool, estudioId);
       }
     });
 
@@ -114,7 +125,7 @@ describe('T35/T36: /api/auth (integration)', () => {
       // needs tightening later.
       const { id } = await createTestUser(pool, { role: 'cliente' });
       try {
-        const token = signToken({ sub: id, role: 'cliente', email: 'whatever@example.com' });
+        const token = signToken({ sub: id, role: 'cliente', email: 'whatever@example.com', estudio_id: null });
         await pool.query('UPDATE users SET is_active = false WHERE id = $1', [id]);
         const res = await request(app.getHttpServer()).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
         expect(res.status).toBe(200);
@@ -163,6 +174,30 @@ describe('T35/T36: /api/auth (integration)', () => {
         await deleteTestUser(pool, id);
         await deleteTestTenant(pool, ownTenantId);
         await deleteTestTenant(pool, otherTenantId);
+      }
+    });
+
+    it('admin does not get a tenant that belongs to a different estudio than their own', async () => {
+      const estudioA = await createTestEstudio(pool, 'Estudio A');
+      const estudioB = await createTestEstudio(pool, 'Estudio B');
+      const tenantInA = await createTestTenant(pool, 'Tenant In A', undefined, estudioA);
+      const tenantInB = await createTestTenant(pool, 'Tenant In B', undefined, estudioB);
+      const { id, email, password } = await createTestUser(pool, { role: 'admin', estudioId: estudioA });
+      try {
+        const loginRes = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password });
+        const res = await request(app.getHttpServer())
+          .get('/api/auth/me/tenants')
+          .set('Authorization', `Bearer ${loginRes.body.token}`);
+        expect(res.status).toBe(200);
+        const ids = (res.body as Array<{ id: string }>).map((t) => t.id);
+        expect(ids).toContain(tenantInA);
+        expect(ids).not.toContain(tenantInB);
+      } finally {
+        await deleteTestUser(pool, id);
+        await deleteTestTenant(pool, tenantInA);
+        await deleteTestTenant(pool, tenantInB);
+        await deleteTestEstudio(pool, estudioA);
+        await deleteTestEstudio(pool, estudioB);
       }
     });
   });

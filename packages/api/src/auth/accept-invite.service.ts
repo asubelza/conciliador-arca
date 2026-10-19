@@ -37,11 +37,12 @@ interface InviteRow {
   email: string;
   role: UserRole;
   display_name: string | null;
+  estudio_id: string | null;
 }
 
 async function findInvite(client: Pool | PoolClient, rawToken: string): Promise<InviteRow | undefined> {
   const { rows } = await client.query<InviteRow>(
-    `SELECT ui.id, ui.user_id, ui.expires_at, ui.consumed_at, u.is_active, u.email, u.role, u.display_name
+    `SELECT ui.id, ui.user_id, ui.expires_at, ui.consumed_at, u.is_active, u.email, u.role, u.display_name, u.estudio_id
      FROM user_invites ui
      JOIN users u ON u.id = ui.user_id
      WHERE ui.token_hash = $1`,
@@ -87,7 +88,7 @@ async function claimInvite(client: PoolClient, rawToken: string): Promise<Invite
        AND ui.consumed_at IS NULL
        AND ui.expires_at > now()
        AND u.is_active = false
-     RETURNING ui.id, ui.user_id, ui.expires_at, ui.consumed_at, u.is_active, u.email, u.role, u.display_name`,
+     RETURNING ui.id, ui.user_id, ui.expires_at, ui.consumed_at, u.is_active, u.email, u.role, u.display_name, u.estudio_id`,
     [hashInviteToken(rawToken)],
   );
   return rows[0];
@@ -128,8 +129,11 @@ export async function acceptInvite(pool: Pool, rawToken: string, password: strin
     ]);
     await client.query('COMMIT');
 
-    const token = signToken({ sub: claimed.user_id, role: claimed.role, email: claimed.email });
-    return { token, user: { id: claimed.user_id, email: claimed.email, role: claimed.role, display_name: claimed.display_name } };
+    const token = signToken({ sub: claimed.user_id, role: claimed.role, email: claimed.email, estudio_id: claimed.estudio_id });
+    return {
+      token,
+      user: { id: claimed.user_id, email: claimed.email, role: claimed.role, display_name: claimed.display_name, estudio_id: claimed.estudio_id },
+    };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

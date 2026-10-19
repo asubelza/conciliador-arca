@@ -58,7 +58,8 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
   let tenantId: string;
   let periodoId: string;
   let worker: Worker;
-  const adminAuth = authHeaderFor('admin');
+  let estudioId: string;
+  let adminAuth: string;
 
   beforeAll(async () => {
     resetReconciliationQueueForTests();
@@ -72,6 +73,16 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
     tenantId = await createTestTenant(pool, 'reconciliations.controller.test');
     periodoId = await createTestPeriodo(pool, tenantId);
     worker = createReconciliationWorker(pool);
+    // Multi-estudio pivot: every other createTestTenant call in this file
+    // also omits estudioId, so they all land in the SAME lazily-created,
+    // per-file shared estudio (see pg-test-helpers.ts's defaultTestEstudioId)
+    // as this first tenant — reading it back here and threading it into
+    // adminAuth keeps the token estudio-matched with every tenant fixture.
+    const { rows } = await pool.query<{ estudio_id: string }>('SELECT estudio_id FROM tenants WHERE id = $1', [
+      tenantId,
+    ]);
+    estudioId = rows[0].estudio_id;
+    adminAuth = authHeaderFor('admin', { estudioId });
   });
 
   afterAll(async () => {
@@ -1037,7 +1048,7 @@ describe('T04/T05/T10: POST /api/reconciliations (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
         const res = await request(app.getHttpServer())
           .get(`/api/reconciliations/${jobId}/status`)
-          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+          .set('Authorization', authHeaderFor('cliente', { sub: userId, estudioId }));
         expect(res.status).toBe(200);
       } finally {
         await deleteTestUser(pool, userId);

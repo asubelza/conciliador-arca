@@ -11,6 +11,7 @@ export interface JwtPayload {
   sub: string; // user id
   role: UserRole;
   email: string;
+  estudio_id: string | null; // multi-estudio pivot: null means platform-level staff
 }
 
 const EXPIRES_IN = '12h';
@@ -32,10 +33,11 @@ export function verifyToken(token: string): JwtPayload | null {
   try {
     const decoded = jwt.verify(token, getJwtSecret());
     if (typeof decoded !== 'object' || decoded === null) return null;
-    const { sub, role, email } = decoded as Record<string, unknown>;
+    const { sub, role, email, estudio_id } = decoded as Record<string, unknown>;
     if (typeof sub !== 'string' || typeof role !== 'string' || typeof email !== 'string') return null;
     if (role !== 'admin' && role !== 'colaborador' && role !== 'cliente') return null;
-    return { sub, role, email };
+    if (typeof estudio_id !== 'string' && estudio_id !== null) return null;
+    return { sub, role, email, estudio_id };
   } catch {
     return null;
   }

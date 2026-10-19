@@ -101,14 +101,30 @@ describe('pg-test-helpers: multi-estudio pivot', () => {
     });
   });
 
-  describe('authHeaderFor: estudioId is accepted but not yet signed into the token (PR3 wires this up)', () => {
-    it('still returns a usable Bearer token when estudioId is passed', () => {
+  describe('authHeaderFor: estudioId is now signed into the token (PR3)', () => {
+    it('signs an explicit estudioId string into the token', () => {
+      const header = authHeaderFor('admin', { estudioId: 'some-estudio-id' });
+      const token = header.replace('Bearer ', '');
+      const payload = verifyToken(token);
+      expect(payload?.estudio_id).toBe('some-estudio-id');
+    });
+
+    it('signs an explicit estudioId: null (platform-staff) into the token, not coerced to a default', () => {
       const header = authHeaderFor('admin', { estudioId: null });
-      expect(header).toMatch(/^Bearer /);
+      const token = header.replace('Bearer ', '');
+      const payload = verifyToken(token);
+      expect(payload?.estudio_id).toBeNull();
+    });
+
+    it('defaults to a non-null, syntactically valid estudio_id when estudioId is omitted entirely', () => {
+      // NOT a real `estudios` row (see authHeaderFor's own doc comment) —
+      // just proves the omitted case still produces a token that passes
+      // jwt.ts's strict estudio_id shape check.
+      const header = authHeaderFor('admin');
       const token = header.replace('Bearer ', '');
       const payload = verifyToken(token);
       expect(payload).not.toBeNull();
-      expect(payload).not.toHaveProperty('estudio_id');
+      expect(typeof payload?.estudio_id).toBe('string');
     });
   });
 

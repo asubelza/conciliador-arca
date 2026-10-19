@@ -29,7 +29,8 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
   let tenantId: string;
-  const adminAuth = authHeaderFor('admin');
+  let estudioId: string;
+  let adminAuth: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -38,6 +39,15 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
 
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
     tenantId = await createTestTenant(pool, 'tenants.controller.test');
+    // Multi-estudio pivot: every other createTestTenant call in this file
+    // also omits estudioId, so they all land in the SAME lazily-created,
+    // per-file shared estudio (see pg-test-helpers.ts's defaultTestEstudioId)
+    // as this first tenant — reading it back here and threading it into
+    // every auth token below keeps admin/colaborador/cliente tokens
+    // estudio-matched with every tenant fixture in this file.
+    const { rows } = await pool.query<{ estudio_id: string }>('SELECT estudio_id FROM tenants WHERE id = $1', [tenantId]);
+    estudioId = rows[0].estudio_id;
+    adminAuth = authHeaderFor('admin', { estudioId });
   });
 
   afterAll(async () => {
@@ -55,12 +65,17 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(res.body).toEqual({ id: tenantId, tolerancia_redondeo_ars: '0.99', tolerancia_dias_fecha: 5 });
     });
 
-    it('returns 404 for an unknown tenant', async () => {
+    it('returns 403, not 404, for an unknown tenant (multi-estudio pivot: assertTenantAccess now requires a real matching row for admin too)', async () => {
+      // Pre-pivot, admin unconditionally passed assertTenantAccess and this
+      // controller's own tenant-existence check produced a clean 404. Now
+      // assertTenantAccess itself requires a REAL tenants row matching the
+      // admin's own estudio_id (tenant-access.ts) and intercepts first — a
+      // well-formed but nonexistent tenant id behaves the same as any other
+      // "not yours" tenant id: 403, never 404 (see tenant-access.ts's doc).
       const res = await request(app.getHttpServer())
         .get('/api/tenants/00000000-0000-0000-0000-000000000000/config')
         .set('Authorization', adminAuth);
-      expect(res.status).toBe(404);
-      expect(res.body).toEqual({ error: 'tenant not found' });
+      expect(res.status).toBe(403);
     });
 
     it('returns 400 for a malformed tenant id', async () => {
@@ -166,12 +181,11 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
   });
 
   describe('2026-08-23 (feature 3 de 3): GET /api/tenants/:id/pendientes-historico', () => {
-    it('returns 404 for an unknown tenant', async () => {
+    it('returns 403, not 404, for an unknown tenant (multi-estudio pivot: see tenant-access.ts)', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/tenants/00000000-0000-0000-0000-000000000000/pendientes-historico')
         .set('Authorization', adminAuth);
-      expect(res.status).toBe(404);
-      expect(res.body).toEqual({ error: 'tenant not found' });
+      expect(res.status).toBe(403);
     });
 
     it('returns 400 for a malformed tenant id', async () => {
@@ -230,7 +244,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     it('creates a voucher as colaborador', async () => {
       const res = await request(app.getHttpServer())
         .post(`/api/tenants/${tenantId}/comprobantes-arca`)
-        .set('Authorization', authHeaderFor('colaborador'))
+        .set('Authorization', authHeaderFor('colaborador', { estudioId }))
         .send(validBody());
       expect(res.status).toBe(201);
       expect(res.body.estado).toBe('pendiente');
@@ -304,13 +318,12 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(res.body.error).toMatch(/importe_total_ars/);
     });
 
-    it('returns 404 for an unknown tenant', async () => {
+    it('returns 403, not 404, for an unknown tenant (multi-estudio pivot: see tenant-access.ts)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/tenants/00000000-0000-0000-0000-000000000000/comprobantes-arca')
         .set('Authorization', adminAuth)
         .send(validBody());
-      expect(res.status).toBe(404);
-      expect(res.body).toEqual({ error: 'tenant not found' });
+      expect(res.status).toBe(403);
     });
 
     it('returns 409 when a conciliado voucher already exists with the same composite key, instead of a false success', async () => {
@@ -430,7 +443,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       const voucherId = await insertVoucher();
       const res = await request(app.getHttpServer())
         .post(`/api/tenants/${archivarTenantId}/comprobantes/${voucherId}/archivar`)
-        .set('Authorization', authHeaderFor('colaborador'))
+        .set('Authorization', authHeaderFor('colaborador', { estudioId }))
         .send({});
       expect(res.status).toBe(200);
       expect(res.body.estado).toBe('archivado');
@@ -579,7 +592,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       const voucherId = await insertVoucher();
       const res = await request(app.getHttpServer())
         .post(`/api/tenants/${desarchivarTenantId}/comprobantes/${voucherId}/desarchivar`)
-        .set('Authorization', authHeaderFor('colaborador'))
+        .set('Authorization', authHeaderFor('colaborador', { estudioId }))
         .send({});
       expect(res.status).toBe(200);
       expect(res.body.estado).toBe('pendiente');
@@ -765,13 +778,13 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns 404 for an unknown tenant', async () => {
+    it('returns 403, not 404, for an unknown tenant (multi-estudio pivot: see tenant-access.ts)', async () => {
       const voucherId = await insertVoucher();
       const res = await request(app.getHttpServer())
         .post('/api/tenants/00000000-0000-0000-0000-000000000000/comprobantes/archivar-lote')
         .set('Authorization', adminAuth)
         .send({ voucher_ids: [voucherId] });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(403);
     });
   });
 
@@ -904,14 +917,19 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(res.status).toBe(400);
     });
 
-    it('a nonexistent tenant id (admin, who always passes assertTenantAccess) exports an empty file rather than erroring, since there is no separate tenant-existence check here unlike GET .../pendientes-historico', async () => {
+    it('returns 403 for a nonexistent tenant id (multi-estudio pivot: admin no longer always passes assertTenantAccess — see tenant-access.ts)', async () => {
+      // Pre-pivot, admin unconditionally passed assertTenantAccess, so this
+      // route's lack of its own separate tenant-existence check meant a
+      // bogus tenant id silently exported an empty file. Now
+      // assertTenantAccess itself requires a real matching tenants row for
+      // admin too, and rejects with 403 before this handler's own logic
+      // ever runs.
       const voucherId = await insertVoucher(); // belongs to exportTenantId, not the bogus id below
       const res = await request(app.getHttpServer())
         .post('/api/tenants/00000000-0000-0000-0000-000000000000/pendientes-historico/export')
         .set('Authorization', adminAuth)
         .send({ voucher_ids: [voucherId], format: 'csv' });
-      expect(res.status).toBe(200);
-      expect(res.text.trim().split('\n')).toHaveLength(1); // header only — no row matches tenant_id = the bogus id
+      expect(res.status).toBe(403);
     });
 
     it('is allowed for a cliente with access (read/export posture, same as GET .../pendientes-historico)', async () => {
@@ -921,7 +939,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, exportTenantId]);
         const res = await request(app.getHttpServer())
           .post(`/api/tenants/${exportTenantId}/pendientes-historico/export`)
-          .set('Authorization', authHeaderFor('cliente', { sub: userId }))
+          .set('Authorization', authHeaderFor('cliente', { sub: userId, estudioId }))
           .send({ voucher_ids: [voucherId], format: 'csv' });
         expect(res.status).toBe(200);
       } finally {
@@ -1007,13 +1025,12 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
       expect(after.body.tolerancia_dias_fecha).toBe(before.body.tolerancia_dias_fecha);
     });
 
-    it('returns 404 for an unknown tenant', async () => {
+    it('returns 403, not 404, for an unknown tenant (multi-estudio pivot: see tenant-access.ts)', async () => {
       const res = await request(app.getHttpServer())
         .put('/api/tenants/00000000-0000-0000-0000-000000000000/config')
         .set('Authorization', adminAuth)
         .send({ tolerancia_redondeo_ars: 1, tolerancia_dias_fecha: 5 });
-      expect(res.status).toBe(404);
-      expect(res.body).toEqual({ error: 'tenant not found' });
+      expect(res.status).toBe(403);
     });
   });
 
@@ -1041,7 +1058,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     it('GET as colaborador is allowed (read access is open to all 3 roles)', async () => {
       const res = await request(app.getHttpServer())
         .get(`/api/tenants/${tenantId}/config`)
-        .set('Authorization', authHeaderFor('colaborador'));
+        .set('Authorization', authHeaderFor('colaborador', { estudioId }));
       expect(res.status).toBe(200);
     });
 
@@ -1063,7 +1080,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
         const res = await request(app.getHttpServer())
           .get(`/api/tenants/${tenantId}/config`)
-          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+          .set('Authorization', authHeaderFor('cliente', { sub: userId, estudioId }));
         expect(res.status).toBe(200);
       } finally {
         await deleteTestUser(pool, userId);
@@ -1078,7 +1095,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
     it('GET .../pendientes-historico as colaborador is allowed (read access is open to all 3 roles)', async () => {
       const res = await request(app.getHttpServer())
         .get(`/api/tenants/${tenantId}/pendientes-historico`)
-        .set('Authorization', authHeaderFor('colaborador'));
+        .set('Authorization', authHeaderFor('colaborador', { estudioId }));
       expect(res.status).toBe(200);
     });
 
@@ -1100,7 +1117,7 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
         const res = await request(app.getHttpServer())
           .get(`/api/tenants/${tenantId}/pendientes-historico`)
-          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+          .set('Authorization', authHeaderFor('cliente', { sub: userId, estudioId }));
         expect(res.status).toBe(200);
       } finally {
         await deleteTestUser(pool, userId);

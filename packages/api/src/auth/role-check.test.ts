@@ -2,7 +2,9 @@ import { assertRole } from './role-check';
 import type { AuthenticatedUser } from './users-types';
 
 function user(role: AuthenticatedUser['role']): AuthenticatedUser {
-  return { id: 'u1', email: 'u@example.com', role };
+  // estudio_id is irrelevant here — assertRole is a deliberately separate,
+  // orthogonal axis from estudio scoping (see tenant-access.ts).
+  return { id: 'u1', email: 'u@example.com', role, estudio_id: 'estudio-1' };
 }
 
 describe('T37: assertRole', () => {
