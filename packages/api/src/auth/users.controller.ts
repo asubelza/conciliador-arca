@@ -17,6 +17,7 @@ import { isForeignKeyViolation, isUniqueViolation } from '../db/pg-errors';
 import { isUuid } from '../tenants/tenants-validation';
 import { AuthGuard, type AuthenticatedRequest } from './auth-guard';
 import { assertRole } from './role-check';
+import { requireEstudioId } from './estudio-access';
 import { validateCreateUserBody } from './users-validation';
 import { createUser, listUsers, resendInvite, setUserActive } from './users.service';
 
@@ -29,8 +30,9 @@ export class UsersController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
-    return listUsers(getPgPool());
+    return listUsers(getPgPool(), estudioId);
   }
 
   @Post()
@@ -44,9 +46,10 @@ export class UsersController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
     try {
-      const { invite, ...user } = await createUser(getPgPool(), validation.value, req.user!.estudio_id);
+      const { invite, ...user } = await createUser(getPgPool(), validation.value, estudioId);
       return user;
     } catch (err) {
       if (isUniqueViolation(err)) {
@@ -69,13 +72,14 @@ export class UsersController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
     const b = (body ?? {}) as Record<string, unknown>;
     if (typeof b.is_active !== 'boolean') {
       throw new HttpException({ error: 'is_active is required and must be a boolean' }, HttpStatus.BAD_REQUEST);
     }
 
-    const updated = await setUserActive(getPgPool(), id, b.is_active);
+    const updated = await setUserActive(getPgPool(), id, b.is_active, estudioId);
     if (updated === 'NOT_FOUND') {
       throw new HttpException({ error: 'user not found' }, HttpStatus.NOT_FOUND);
     }
@@ -100,8 +104,9 @@ export class UsersController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
-    const result = await resendInvite(getPgPool(), id as string);
+    const result = await resendInvite(getPgPool(), id as string, estudioId);
     if (result === 'NOT_FOUND') {
       throw new HttpException({ error: 'user not found' }, HttpStatus.NOT_FOUND);
     }
