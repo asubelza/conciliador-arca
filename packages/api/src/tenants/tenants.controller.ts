@@ -51,12 +51,13 @@ export interface TenantRow {
 @UseGuards(AuthGuard)
 export class TenantsController {
   /**
-   * Backoffice self-service (admin-only): list every tenant. No tenant `:id`
-   * to scope by, so there's no assertTenantAccess call here — admin already
-   * sees every tenant implicitly (same posture assertTenantAccess itself
-   * grants admin/colaborador), this just exposes that same visibility as a
-   * real endpoint instead of only being true "by omission" inside
-   * assertTenantAccess.
+   * Backoffice self-service (admin-only): list every tenant WITHIN THE
+   * CALLER'S OWN ESTUDIO. No tenant `:id` to scope by, so this can't go
+   * through assertTenantAccess — it filters by req.user.estudio_id
+   * directly, the same boundary assertTenantAccess itself now enforces
+   * (multi-estudio pivot). Platform-level staff (estudio_id === null) gets
+   * 403, not an empty list — same "no implicit access to any estudio"
+   * posture as listMyTenants/assertTenantAccess.
    */
   @Get()
   async listTenants(@Req() req: AuthenticatedRequest) {
@@ -64,15 +65,26 @@ export class TenantsController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    if (req.user!.estudio_id === null) {
+      throw new HttpException({ error: 'no tenés acceso a este tenant' }, HttpStatus.FORBIDDEN);
+    }
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
-      'SELECT id, name, cuit, active, created_at, updated_at FROM tenants ORDER BY name ASC',
+      'SELECT id, name, cuit, active, created_at, updated_at FROM tenants WHERE estudio_id = $1 ORDER BY name ASC',
+      [req.user!.estudio_id],
     );
     return rows;
   }
 
-  /** Backoffice self-service (admin-only): create a tenant (name + cuit only — see tenants-admin-validation.ts). */
+  /**
+   * Backoffice self-service (admin-only): create a tenant (name + cuit only
+   * — see tenants-admin-validation.ts) INSIDE the caller's own estudio.
+   * estudio_id always comes from req.user, never the request body — same
+   * posture as every other estudio-scoped write in this pivot. Platform-
+   * level staff (estudio_id === null) gets 403: tenants belong to an
+   * estudio, and platform staff doesn't have one.
+   */
   @Post()
   async createTenant(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
     const validation = validateCreateTenantBody(body);
@@ -84,11 +96,14 @@ export class TenantsController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    if (req.user!.estudio_id === null) {
+      throw new HttpException({ error: 'no tenés acceso a este tenant' }, HttpStatus.FORBIDDEN);
+    }
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
-      'INSERT INTO tenants (name, cuit) VALUES ($1, $2) RETURNING id, name, cuit, active, created_at, updated_at',
-      [validation.value.name, validation.value.cuit],
+      'INSERT INTO tenants (name, cuit, estudio_id) VALUES ($1, $2, $3) RETURNING id, name, cuit, active, created_at, updated_at',
+      [validation.value.name, validation.value.cuit, req.user!.estudio_id],
     );
     return rows[0];
   }
@@ -101,9 +116,13 @@ export class TenantsController {
    * :id/config with unrelated fields.
    *
    * No assertTenantAccess call here (unlike the :id-scoped GET routes
-   * below): assertRole already restricts this route to 'admin', and
-   * assertTenantAccess unconditionally no-ops for 'admin', so calling it
-   * would only be dead code pretending to be a scoping check.
+   * below): assertRole already restricts this route to 'admin'. Multi-
+   * estudio pivot: assertTenantAccess is no longer an unconditional no-op
+   * for admin, but calling it here would still be redundant with the
+   * `AND estudio_id = $N` already in the UPDATE's WHERE below — a tenant
+   * belonging to another estudio simply doesn't match any row, collapsing
+   * "not found" and "not yours" into the same 404 (no existence leak,
+   * same posture as tenant-access.ts's own doc).
    */
   @Put(':id')
   async updateTenant(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
@@ -125,9 +144,9 @@ export class TenantsController {
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
       `UPDATE tenants SET name = $1, cuit = $2, updated_at = now()
-       WHERE id = $3
+       WHERE id = $3 AND estudio_id = $4
        RETURNING id, name, cuit, active, created_at, updated_at`,
-      [validation.value.name, validation.value.cuit, id],
+      [validation.value.name, validation.value.cuit, id, req.user!.estudio_id],
     );
     if (rows.length === 0) {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
@@ -145,6 +164,9 @@ export class TenantsController {
    * Disabling only blocks `cliente`-role access to this tenant
    * (tenant-access.ts's assertTenantAccess, cliente branch) — admin/colaborador
    * are unaffected, so they can still reactivate it or do cleanup.
+   *
+   * Multi-estudio pivot: `AND estudio_id = $N` in the UPDATE's WHERE, same
+   * "not found" vs "not yours" collapsing as updateTenant above.
    */
   @Patch(':id')
   async setActive(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
@@ -164,8 +186,8 @@ export class TenantsController {
 
     const pool = getPgPool();
     const { rows } = await pool.query<{ id: string; active: boolean }>(
-      'UPDATE tenants SET active = $1, updated_at = now() WHERE id = $2 RETURNING id, active',
-      [b.active, id],
+      'UPDATE tenants SET active = $1, updated_at = now() WHERE id = $2 AND estudio_id = $3 RETURNING id, active',
+      [b.active, id, req.user!.estudio_id],
     );
     if (rows.length === 0) {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
