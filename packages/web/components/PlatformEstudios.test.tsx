@@ -129,6 +129,43 @@ describe('PlatformEstudios (multi-estudio pivot, PR8)', () => {
     expect(screen.queryByRole('button', { name: 'Desactivar' })).not.toBeInTheDocument();
   });
 
+  it('a slow initial load resolving AFTER a faster create-triggered reload does not overwrite the newer list (code review: request-sequencing guard)', async () => {
+    const created = { ...ESTUDIO, id: '22222222-2222-2222-2222-222222222222', name: 'Created While Slow Load Pending' };
+    let resolveSlowInitialLoad!: (value: { ok: true; json: () => Promise<typeof ESTUDIO[]> }) => void;
+    const slowInitialLoad = new Promise((resolve) => {
+      resolveSlowInitialLoad = resolve;
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockReturnValueOnce(slowInitialLoad) // initial GET — deliberately left pending
+      .mockResolvedValueOnce({ ok: true, status: 201, json: async () => created }) // POST
+      .mockResolvedValueOnce({ ok: true, json: async () => [created] }); // reload after create — resolves first
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<PlatformEstudios userRole="admin" />);
+    expect(screen.getByText('Cargando…')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Nuevo estudio' }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Nombre'), 'Created While Slow Load Pending');
+    await act(async () => {
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Guardar' }));
+    });
+
+    expect(await screen.findByText('Created While Slow Load Pending')).toBeInTheDocument();
+
+    // The slow initial GET finally resolves, with data from BEFORE the
+    // create — without the sequencing guard this would overwrite the list
+    // back to empty.
+    await act(async () => {
+      resolveSlowInitialLoad({ ok: true, json: async () => [] });
+    });
+
+    expect(screen.getByText('Created While Slow Load Pending')).toBeInTheDocument();
+    expect(screen.queryByText('No hay estudios todavía.')).not.toBeInTheDocument();
+  });
+
   it('shows an error message when the list fails to load', async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'boom' }) }) as unknown as typeof fetch;
 

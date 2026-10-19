@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { listEstudios, setEstudioActive, type EstudioRow, type InviteAdminResult, type UserRole } from '@/lib/api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { EstudioFormDialog } from './EstudioFormDialog';
@@ -36,16 +36,30 @@ export function PlatformEstudios({ userRole }: PlatformEstudiosProps) {
   const [inviteTarget, setInviteTarget] = useState<EstudioRow | null>(null);
   const [toggleTarget, setToggleTarget] = useState<EstudioRow | null>(null);
   const [toggling, setToggling] = useState(false);
+  // Code review: load() can be called again (create/toggle) before a
+  // slower in-flight call resolves — without this, that earlier call's
+  // stale response can land AFTER the newer one and silently overwrite it
+  // with pre-mutation data. Each call stamps its own request, and only the
+  // most recent one is allowed to commit its result.
+  const latestRequestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++latestRequestRef.current;
     setLoading(true);
     setError(null);
     try {
-      setEstudios(await listEstudios());
+      const rows = await listEstudios();
+      if (requestId === latestRequestRef.current) {
+        setEstudios(rows);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudieron cargar los estudios');
+      if (requestId === latestRequestRef.current) {
+        setError(err instanceof Error ? err.message : 'No se pudieron cargar los estudios');
+      }
     } finally {
-      setLoading(false);
+      if (requestId === latestRequestRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 

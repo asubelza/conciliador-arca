@@ -381,123 +381,133 @@ export default function Home() {
             even has a chance to render. */}
         {isPlatformStaff && <PlatformView userRole={userRole} />}
 
-        {/* Guarded here too (not just at the header button) — `showBackoffice`
-            is local state that survives a logout/login in the same tab
-            (clearSession() doesn't unmount Home or reset it), so without this
-            check a non-admin who logs in right after an admin toggled it on
-            would see the admin-only BackofficeView. */}
-        {!isPlatformStaff && showBackoffice && userRole === 'admin' && <BackofficeView />}
+        {/* Wrapped once rather than prefixing `!isPlatformStaff &&` on each
+            branch below — that repeated-at-every-call-site version is
+            exactly the shape a future addition under `main` could forget
+            to copy; wrapping makes "nothing here renders for platform
+            staff" structurally true instead of relying on each branch
+            remembering it. */}
+        {!isPlatformStaff && (
+          <>
+            {/* Guarded here too (not just at the header button) — `showBackoffice`
+                is local state that survives a logout/login in the same tab
+                (clearSession() doesn't unmount Home or reset it), so without this
+                check a non-admin who logs in right after an admin toggled it on
+                would see the admin-only BackofficeView. */}
+            {showBackoffice && userRole === 'admin' && <BackofficeView />}
 
-        {!isPlatformStaff && !(showBackoffice && userRole === 'admin') && !tenantId && (
-          <PeriodoSelector onSelected={handleTenantSelected} />
-        )}
-
-        {!isPlatformStaff && !(showBackoffice && userRole === 'admin') && tenantId && (
-          <div className="flex flex-col gap-6">
-            {/* Nav tabs only make sense once a período round-trips into the
-                existing circuit/report — Dashboard is the entry point.
-                Fixed position at the top regardless of `view` — it used to
-                sit right after the Dashboard block, which only renders for
-                view === 'dashboard', so the tabs visibly jumped to the
-                bottom of the (now much taller) dashboard content on that
-                view and stayed at the top on every other view. */}
-            {periodo && (
-              <div className="flex w-fit gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-card dark:border-slate-800 dark:bg-slate-900">
-                <button
-                  type="button"
-                  onClick={() => setView('dashboard')}
-                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
-                >
-                  Dashboard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView('circuit')}
-                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'circuit' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
-                >
-                  Circuito
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView('report')}
-                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'report' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
-                >
-                  Reporte
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView('pendientes-historico')}
-                  className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'pendientes-historico' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
-                >
-                  Histórico
-                </button>
-              </div>
+            {!(showBackoffice && userRole === 'admin') && !tenantId && (
+              <PeriodoSelector onSelected={handleTenantSelected} />
             )}
 
-            {/* Section A: Período en curso (Dashboard) */}
-            {view === 'dashboard' && dashboardError && (
-              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
-                {dashboardError}
-              </p>
+            {!(showBackoffice && userRole === 'admin') && tenantId && (
+                <div className="flex flex-col gap-6">
+              {/* Nav tabs only make sense once a período round-trips into the
+                  existing circuit/report — Dashboard is the entry point.
+                  Fixed position at the top regardless of `view` — it used to
+                  sit right after the Dashboard block, which only renders for
+                  view === 'dashboard', so the tabs visibly jumped to the
+                  bottom of the (now much taller) dashboard content on that
+                  view and stayed at the top on every other view. */}
+              {periodo && (
+                <div className="flex w-fit gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-card dark:border-slate-800 dark:bg-slate-900">
+                  <button
+                    type="button"
+                    onClick={() => setView('dashboard')}
+                    className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                  >
+                    Dashboard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView('circuit')}
+                    className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'circuit' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                  >
+                    Circuito
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView('report')}
+                    className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'report' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                  >
+                    Reporte
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView('pendientes-historico')}
+                    className={`focus-ring rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${view === 'pendientes-historico' ? 'bg-indigo-600 text-white shadow-card' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}
+                  >
+                    Histórico
+                  </button>
+                </div>
+              )}
+  
+              {/* Section A: Período en curso (Dashboard) */}
+              {view === 'dashboard' && dashboardError && (
+                <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-400">
+                  {dashboardError}
+                </p>
+              )}
+              {view === 'dashboard' && (
+                <Dashboard
+                  tenantId={tenantId}
+                  userRole={userRole}
+                  onOpenPeriodo={handleOpenPeriodo}
+                  onChangeTenant={handleChangeTenant}
+                  onCreatePeriodo={async (mes) => {
+                    try {
+                      setDashboardError(null);
+                      const newPeriodo = await createPeriodo(tenantId, mes);
+                      handleOpenPeriodo(newPeriodo);
+                    } catch (err) {
+                      console.error('Error creating período:', err);
+                      setDashboardError('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
+                      throw err;
+                    }
+                  }}
+                  onReopenPeriodo={async (p) => {
+                    // La confirmación ya la hace el ConfirmDialog interno del
+                    // Dashboard (SectionB); acá solo ejecutamos la operación.
+                    try {
+                      setDashboardError(null);
+                      const { periodo: reopened } = await reabrirPeriodo(p.id);
+                      if (periodo?.id === p.id) setPeriodo(reopened);
+                    } catch (err) {
+                      console.error('Error reopening período:', err);
+                      setDashboardError('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
+                      throw err;
+                    }
+                  }}
+                  onDeletePeriodo={async (p) => {
+                    // La confirmación ya la hace el ConfirmDialog interno del
+                    // Dashboard (SectionA).
+                    try {
+                      setDashboardError(null);
+                      await eliminarPeriodo(p.id);
+                      if (periodo?.id === p.id) setPeriodo(null);
+                    } catch (err) {
+                      console.error('Error deleting período:', err);
+                      setDashboardError('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
+                      throw err;
+                    }
+                  }}
+                  // RF-26: "Ver reporte" on a closed período (Section B) also
+                  // round-trips through the existing circuit view verbatim —
+                  // for a cerrado período that view renders PeriodoReportViewer
+                  // by default (see renderCircuitView's estado ternary below).
+                  onViewReport={handleOpenPeriodo}
+                />
+              )}
+  
+              {/* Render the selected view */}
+              {view === 'circuit' && renderCircuitView()}
+              {view === 'report' && renderReportView()}
+              {view === 'pendientes-historico' && renderPendientesHistoricoView()}
+  
+              {/* Dashboard is the default - rendered above */}
+            </div>
             )}
-            {view === 'dashboard' && (
-              <Dashboard
-                tenantId={tenantId}
-                userRole={userRole}
-                onOpenPeriodo={handleOpenPeriodo}
-                onChangeTenant={handleChangeTenant}
-                onCreatePeriodo={async (mes) => {
-                  try {
-                    setDashboardError(null);
-                    const newPeriodo = await createPeriodo(tenantId, mes);
-                    handleOpenPeriodo(newPeriodo);
-                  } catch (err) {
-                    console.error('Error creating período:', err);
-                    setDashboardError('Error al crear período: ' + (err instanceof Error ? err.message : String(err)));
-                    throw err;
-                  }
-                }}
-                onReopenPeriodo={async (p) => {
-                  // La confirmación ya la hace el ConfirmDialog interno del
-                  // Dashboard (SectionB); acá solo ejecutamos la operación.
-                  try {
-                    setDashboardError(null);
-                    const { periodo: reopened } = await reabrirPeriodo(p.id);
-                    if (periodo?.id === p.id) setPeriodo(reopened);
-                  } catch (err) {
-                    console.error('Error reopening período:', err);
-                    setDashboardError('Error al reabrir período: ' + (err instanceof Error ? err.message : String(err)));
-                    throw err;
-                  }
-                }}
-                onDeletePeriodo={async (p) => {
-                  // La confirmación ya la hace el ConfirmDialog interno del
-                  // Dashboard (SectionA).
-                  try {
-                    setDashboardError(null);
-                    await eliminarPeriodo(p.id);
-                    if (periodo?.id === p.id) setPeriodo(null);
-                  } catch (err) {
-                    console.error('Error deleting período:', err);
-                    setDashboardError('Error al eliminar período: ' + (err instanceof Error ? err.message : String(err)));
-                    throw err;
-                  }
-                }}
-                // RF-26: "Ver reporte" on a closed período (Section B) also
-                // round-trips through the existing circuit view verbatim —
-                // for a cerrado período that view renders PeriodoReportViewer
-                // by default (see renderCircuitView's estado ternary below).
-                onViewReport={handleOpenPeriodo}
-              />
-            )}
-
-            {/* Render the selected view */}
-            {view === 'circuit' && renderCircuitView()}
-            {view === 'report' && renderReportView()}
-            {view === 'pendientes-historico' && renderPendientesHistoricoView()}
-
-            {/* Dashboard is the default - rendered above */}
-          </div>
+          </>
         )}
       </main>
     </div>
