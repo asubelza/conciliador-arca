@@ -12,7 +12,7 @@ import { isUuid, validateTenantIdParam, validateUpdateTenantConfigBody } from '.
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
-import type { AuthenticatedUser } from '../auth/users-types';
+import { requireEstudioId } from '../auth/estudio-access';
 import { fetchPendientesHistorico, fetchVouchersForExport } from './pendientes-historico';
 import { validateComprobanteArcaManualRequest } from './comprobante-arca-manual-validation';
 import { createComprobanteArcaManual } from './comprobante-arca-manual';
@@ -38,23 +38,6 @@ export interface TenantRow {
   active: boolean;
   created_at: string;
   updated_at: string;
-}
-
-/**
- * Multi-estudio pivot: every estudio-scoped write/list in this controller
- * needs the caller's OWN estudio_id, and platform-level staff (null) must
- * be rejected with the SAME 403 assertTenantAccess itself uses for that
- * case — factored into one helper (rather than four copies of the same
- * inline check) specifically so a future route can't end up missing it the
- * way updateTenant/setActive originally did (caught in code review: both
- * relied on `estudio_id = NULL` never matching a row instead of 403ing
- * explicitly, which is correct-by-accident, not correct-by-construction).
- */
-function requireEstudioId(user: AuthenticatedUser): string {
-  if (user.estudio_id === null) {
-    throw new HttpException({ error: 'no tenés acceso a este tenant' }, HttpStatus.FORBIDDEN);
-  }
-  return user.estudio_id;
 }
 
 /**

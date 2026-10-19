@@ -81,7 +81,7 @@ export async function listUsers(pool: Pool, estudioId: string): Promise<UserList
 export async function createUser(
   pool: Pool,
   input: CreateUserRequestBody,
-  creatorEstudioId: string | null,
+  estudioId: string,
 ): Promise<CreatedUser> {
   const client = await pool.connect();
   let user: { id: string; email: string; role: UserRole; display_name: string | null; is_active: boolean; created_at: string };
@@ -90,19 +90,22 @@ export async function createUser(
     await client.query('BEGIN');
 
     const throwawayPasswordHash = await hashPassword(randomUUID());
-    // Multi-estudio pivot: the new user always inherits the CREATING admin's
-    // own estudio_id, never a value from the request body (the body has no
-    // such field — estudio membership is derived from the caller, same
-    // posture as every other estudio-scoped write in this pivot). If the
-    // caller is platform-level staff (estudio_id === null), the new user is
-    // also platform-level — this route isn't meant for that case in
-    // practice (PR6's platform/estudios module is), but it's a harmless,
-    // self-consistent default rather than a crash.
+    // Multi-estudio pivot: the new user's estudio_id always comes from the
+    // CALLER, never the request body (it has no such field). Today that's
+    // the creating admin's own estudio_id — users.controller.ts's
+    // requireEstudioId() already rejects platform-level staff with 403
+    // before this is ever called, so `estudioId` here is never null. PR6's
+    // platform/estudios.controller.ts invite-admin endpoint reuses this
+    // same function but passes the NEW estudio's id instead (a platform-
+    // staff caller inviting that estudio's first admin) — the "caller's
+    // own estudio" framing doesn't generalize past this controller, but
+    // the parameter itself ("which estudio does the new user belong to")
+    // does.
     const { rows } = await client.query<typeof user>(
       `INSERT INTO users (email, password_hash, role, display_name, is_active, estudio_id)
        VALUES ($1, $2, $3, $4, false, $5)
        RETURNING id, email, role, display_name, is_active, created_at`,
-      [input.email, throwawayPasswordHash, input.role, input.display_name, creatorEstudioId],
+      [input.email, throwawayPasswordHash, input.role, input.display_name, estudioId],
     );
     user = rows[0];
 

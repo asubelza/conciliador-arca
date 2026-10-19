@@ -17,23 +17,9 @@ import { isForeignKeyViolation, isUniqueViolation } from '../db/pg-errors';
 import { isUuid } from '../tenants/tenants-validation';
 import { AuthGuard, type AuthenticatedRequest } from './auth-guard';
 import { assertRole } from './role-check';
-import type { AuthenticatedUser } from './users-types';
+import { requireEstudioId } from './estudio-access';
 import { validateCreateUserBody } from './users-validation';
 import { createUser, listUsers, resendInvite, setUserActive } from './users.service';
-
-/**
- * Multi-estudio pivot: every route in this controller manages users WITHIN
- * one estudio — platform-level staff (estudio_id === null) gets 403, same
- * posture (and same reasoning) as tenants.controller.ts's own
- * requireEstudioId(): managing a SaaS-wide list of estudios/their admins is
- * platform/estudios.controller.ts's job (PR6), not this one.
- */
-function requireEstudioId(user: AuthenticatedUser): string {
-  if (user.estudio_id === null) {
-    throw new HttpException({ error: 'no tenés acceso a los usuarios de este estudio' }, HttpStatus.FORBIDDEN);
-  }
-  return user.estudio_id;
-}
 
 @Controller('api/users')
 @UseGuards(AuthGuard)

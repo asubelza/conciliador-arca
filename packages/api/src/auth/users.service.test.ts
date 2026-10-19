@@ -126,20 +126,6 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
       ]);
       expect(rows[0].estudio_id).toBe(estudioId);
     });
-
-    it('a platform-level creator (estudio_id null) creates a platform-level user — not silently assigned to a random estudio', async () => {
-      const created = await createUser(
-        pool,
-        { email: email('platform-created'), role: 'admin', display_name: null, tenant_ids: [] },
-        null,
-      );
-      createdUserIds.push(created.id);
-
-      const { rows } = await pool.query<{ estudio_id: string | null }>('SELECT estudio_id FROM users WHERE id = $1', [
-        created.id,
-      ]);
-      expect(rows[0].estudio_id).toBeNull();
-    });
   });
 
   describe('listUsers', () => {
