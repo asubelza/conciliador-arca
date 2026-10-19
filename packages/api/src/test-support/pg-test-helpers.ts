@@ -10,17 +10,78 @@ import { signToken } from '../auth/jwt';
 import type { UserRole } from '../auth/users-types';
 
 /**
+ * Multi-estudio pivot (028_init_estudios.sql): `estudios` is the new top
+ * level above `tenants` — no FK of its own, nothing sits above it.
+ */
+export async function createTestEstudio(pool: Pool, name = 'Test Estudio'): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>('INSERT INTO estudios (name) VALUES ($1) RETURNING id', [name]);
+  return rows[0].id;
+}
+
+/**
+ * Multi-estudio pivot (029/031): `tenants.estudio_id` is NOT NULL, so every
+ * tenant needs *some* estudio to point to. The overwhelming majority of the
+ * ~700 existing call sites predate the pivot and don't care which estudio
+ * they land in — lazily creating ONE shared estudio per test file and
+ * reusing it for every tenant/user that doesn't pass its own `estudioId`
+ * keeps those call sites unchanged. This module-level variable is safe as a
+ * per-FILE cache, not a global singleton: Jest gives each test file its own
+ * module registry (confirmed — jest.api.json sets no custom
+ * testEnvironment/worker options that would change this default), so it
+ * resets to `null` for every file and is never shared across files running
+ * in parallel.
+ *
+ * Caches the IN-FLIGHT promise, not just its eventual value, so concurrent
+ * callers within the same tick (e.g. two createTestTenant calls awaited in
+ * Promise.all) share one INSERT instead of racing two. A REJECTED promise
+ * is cleared back to `null` in the `.catch` below — otherwise one transient
+ * DB hiccup on the first call would poison every subsequent test in the
+ * file with the same rejection forever (a rejected promise is still
+ * truthy, so the `if (!sharedTestEstudioId)` guard alone would never retry).
+ */
+let sharedTestEstudioId: Promise<string> | null = null;
+
+function defaultTestEstudioId(pool: Pool): Promise<string> {
+  if (!sharedTestEstudioId) {
+    sharedTestEstudioId = createTestEstudio(pool, 'Shared Test Estudio').catch((err: unknown) => {
+      sharedTestEstudioId = null;
+      throw err;
+    });
+  }
+  return sharedTestEstudioId;
+}
+
+/**
  * `createdAt` (2026-08-23, feature 3 de 3): pendientes-historico.ts filters
  * ARCA pendiente vouchers against the tenant's own `created_at` (alta
  * date) — tests of that boundary need to control it directly rather than
  * relying on whatever `now()` happens to be when the test runs.
+ *
+ * `estudioId` (multi-estudio pivot): defaults to the shared per-file test
+ * estudio (see `defaultTestEstudioId` above) — pass one explicitly only
+ * when a test asserts estudio-level isolation.
  */
-export async function createTestTenant(pool: Pool, name = 'Test Tenant', createdAt?: string): Promise<string> {
+export async function createTestTenant(
+  pool: Pool,
+  name = 'Test Tenant',
+  createdAt?: string,
+  estudioId?: string,
+): Promise<string> {
   const id = randomUUID();
+  const resolvedEstudioId = estudioId ?? (await defaultTestEstudioId(pool));
   if (createdAt) {
-    await pool.query('INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, $3)', [id, name, createdAt]);
+    await pool.query('INSERT INTO tenants (id, name, created_at, estudio_id) VALUES ($1, $2, $3, $4)', [
+      id,
+      name,
+      createdAt,
+      resolvedEstudioId,
+    ]);
   } else {
-    await pool.query('INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, now())', [id, name]);
+    await pool.query('INSERT INTO tenants (id, name, created_at, estudio_id) VALUES ($1, $2, now(), $3)', [
+      id,
+      name,
+      resolvedEstudioId,
+    ]);
   }
   return id;
 }
@@ -44,10 +105,20 @@ export async function createTestPeriodo(pool: Pool, tenantId: string, mes = '202
  * T33/T34 (autenticacion-roles): creates a real, correctly-hashed test
  * user (real bcrypt, not a stub) so login tests exercise the actual
  * password-verification path, not a shortcut.
+ *
+ * `estudioId` (multi-estudio pivot): defaults to the SAME shared per-file
+ * estudio `createTestTenant` defaults to, so an admin/colaborador created
+ * without specifying anything lands in the same estudio as a tenant
+ * created without specifying anything — this is what makes
+ * `assertTenantAccess`'s future estudio-scoped check (PR3) pass by default
+ * for existing tests that don't care about estudio isolation. `null` is a
+ * real, distinct value (platform-staff user, see
+ * 030_alter_users_add_estudio_id.sql) — checked explicitly below so an
+ * explicit `estudioId: null` is never coerced back to the default by `??`.
  */
 export async function createTestUser(
   pool: Pool,
-  overrides: { email?: string; password?: string; role?: UserRole; isActive?: boolean } = {},
+  overrides: { email?: string; password?: string; role?: UserRole; isActive?: boolean; estudioId?: string | null } = {},
 ): Promise<{ id: string; email: string; password: string }> {
   // users.email has a CHECK (email = lower(email)) constraint (migration
   // 018) — normalize here the same way any real account-creation path
@@ -58,9 +129,10 @@ export async function createTestUser(
   const password = overrides.password ?? 'correct-horse-battery-staple';
   const role = overrides.role ?? 'admin';
   const passwordHash = await hashPassword(password);
+  const estudioId = overrides.estudioId === null ? null : overrides.estudioId ?? (await defaultTestEstudioId(pool));
   const { rows } = await pool.query<{ id: string }>(
-    'INSERT INTO users (email, password_hash, role, is_active) VALUES ($1, $2, $3, $4) RETURNING id',
-    [email, passwordHash, role, overrides.isActive ?? true],
+    'INSERT INTO users (email, password_hash, role, is_active, estudio_id) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+    [email, passwordHash, role, overrides.isActive ?? true, estudioId],
   );
   return { id: rows[0].id, email, password };
 }
@@ -77,8 +149,19 @@ export async function createTestUser(
  * fabricated `cliente` from this helper alone always fails
  * assertTenantAccess, which is what most tests want by default (a plain
  * admin token that always passes).
+ *
+ * `estudioId` (multi-estudio pivot, PR2 of 8): accepted here now so PR3-6
+ * call sites that need an estudio-scoped token don't have to be touched a
+ * second time. Deliberately NOT yet threaded into the signed token —
+ * `JwtPayload`/`signToken` (jwt.ts) don't have an `estudio_id` field yet;
+ * that's PR3's change, alongside `assertTenantAccess`'s estudio-scoped
+ * check. Until PR3 lands and extends `JwtPayload`, this param is a
+ * documented no-op placeholder.
  */
-export function authHeaderFor(role: UserRole = 'admin', overrides: { sub?: string; email?: string } = {}): string {
+export function authHeaderFor(
+  role: UserRole = 'admin',
+  overrides: { sub?: string; email?: string; estudioId?: string | null } = {},
+): string {
   const token = signToken({
     sub: overrides.sub ?? randomUUID(),
     role,
@@ -90,6 +173,21 @@ export function authHeaderFor(role: UserRole = 'admin', overrides: { sub?: strin
 export async function deleteTestUser(pool: Pool, userId: string): Promise<void> {
   await pool.query('DELETE FROM user_tenant_access WHERE user_id = $1', [userId]);
   await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+}
+
+/**
+ * For tests that create their OWN throwaway estudio to assert isolation —
+ * not for the shared default estudio created lazily by createTestTenant/
+ * createTestUser (never deleted; it lives for the test file's duration and
+ * is dropped along with the rest of the test DB).
+ *
+ * `tenants.estudio_id` REFERENCES estudios(id) with no ON DELETE CASCADE
+ * (029_alter_tenants_add_estudio_id.sql) and is NOT NULL, so callers must
+ * delete every tenant under this estudio first (deleteTestTenant) — same
+ * FK-ordering discipline as deleteTestTenant's own comments below.
+ */
+export async function deleteTestEstudio(pool: Pool, estudioId: string): Promise<void> {
+  await pool.query('DELETE FROM estudios WHERE id = $1', [estudioId]);
 }
 
 export async function deleteTestTenant(pool: Pool, tenantId: string): Promise<void> {
