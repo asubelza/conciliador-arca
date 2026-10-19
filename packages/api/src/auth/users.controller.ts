@@ -46,7 +46,7 @@ export class UsersController {
     }
 
     try {
-      const { invite, ...user } = await createUser(getPgPool(), validation.value);
+      const { invite, ...user } = await createUser(getPgPool(), validation.value, req.user!.estudio_id);
       return user;
     } catch (err) {
       if (isUniqueViolation(err)) {

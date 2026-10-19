@@ -4,7 +4,15 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { Pool } from 'pg';
 import { AppModule } from '../app.module';
-import { authHeaderFor, createTestTenant, createTestUser, deleteTestTenant, deleteTestUser } from '../test-support/pg-test-helpers';
+import {
+  authHeaderFor,
+  createTestEstudio,
+  createTestTenant,
+  createTestUser,
+  deleteTestEstudio,
+  deleteTestTenant,
+  deleteTestUser,
+} from '../test-support/pg-test-helpers';
 
 /**
  * Backoffice self-service (invitación por email): integration coverage for
@@ -15,8 +23,9 @@ import { authHeaderFor, createTestTenant, createTestUser, deleteTestTenant, dele
 describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', () => {
   let app: INestApplication;
   let pool: Pool;
-  const adminAuth = authHeaderFor('admin');
-  const colaboradorAuth = authHeaderFor('colaborador');
+  let estudioId: string;
+  let adminAuth: string;
+  let colaboradorAuth: string;
   const createdUserIds: string[] = [];
 
   beforeAll(async () => {
@@ -24,6 +33,14 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
     app = moduleRef.createNestApplication();
     await app.init();
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // Multi-estudio pivot: POST /api/users now INSERTs users.estudio_id =
+    // the caller's own estudio_id, which REFERENCES estudios(id) — a
+    // default authHeaderFor() estudio_id (a syntactically valid but
+    // non-existent UUID) would hit a foreign key violation (500) instead
+    // of the success paths these tests expect.
+    estudioId = await createTestEstudio(pool, 'users.controller.test estudio');
+    adminAuth = authHeaderFor('admin', { estudioId });
+    colaboradorAuth = authHeaderFor('colaborador', { estudioId });
   });
 
   afterEach(async () => {
@@ -33,6 +50,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
   });
 
   afterAll(async () => {
+    await deleteTestEstudio(pool, estudioId);
     await pool.end();
     await app.close();
   });

@@ -62,7 +62,11 @@ export async function listUsers(pool: Pool): Promise<UserListRow[]> {
  * posture as periodos.controller.ts's own isUniqueViolation() check;
  * translating it to an HTTP response is the controller's job.
  */
-export async function createUser(pool: Pool, input: CreateUserRequestBody): Promise<CreatedUser> {
+export async function createUser(
+  pool: Pool,
+  input: CreateUserRequestBody,
+  creatorEstudioId: string | null,
+): Promise<CreatedUser> {
   const client = await pool.connect();
   let user: { id: string; email: string; role: UserRole; display_name: string | null; is_active: boolean; created_at: string };
   let invite: InviteToken;
@@ -70,11 +74,19 @@ export async function createUser(pool: Pool, input: CreateUserRequestBody): Prom
     await client.query('BEGIN');
 
     const throwawayPasswordHash = await hashPassword(randomUUID());
+    // Multi-estudio pivot: the new user always inherits the CREATING admin's
+    // own estudio_id, never a value from the request body (the body has no
+    // such field — estudio membership is derived from the caller, same
+    // posture as every other estudio-scoped write in this pivot). If the
+    // caller is platform-level staff (estudio_id === null), the new user is
+    // also platform-level — this route isn't meant for that case in
+    // practice (PR6's platform/estudios module is), but it's a harmless,
+    // self-consistent default rather than a crash.
     const { rows } = await client.query<typeof user>(
-      `INSERT INTO users (email, password_hash, role, display_name, is_active)
-       VALUES ($1, $2, $3, $4, false)
+      `INSERT INTO users (email, password_hash, role, display_name, is_active, estudio_id)
+       VALUES ($1, $2, $3, $4, false, $5)
        RETURNING id, email, role, display_name, is_active, created_at`,
-      [input.email, throwawayPasswordHash, input.role, input.display_name],
+      [input.email, throwawayPasswordHash, input.role, input.display_name, creatorEstudioId],
     );
     user = rows[0];
 
