@@ -22,3 +22,17 @@ export function requireEstudioId(user: AuthenticatedUser): string {
   }
   return user.estudio_id;
 }
+
+/**
+ * The mirror image of requireEstudioId(), for platform/estudios.controller.ts
+ * (PR6): those routes manage estudios THEMSELVES, so they're for platform-
+ * level staff ONLY — an estudio's own admin/colaborador (estudio_id set)
+ * gets 403 here, same as platform staff gets 403 on every estudio-scoped
+ * route elsewhere in this pivot. The two tiers are mutually exclusive by
+ * design, never both-or-neither.
+ */
+export function requirePlatformStaff(user: AuthenticatedUser): void {
+  if (user.estudio_id !== null) {
+    throw new HttpException({ error: 'esta ruta es solo para staff de la plataforma' }, HttpStatus.FORBIDDEN);
+  }
+}
