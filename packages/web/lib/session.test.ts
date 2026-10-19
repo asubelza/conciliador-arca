@@ -91,4 +91,13 @@ describe('T39: lib/session', () => {
     const fresh = require('./session');
     expect(fresh.getSession()).toBeNull();
   });
+
+  it('multi-estudio pivot: discards a session persisted before estudio_id existed, forcing a fresh login instead of misreading undefined as null', () => {
+    const { estudio_id, ...staleUser } = USER;
+    window.localStorage.setItem('conciliador_session', JSON.stringify({ token: 'tok-5', user: staleUser }));
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fresh = require('./session');
+    expect(fresh.getSession()).toBeNull();
+  });
 });

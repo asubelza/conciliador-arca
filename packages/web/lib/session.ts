@@ -54,7 +54,21 @@ function readFromStorage(): StoredSession | null {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.token === 'string' && parsed.user) {
+    // Multi-estudio pivot: estudio_id is required on SessionUser, but a
+    // session persisted to localStorage BEFORE this field existed has
+    // `undefined` there, not `null` — and PR8's Backoffice/PlatformView
+    // split branches on `=== null` specifically, so `undefined` would
+    // silently misclassify a real estudio admin as platform staff (or
+    // vice versa) instead of failing loudly. Treating that stale shape as
+    // invalid (forcing a fresh login, which repopulates it correctly from
+    // the backend) is the only safe option — there's no way to recover
+    // the real value from the stored data itself.
+    if (
+      parsed &&
+      typeof parsed.token === 'string' &&
+      parsed.user &&
+      (typeof parsed.user.estudio_id === 'string' || parsed.user.estudio_id === null)
+    ) {
       return parsed as StoredSession;
     }
     return null;
