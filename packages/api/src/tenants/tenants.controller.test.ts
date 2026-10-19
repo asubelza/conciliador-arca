@@ -253,6 +253,22 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         ]);
         expect(rows[0].active).toBe(true);
       });
+
+      it('PUT /api/tenants/:id as platform-level staff (estudio_id null) returns 403, not 404 (same contract as GET/POST, not "correct by accident")', async () => {
+        const res = await request(app.getHttpServer())
+          .put(`/api/tenants/${tenantId}`)
+          .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+          .send({ name: 'Should Not Rename' });
+        expect(res.status).toBe(403);
+      });
+
+      it('PATCH /api/tenants/:id as platform-level staff (estudio_id null) returns 403, not 404 (same contract as GET/POST, not "correct by accident")', async () => {
+        const res = await request(app.getHttpServer())
+          .patch(`/api/tenants/${tenantId}`)
+          .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+          .send({ active: false });
+        expect(res.status).toBe(403);
+      });
     });
   });
 
