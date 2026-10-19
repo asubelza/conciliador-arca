@@ -30,7 +30,7 @@ function mockTenantsFetch(tenants: Array<{ id: string; name: string }>) {
  */
 describe('tenant-discovery: PeriodoSelector (tenant entry only)', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {
@@ -102,7 +102,7 @@ describe('tenant-discovery: PeriodoSelector (tenant entry only)', () => {
 
   describe('role-gating (T39, autenticacion-roles)', () => {
     it('cliente does not see the tolerance config toggle', async () => {
-      setSession('fake-token', { id: 'u2', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      setSession('fake-token', { id: 'u2', email: 'cliente@example.com', role: 'cliente', display_name: null, estudio_id: 'test-estudio-id' });
       mockTenantsFetch([TENANT_A]);
 
       render(<PeriodoSelector onSelected={jest.fn()} />);
@@ -115,7 +115,7 @@ describe('tenant-discovery: PeriodoSelector (tenant entry only)', () => {
     });
 
     it('colaborador does not see the tolerance config toggle (admin-only)', async () => {
-      setSession('fake-token', { id: 'u3', email: 'colaborador@example.com', role: 'colaborador', display_name: null });
+      setSession('fake-token', { id: 'u3', email: 'colaborador@example.com', role: 'colaborador', display_name: null, estudio_id: 'test-estudio-id' });
       mockTenantsFetch([TENANT_A]);
 
       render(<PeriodoSelector onSelected={jest.fn()} />);

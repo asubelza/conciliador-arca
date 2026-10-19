@@ -14,7 +14,7 @@ import { clearSession, setSession } from '@/lib/session';
  */
 describe('T13: ReportViewer', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {

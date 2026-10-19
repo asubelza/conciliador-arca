@@ -1,7 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { clearSession, getSession, setSession, useAuth } from './session';
 
-const USER = { id: 'u1', email: 'a@example.com', role: 'admin' as const, display_name: 'Admin' };
+const USER = { id: 'u1', email: 'a@example.com', role: 'admin' as const, display_name: 'Admin', estudio_id: 'test-estudio-id' };
 
 /**
  * T39 (Fase 3, autenticacion-roles): the frontend session store —

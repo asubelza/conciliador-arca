@@ -25,6 +25,16 @@ export interface SessionUser {
   email: string;
   role: UserRole;
   display_name?: string | null;
+  /**
+   * Multi-estudio pivot: null means platform-level staff (administers the
+   * SaaS itself — estudios, not tenants — no implicit access to any
+   * estudio's tenants). A value scopes this user's role to that one
+   * estudio. Required (not optional) deliberately: PR8's Backoffice/
+   * PlatformView split branches on this value, and an accidental
+   * `undefined` must be a compile error, not a silent "treat as if it had
+   * a real estudio" default.
+   */
+  estudio_id: string | null;
 }
 
 interface StoredSession {

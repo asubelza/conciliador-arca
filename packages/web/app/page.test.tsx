@@ -112,7 +112,7 @@ describe('T39: app/page.tsx (auth gate)', () => {
 
   it('shows the main app + user info + logout once a session exists', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
     render(<Home />);
 
     expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
@@ -159,7 +159,7 @@ describe('backoffice self-service: ?invite_token= precedence over the login/sess
   it('shows SetPasswordPage instead of the main app when an invite_token is present even with an active session', async () => {
     window.history.pushState({}, '', `/?invite_token=${'a'.repeat(64)}`);
     global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ email: 'invitee@example.com', display_name: null }) }) as unknown as typeof fetch;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
 
@@ -169,7 +169,7 @@ describe('backoffice self-service: ?invite_token= precedence over the login/sess
 
   it('with no invite_token in the URL, a session goes straight to the main app as before', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
 
@@ -195,7 +195,7 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
       if (url.includes(MY_TENANTS_URL)) return myTenantsResponse();
       return Promise.resolve({ ok: true, json: async () => [] });
     }) as unknown as typeof fetch;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
@@ -210,7 +210,7 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
 
   it('is hidden for a non-admin role', () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-2', { id: 'u2', email: 'colab@estudio.com', role: 'colaborador', display_name: 'Colaborador' });
+    setSession('tok-2', { id: 'u2', email: 'colab@estudio.com', role: 'colaborador', display_name: 'Colaborador', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     expect(screen.queryByRole('button', { name: 'Backoffice' })).not.toBeInTheDocument();
@@ -226,14 +226,14 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
       if (url.includes(MY_TENANTS_URL)) return myTenantsResponse();
       return Promise.resolve({ ok: true, json: async () => [] });
     }) as unknown as typeof fetch;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await userEvent.click(screen.getByRole('button', { name: 'Backoffice' }));
     expect(await screen.findByText('No hay tenants todavía.')).toBeInTheDocument();
 
     clearSession();
-    setSession('tok-2', { id: 'u2', email: 'colab@estudio.com', role: 'colaborador', display_name: 'Colaborador' });
+    setSession('tok-2', { id: 'u2', email: 'colab@estudio.com', role: 'colaborador', display_name: 'Colaborador', estudio_id: 'test-estudio-id' });
 
     await waitFor(() => expect(screen.queryByText('No hay tenants todavía.')).not.toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Backoffice' })).not.toBeInTheDocument();
@@ -272,7 +272,7 @@ describe('2026-08-23: "Ver histórico de pendientes ARCA" swaps the period repor
 
   it('replaces the período report with PendientesHistoricoViewer on click, and restores it on toggle-off', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
 
@@ -313,7 +313,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
   it('renders dashboard view after selecting a tenant', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -325,7 +325,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
   it('navigates to circuit view via "Ver reporte" (RF-24/RF-26 round-trip)', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -338,7 +338,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
   it('"Cambiar período" returns to Dashboard WITHOUT clearing tenantId (regression: used to share a handler with "Cambiar tenant")', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -354,7 +354,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
   it('navigates to report view via the nav tab', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -370,7 +370,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
   it('navigates to pendientes-historico view', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -387,7 +387,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
 
   it('cycles through all views and returns to dashboard', async () => {
     global.fetch = mockFetchByUrl();
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -408,7 +408,7 @@ describe('view state machine: dashboard | circuit | report | pendientes-historic
   it('navigating back to Dashboard remounts it with a fresh listPeriodos fetch (RF-24)', async () => {
     const fetchMock = mockFetchByUrl();
     global.fetch = fetchMock;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -452,7 +452,7 @@ describe('role-based access control', () => {
 
   it('cliente is read-only: no upload form in circuito view', async () => {
     global.fetch = mockFetchByUrl([abiertoPeriodo]);
-    setSession('tok-1', { id: 'u1', email: 'cliente@test.com', role: 'cliente', display_name: 'Cliente' });
+    setSession('tok-1', { id: 'u1', email: 'cliente@test.com', role: 'cliente', display_name: 'Cliente', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await searchAndSelectPeriodo();
@@ -468,7 +468,7 @@ describe('role-based access control', () => {
 
   it('admin sees full navigation after selecting a período', async () => {
     global.fetch = mockFetchByUrl([abiertoPeriodo]);
-    setSession('tok-1', { id: 'u1', email: 'admin@test.com', role: 'admin', display_name: 'Admin' });
+    setSession('tok-1', { id: 'u1', email: 'admin@test.com', role: 'admin', display_name: 'Admin', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await searchAndSelectPeriodo();
@@ -485,7 +485,7 @@ describe('role-based access control', () => {
 
   it('colaborador sees full navigation after selecting a período', async () => {
     global.fetch = mockFetchByUrl([abiertoPeriodo]);
-    setSession('tok-1', { id: 'u1', email: 'colab@test.com', role: 'colaborador', display_name: 'Colaborador' });
+    setSession('tok-1', { id: 'u1', email: 'colab@test.com', role: 'colaborador', display_name: 'Colaborador', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await searchAndSelectPeriodo();
@@ -508,7 +508,7 @@ describe('zero-período tenant is not a dead end', () => {
 
   it('lets the user change tenant from the Dashboard even with zero períodos', async () => {
     global.fetch = mockFetchByUrl([]);
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -536,7 +536,7 @@ describe('2026-10-11: Dashboard has a way back to tenant entry on fetch error', 
   });
 
   it('shows "Cambiar tenant" on a listPeriodos failure and returns to PeriodoSelector on click', async () => {
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
     global.fetch = jest.fn((input) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.includes(MY_TENANTS_URL)) return myTenantsResponse();
@@ -586,7 +586,7 @@ describe('Dashboard mutation failures surface an accessible banner, not alert()'
       }
       return Promise.reject(new Error(`unexpected fetch: ${url} ${method}`));
     }) as unknown as typeof fetch;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();
@@ -640,7 +640,7 @@ describe('Fix 1 (2026-10-11): "Crear nuevo período" sends the local month, not 
       }
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
     }) as unknown as typeof fetch;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     const select = await screen.findByLabelText(/tenant/i);
@@ -683,7 +683,7 @@ describe('Fix 2 (2026-10-11): opening a período clears a stale dashboardError b
       }
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
     }) as unknown as typeof fetch;
-    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana' });
+    setSession('tok-1', { id: 'u1', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
 
     render(<Home />);
     await enterTenant();

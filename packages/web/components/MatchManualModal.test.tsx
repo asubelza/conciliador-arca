@@ -58,7 +58,7 @@ const historicoBody: PendientesHistoricoResult = {
  */
 describe('MatchManualModal', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {
