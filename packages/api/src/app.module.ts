@@ -4,6 +4,7 @@ import { PeriodosModule } from './periodos/periodos.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './auth/users.module';
+import { PlatformModule } from './platform/platform.module';
 
 /**
  * AppModule — API root module.
@@ -16,8 +17,11 @@ import { UsersModule } from './auth/users.module';
  * (admin-only user CRUD, separate module from AuthModule's
  * login/me/accept-invite — different resource, kept apart the same way
  * TenantsModule is its own module).
+ * Multi-estudio pivot (PR6/8) adds PlatformModule — platform-level staff's
+ * own estudio CRUD + invite-admin, a separate domain from UsersModule
+ * (which manages users WITHIN one estudio, not estudios themselves).
  */
 @Module({
-  imports: [ReconciliationsModule, PeriodosModule, TenantsModule, AuthModule, UsersModule],
+  imports: [ReconciliationsModule, PeriodosModule, TenantsModule, AuthModule, UsersModule, PlatformModule],
 })
 export class AppModule {}
