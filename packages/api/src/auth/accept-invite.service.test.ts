@@ -4,7 +4,7 @@ import { acceptInvite, peekInvite } from './accept-invite.service';
 import { hashInviteToken } from './invite-tokens';
 import { verifyPassword } from './password';
 import { verifyToken } from './jwt';
-import { createTestUser, deleteTestUser } from '../test-support/pg-test-helpers';
+import { createTestUser, deleteTestUser, createTestEstudio, deleteTestEstudio } from '../test-support/pg-test-helpers';
 
 /**
  * accept-invite.service.test.ts — integration coverage for acceptInvite()/
@@ -32,11 +32,11 @@ describe('accept-invite.service: acceptInvite / peekInvite', () => {
     await deleteTestUser(pool, userId);
   });
 
-  async function insertInvite(overrides: { expiresInMs?: number; consumedAt?: Date } = {}): Promise<string> {
+  async function insertInvite(overrides: { expiresInMs?: number; consumedAt?: Date; userId?: string } = {}): Promise<string> {
     const rawToken = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + (overrides.expiresInMs ?? 7 * 24 * 60 * 60 * 1000));
     await pool.query('INSERT INTO user_invites (user_id, token_hash, expires_at, consumed_at) VALUES ($1, $2, $3, $4)', [
-      userId,
+      overrides.userId ?? userId,
       hashInviteToken(rawToken),
       expiresAt,
       overrides.consumedAt ?? null,
@@ -73,6 +73,48 @@ describe('accept-invite.service: acceptInvite / peekInvite', () => {
       // invalidate-on-resend UPDATE — see users.service.ts's setUserActive
       // NEVER_ONBOARDED guard, which relies on exactly this distinction.
       expect(inviteRows[0].accepted_at).not.toBeNull();
+    });
+
+    it("estudio_id round-trips through the returned LoginResult, matching the invited user's own estudio_id", async () => {
+      const estudioId = await createTestEstudio(pool);
+      const scopedUser = await createTestUser(pool, {
+        role: 'cliente',
+        isActive: false,
+        estudioId,
+        email: `accept-invite-estudio-${randomBytes(4).toString('hex')}@example.com`,
+      });
+      try {
+        const rawToken = await insertInvite({ userId: scopedUser.id });
+        const result = await acceptInvite(pool, rawToken, 'brand-new-password');
+        expect('code' in result).toBe(false);
+        if ('code' in result) throw new Error('unreachable');
+        expect(result.user.estudio_id).toBe(estudioId);
+        const decoded = verifyToken(result.token);
+        expect(decoded?.estudio_id).toBe(estudioId);
+      } finally {
+        await deleteTestUser(pool, scopedUser.id);
+        await deleteTestEstudio(pool, estudioId);
+      }
+    });
+
+    it('estudio_id round-trips as null for a platform-tier invited user', async () => {
+      const scopedUser = await createTestUser(pool, {
+        role: 'admin',
+        isActive: false,
+        estudioId: null,
+        email: `accept-invite-platform-${randomBytes(4).toString('hex')}@example.com`,
+      });
+      try {
+        const rawToken = await insertInvite({ userId: scopedUser.id });
+        const result = await acceptInvite(pool, rawToken, 'brand-new-password');
+        expect('code' in result).toBe(false);
+        if ('code' in result) throw new Error('unreachable');
+        expect(result.user.estudio_id).toBeNull();
+        const decoded = verifyToken(result.token);
+        expect(decoded?.estudio_id).toBeNull();
+      } finally {
+        await deleteTestUser(pool, scopedUser.id);
+      }
     });
 
     it('returns INVITE_NOT_FOUND for a well-formed but unknown token, without changing the user', async () => {

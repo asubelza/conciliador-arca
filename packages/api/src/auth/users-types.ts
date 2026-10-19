@@ -8,10 +8,12 @@ export interface UserRow {
   role: UserRole;
   display_name: string | null;
   is_active: boolean;
+  estudio_id: string | null;
 }
 
 export interface AuthenticatedUser {
   id: string;
   email: string;
   role: UserRole;
+  estudio_id: string | null;
 }

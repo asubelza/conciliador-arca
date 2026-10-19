@@ -66,7 +66,8 @@ describe('T18: /api/periodos (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
   let tenantId: string;
-  const adminAuth = authHeaderFor('admin');
+  let estudioId: string;
+  let adminAuth: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -75,6 +76,15 @@ describe('T18: /api/periodos (integration)', () => {
 
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
     tenantId = await createTestTenant(pool, 'periodos.controller.test');
+    // Multi-estudio pivot: every other createTestTenant call in this file
+    // also omits estudioId, so they all land in the SAME lazily-created,
+    // per-file shared estudio (see pg-test-helpers.ts's defaultTestEstudioId)
+    // as this first tenant — reading it back here and threading it into
+    // every auth token below keeps admin/colaborador/cliente tokens
+    // estudio-matched with every tenant fixture in this file.
+    const { rows } = await pool.query<{ estudio_id: string }>('SELECT estudio_id FROM tenants WHERE id = $1', [tenantId]);
+    estudioId = rows[0].estudio_id;
+    adminAuth = authHeaderFor('admin', { estudioId });
   });
 
   afterAll(async () => {
@@ -200,12 +210,17 @@ describe('T18: /api/periodos (integration)', () => {
       }
     });
 
-    it("doesn't return another tenant's períodos", async () => {
+    it('rejects a tenant_id that does not exist (or belongs to another estudio) with 403, not an empty list', async () => {
+      // Multi-estudio pivot: assertTenantAccess now requires a REAL row in
+      // `tenants` matching the admin's own estudio_id (see tenant-access.ts)
+      // — a well-formed but nonexistent/foreign tenant_id never reaches this
+      // controller's own query anymore, so the old "200 with an empty list"
+      // behavior no longer applies; this now behaves the same as any other
+      // "not yours" tenant id (403, never 404, per tenant-access.ts's doc).
       const res = await request(app.getHttpServer())
         .get('/api/periodos?tenant_id=00000000-0000-0000-0000-000000000000')
         .set('Authorization', adminAuth);
-      expect(res.status).toBe(200);
-      expect(res.body.periodos).toEqual([]);
+      expect(res.status).toBe(403);
     });
 
     it('returns 400 for a missing/malformed tenant_id query param', async () => {
@@ -840,7 +855,7 @@ describe('T18: /api/periodos (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, pr8TenantId]);
         const res = await request(app.getHttpServer())
           .post(`/api/periodos/${periodoId}/reabrir`)
-          .set('Authorization', authHeaderFor('colaborador', { sub: userId }));
+          .set('Authorization', authHeaderFor('colaborador', { sub: userId, estudioId }));
 
         expect(res.status).toBe(200);
         expect(res.body).toEqual({
@@ -880,7 +895,7 @@ describe('T18: /api/periodos (integration)', () => {
         // Prove the caller genuinely HAS tenant access first (the same JWT can read the período).
         const readable = await request(app.getHttpServer())
           .get(`/api/periodos/${periodoId}`)
-          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+          .set('Authorization', authHeaderFor('cliente', { sub: userId, estudioId }));
         expect(readable.status).toBe(200);
 
         const res = await request(app.getHttpServer())
@@ -903,7 +918,7 @@ describe('T18: /api/periodos (integration)', () => {
       const deletingAdminId = randomUUID();
       const res = await request(app.getHttpServer())
         .delete(`/api/periodos/${periodoId}`)
-        .set('Authorization', authHeaderFor('admin', { sub: deletingAdminId }));
+        .set('Authorization', authHeaderFor('admin', { sub: deletingAdminId, estudioId }));
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ deleted: true, periodo_id: periodoId });
 
@@ -992,7 +1007,7 @@ describe('T18: /api/periodos (integration)', () => {
       try {
         const res = await request(app.getHttpServer())
           .post(`/api/periodos/${periodoId}/marks`)
-          .set('Authorization', authHeaderFor('colaborador', { sub: realUserId }))
+          .set('Authorization', authHeaderFor('colaborador', { sub: realUserId, estudioId }))
           .send({
             composite_key: '30111111112|1|1|100',
             classification: 'revisado',
@@ -1084,7 +1099,7 @@ describe('T18: /api/periodos (integration)', () => {
         await pool.query('INSERT INTO user_tenant_access (user_id, tenant_id) VALUES ($1, $2)', [userId, tenantId]);
         const res = await request(app.getHttpServer())
           .get(`/api/periodos/${created.body.id}`)
-          .set('Authorization', authHeaderFor('cliente', { sub: userId }));
+          .set('Authorization', authHeaderFor('cliente', { sub: userId, estudioId }));
         expect(res.status).toBe(200);
       } finally {
         await deleteTestUser(pool, userId);

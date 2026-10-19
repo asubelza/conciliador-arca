@@ -38,6 +38,16 @@ export async function createTestEstudio(pool: Pool, name = 'Test Estudio'): Prom
  * DB hiccup on the first call would poison every subsequent test in the
  * file with the same rejection forever (a rejected promise is still
  * truthy, so the `if (!sharedTestEstudioId)` guard alone would never retry).
+ *
+ * NOT cleaned up by this module: Jest only allows hooks (`afterAll`) to be
+ * registered synchronously during test collection, never lazily from
+ * inside an already-running `beforeAll`/test (confirmed — doing so throws
+ * "Cannot add a hook after tests have started running"), and this function
+ * is only ever reachable from inside a test file's own `beforeAll`. Each
+ * run therefore leaves one orphaned "Shared Test Estudio" row per test
+ * file against a persistent local test DB — harmless test-DB bloat, not a
+ * correctness issue, and out of scope to fix here without threading an
+ * explicit cleanup call through every one of this repo's test files.
  */
 let sharedTestEstudioId: Promise<string> | null = null;
 
@@ -142,21 +152,29 @@ export async function createTestUser(
  * for controller integration tests. AuthGuard only verifies the JWT's
  * signature/expiry (see auth-guard.ts's module doc) — it never hits the
  * DB — so this mints a token directly with `signToken`, no `users` row
- * required. That's correct for admin/colaborador (they never trigger a
- * user_tenant_access lookup either — see assertTenantAccess). A test that
- * specifically needs a `cliente` WITH real tenant access must still create
- * a real user (createTestUser) and a real user_tenant_access row — a
- * fabricated `cliente` from this helper alone always fails
- * assertTenantAccess, which is what most tests want by default (a plain
- * admin token that always passes).
+ * required. A test that specifically needs a `cliente` WITH real tenant
+ * access must still create a real user (createTestUser) and a real
+ * user_tenant_access row.
  *
- * `estudioId` (multi-estudio pivot, PR2 of 8): accepted here now so PR3-6
- * call sites that need an estudio-scoped token don't have to be touched a
- * second time. Deliberately NOT yet threaded into the signed token —
- * `JwtPayload`/`signToken` (jwt.ts) don't have an `estudio_id` field yet;
- * that's PR3's change, alongside `assertTenantAccess`'s estudio-scoped
- * check. Until PR3 lands and extends `JwtPayload`, this param is a
- * documented no-op placeholder.
+ * `estudioId` (multi-estudio pivot, PR3 of 8): now threaded into the signed
+ * token's `estudio_id` claim, same null-vs-undefined handling as
+ * `createTestUser`'s own `estudioId` override (explicit `null` stays
+ * `null` — a platform-staff token — and is never coerced by `??`).
+ *
+ * UNLIKE `createTestTenant`/`createTestUser`, the "default when omitted"
+ * case here can NOT reuse `defaultTestEstudioId` (the real, lazily-created,
+ * per-file shared `estudios` row) — plenty of call sites across this
+ * repo's *.controller.test.ts files assign `authHeaderFor(...)` to a
+ * `describe`-scope `const` evaluated at test-collection time, before
+ * `pool` even exists (it's only assigned inside `beforeAll`), so this
+ * function must stay synchronous and can't do a DB round trip. The default
+ * below is therefore just a fresh, syntactically valid, non-null UUID —
+ * NOT a real `estudios` row and NOT guaranteed to match any tenant's
+ * `estudio_id`. A test whose admin/colaborador token needs to actually
+ * pass the new estudio-scoped `assertTenantAccess` against a real tenant
+ * MUST pass an explicit `estudioId` here that matches the one the tenant
+ * fixture was created with — relying on this default for that case will
+ * now get a 403 instead of the old unconditional bypass.
  */
 export function authHeaderFor(
   role: UserRole = 'admin',
@@ -166,6 +184,7 @@ export function authHeaderFor(
     sub: overrides.sub ?? randomUUID(),
     role,
     email: overrides.email ?? `test-${role}-${randomUUID()}@example.com`,
+    estudio_id: overrides.estudioId === null ? null : overrides.estudioId ?? randomUUID(),
   });
   return `Bearer ${token}`;
 }
