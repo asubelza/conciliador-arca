@@ -751,6 +751,77 @@ export async function peekInvite(token: string): Promise<PeekedInvite> {
   return res.json();
 }
 
+// --- multi-estudio pivot (PR6/PR8): platform self-service, estudios + invite-admin ---
+
+/** Platform-level staff only (user.estudio_id === null) — see estudios.controller.ts's module doc. */
+export interface EstudioRow {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listEstudios(): Promise<EstudioRow[]> {
+  const res = await fetch(`${API_BASE_URL}/api/platform/estudios`, { headers: authHeaders() });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Estudios fetch failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/** Admin-only server-side (platform colaborador gets 403) — same write/read split as tenants/users. */
+export async function createEstudio(name: string): Promise<EstudioRow> {
+  const res = await fetch(`${API_BASE_URL}/api/platform/estudios`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Estudio creation failed (${res.status})`));
+  }
+  return res.json();
+}
+
+export async function setEstudioActive(estudioId: string, active: boolean): Promise<{ id: string; active: boolean }> {
+  const res = await fetch(`${API_BASE_URL}/api/platform/estudios/${estudioId}`, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ active }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Estudio update failed (${res.status})`));
+  }
+  return res.json();
+}
+
+/** Same shape as CreateUserResult — invite-admin reuses createUser() server-side (estudios.controller.ts). */
+export interface InviteAdminResult {
+  id: string;
+  email: string;
+  role: UserRole;
+  display_name: string | null;
+  is_active: boolean;
+  created_at: string;
+  invite_email_sent: boolean;
+}
+
+export async function inviteEstudioAdmin(estudioId: string, email: string, displayName: string | null): Promise<InviteAdminResult> {
+  const res = await fetch(`${API_BASE_URL}/api/platform/estudios/${estudioId}/invite-admin`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ email, display_name: displayName }),
+  });
+  if (!res.ok) {
+    handleUnauthorized(res);
+    throw new Error(await readErrorMessage(res, `Invite admin failed (${res.status})`));
+  }
+  return res.json();
+}
+
 /** No bearer token, same reason as peekInvite()/login(). Returns a LoginResponse so the caller can setSession() immediately — no separate login step. */
 export async function acceptInvite(token: string, password: string): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE_URL}/api/auth/accept-invite`, {
