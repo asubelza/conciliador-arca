@@ -12,6 +12,7 @@ import { DashboardShell as Dashboard } from '@/components/Dashboard';
 import { LoginForm } from '@/components/LoginForm';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BackofficeView } from '@/components/BackofficeView';
+import { PlatformView } from '@/components/PlatformView';
 import { SetPasswordPage } from '@/components/SetPasswordPage';
 import { BuildingIcon, LogoutIcon } from '@/components/icons';
 import { clearSession, useAuth } from '@/lib/session';
@@ -111,6 +112,14 @@ export default function Home() {
   // hoisted closures — TS can't carry the `if (!user)` narrowing above into
   // them, even though they only ever execute after this point.
   const userRole = user.role as 'admin' | 'colaborador' | 'cliente';
+
+  // Multi-estudio pivot (PR8): platform-level staff (estudio_id === null)
+  // has nothing to do with the tenant/período flow below — listMyTenants
+  // always returns [] for them, and every :id-scoped route 403s them
+  // (tenant-access.ts) — so PlatformView replaces that ENTIRE flow rather
+  // than toggling alongside it the way BackofficeView does for an
+  // estudio's own admin.
+  const isPlatformStaff = user.estudio_id === null;
 
   // AD-6: PeriodoSelector now only yields a tenantId — período selection
   // moved into Dashboard's sections A/B (RF-24..RF-26).
@@ -340,7 +349,11 @@ export default function Home() {
               </span>
             </div>
             <ThemeToggle />
-            {userRole === 'admin' && (
+            {/* Platform staff has no "normal app" to toggle to/from — see
+                isPlatformStaff's own comment above — so this toggle button
+                is meaningless for them and hidden entirely rather than
+                shown disabled. */}
+            {!isPlatformStaff && userRole === 'admin' && (
               <button
                 type="button"
                 onClick={() => setShowBackoffice((v) => !v)}
@@ -362,16 +375,24 @@ export default function Home() {
       </header>
 
       <main className="mx-auto flex max-w-screen-2xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+        {/* Multi-estudio pivot (PR8): platform staff gets PlatformView and
+            nothing else — see isPlatformStaff's own comment above — so this
+            branch short-circuits before any of the estudio-scoped UI below
+            even has a chance to render. */}
+        {isPlatformStaff && <PlatformView userRole={userRole} />}
+
         {/* Guarded here too (not just at the header button) — `showBackoffice`
             is local state that survives a logout/login in the same tab
             (clearSession() doesn't unmount Home or reset it), so without this
             check a non-admin who logs in right after an admin toggled it on
             would see the admin-only BackofficeView. */}
-        {showBackoffice && userRole === 'admin' && <BackofficeView />}
+        {!isPlatformStaff && showBackoffice && userRole === 'admin' && <BackofficeView />}
 
-        {!(showBackoffice && userRole === 'admin') && !tenantId && <PeriodoSelector onSelected={handleTenantSelected} />}
+        {!isPlatformStaff && !(showBackoffice && userRole === 'admin') && !tenantId && (
+          <PeriodoSelector onSelected={handleTenantSelected} />
+        )}
 
-        {!(showBackoffice && userRole === 'admin') && tenantId && (
+        {!isPlatformStaff && !(showBackoffice && userRole === 'admin') && tenantId && (
           <div className="flex flex-col gap-6">
             {/* Nav tabs only make sense once a período round-trips into the
                 existing circuit/report — Dashboard is the entry point.

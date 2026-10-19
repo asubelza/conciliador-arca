@@ -241,6 +241,53 @@ describe('backoffice self-service: admin-only "Backoffice" header button', () =>
 });
 
 /**
+ * Multi-estudio pivot (PR8): platform-level staff (estudio_id === null) has
+ * nothing to do with the tenant/período flow — PlatformView replaces it
+ * entirely rather than toggling alongside it like BackofficeView does.
+ * PlatformEstudios' own list/create/toggle/invite behavior is covered in
+ * PlatformEstudios.test.tsx; this only proves app/page.tsx's own branching.
+ */
+describe('multi-estudio pivot: platform-level staff (estudio_id null) sees PlatformView, not the tenant/período flow', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    clearSession();
+  });
+
+  it('renders PlatformView instead of PeriodoSelector for a platform admin, with no "Backoffice" toggle button', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    setSession('tok-1', { id: 'u1', email: 'platform-admin@example.com', role: 'admin', display_name: 'Plataforma', estudio_id: null });
+
+    render(<Home />);
+
+    expect(await screen.findByText('No hay estudios todavía.')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/tenant/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Backoffice' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nuevo estudio' })).toBeInTheDocument();
+  });
+
+  it('renders PlatformView read-only for a platform colaborador', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] }) as unknown as typeof fetch;
+    setSession('tok-2', { id: 'u2', email: 'platform-colab@example.com', role: 'colaborador', display_name: 'Colaborador Plataforma', estudio_id: null });
+
+    render(<Home />);
+
+    expect(await screen.findByText('No hay estudios todavía.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nuevo estudio' })).not.toBeInTheDocument();
+  });
+
+  it("an estudio's own admin (estudio_id set) still sees the normal tenant/período flow + Backoffice button, not PlatformView", async () => {
+    global.fetch = mockFetchByUrl();
+    setSession('tok-3', { id: 'u3', email: 'ana@estudio.com', role: 'admin', display_name: 'Ana', estudio_id: 'test-estudio-id' });
+
+    render(<Home />);
+
+    expect(await screen.findByLabelText(/tenant/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Backoffice' })).toBeInTheDocument();
+    expect(screen.queryByText('No hay estudios todavía.')).not.toBeInTheDocument();
+  });
+});
+
+/**
  * AD-6 (dashboard-principal): PeriodoSelector now only yields a tenantId —
  * período selection happens through Dashboard's own sections A/B. This
  * helper walks: paste UUID -> Ingresar -> Continuar al dashboard, landing
