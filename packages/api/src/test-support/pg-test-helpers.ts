@@ -30,12 +30,23 @@ export async function createTestEstudio(pool: Pool, name = 'Test Estudio'): Prom
  * testEnvironment/worker options that would change this default), so it
  * resets to `null` for every file and is never shared across files running
  * in parallel.
+ *
+ * Caches the IN-FLIGHT promise, not just its eventual value, so concurrent
+ * callers within the same tick (e.g. two createTestTenant calls awaited in
+ * Promise.all) share one INSERT instead of racing two. A REJECTED promise
+ * is cleared back to `null` in the `.catch` below — otherwise one transient
+ * DB hiccup on the first call would poison every subsequent test in the
+ * file with the same rejection forever (a rejected promise is still
+ * truthy, so the `if (!sharedTestEstudioId)` guard alone would never retry).
  */
 let sharedTestEstudioId: Promise<string> | null = null;
 
 function defaultTestEstudioId(pool: Pool): Promise<string> {
   if (!sharedTestEstudioId) {
-    sharedTestEstudioId = createTestEstudio(pool, 'Shared Test Estudio');
+    sharedTestEstudioId = createTestEstudio(pool, 'Shared Test Estudio').catch((err: unknown) => {
+      sharedTestEstudioId = null;
+      throw err;
+    });
   }
   return sharedTestEstudioId;
 }
