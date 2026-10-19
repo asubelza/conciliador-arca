@@ -7,10 +7,19 @@
  * (PlatformModule), same "own module per domain" posture as
  * TenantsModule/UsersModule.
  *
- * Every route requires platform-level staff (assertRole admin/colaborador
- * AND user.estudio_id === null, via requirePlatformStaff()) — an estudio's
- * own admin/colaborador gets 403 here, the exact mirror of platform staff
- * getting 403 on tenants.controller.ts/users.controller.ts's own routes.
+ * Every route requires platform-level staff (user.estudio_id === null, via
+ * requirePlatformStaff()) — an estudio's own admin/colaborador gets 403
+ * here, the exact mirror of platform staff getting 403 on
+ * tenants.controller.ts/users.controller.ts's own routes.
+ *
+ * Within platform staff, READ (list) is open to admin/colaborador alike,
+ * but every WRITE (create/disable/invite-admin) is admin-only — same
+ * split as tenants.controller.ts/users.controller.ts's own backoffice CRUD,
+ * where colaborador never gets to create/mutate, only business-operation
+ * routes (upload, archivar, etc.) accept it. Caught in code review: an
+ * earlier version let platform colaborador create estudios and mint new
+ * estudio admins, which no other backoffice CRUD route in this codebase
+ * grants colaborador.
  */
 import { Body, Controller, Get, HttpException, HttpStatus, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { getPgPool } from '../db/pg-pool';
@@ -30,8 +39,16 @@ export interface EstudioRow {
   updated_at: string;
 }
 
-function requirePlatformAdmin(req: AuthenticatedRequest): void {
+function requirePlatformRead(req: AuthenticatedRequest): void {
   const roleFailure = assertRole(req.user!, ['admin', 'colaborador']);
+  if (roleFailure) {
+    throw new HttpException({ error: roleFailure.error }, roleFailure.status);
+  }
+  requirePlatformStaff(req.user!);
+}
+
+function requirePlatformWrite(req: AuthenticatedRequest): void {
+  const roleFailure = assertRole(req.user!, ['admin']);
   if (roleFailure) {
     throw new HttpException({ error: roleFailure.error }, roleFailure.status);
   }
@@ -43,7 +60,7 @@ function requirePlatformAdmin(req: AuthenticatedRequest): void {
 export class EstudiosController {
   @Get()
   async listEstudios(@Req() req: AuthenticatedRequest) {
-    requirePlatformAdmin(req);
+    requirePlatformRead(req);
 
     const pool = getPgPool();
     const { rows } = await pool.query<EstudioRow>(
@@ -54,7 +71,7 @@ export class EstudiosController {
 
   @Post()
   async createEstudio(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
-    requirePlatformAdmin(req);
+    requirePlatformWrite(req);
 
     const validation = validateCreateEstudioBody(body);
     if (!validation.ok) {
@@ -79,7 +96,7 @@ export class EstudiosController {
    */
   @Patch(':id')
   async setActive(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
-    requirePlatformAdmin(req);
+    requirePlatformWrite(req);
 
     if (!isUuid(id)) {
       throw new HttpException({ error: 'estudio id must be a UUID' }, HttpStatus.BAD_REQUEST);
@@ -113,7 +130,7 @@ export class EstudiosController {
    */
   @Post(':id/invite-admin')
   async inviteAdmin(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
-    requirePlatformAdmin(req);
+    requirePlatformWrite(req);
 
     if (!isUuid(id)) {
       throw new HttpException({ error: 'estudio id must be a UUID' }, HttpStatus.BAD_REQUEST);
@@ -135,7 +152,17 @@ export class EstudiosController {
       return user;
     } catch (err) {
       if (isUniqueViolation(err)) {
-        throw new HttpException({ error: 'a user with that email already exists' }, HttpStatus.CONFLICT);
+        // users.email is UNIQUE across the whole table (018_init_users_and_
+        // roles.sql), not per-estudio — a platform-wide pivot didn't
+        // relax that, so this conflict can come from an entirely
+        // unrelated estudio's user, not just "this one already has that
+        // admin". The message says so explicitly rather than implying a
+        // same-estudio duplicate that the caller could otherwise go check
+        // for and be confused not to find.
+        throw new HttpException(
+          { error: 'that email is already registered to a user — possibly in a different estudio' },
+          HttpStatus.CONFLICT,
+        );
       }
       // estudios.id has no DB default/pre-check here — a well-formed but
       // nonexistent estudio id surfaces as createUser()'s own INSERT

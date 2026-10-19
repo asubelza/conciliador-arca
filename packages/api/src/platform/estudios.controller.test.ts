@@ -113,6 +113,14 @@ describe('platform self-service: GET/POST /api/platform/estudios, PATCH .../:id,
       expect(res.status).toBe(403);
     });
 
+    it('returns 403 for platform-level colaborador — writes are admin-only, same as every other backoffice CRUD route', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/platform/estudios')
+        .set('Authorization', authHeaderFor('colaborador', { estudioId: null }))
+        .send({ name: 'Should Not Be Created' });
+      expect(res.status).toBe(403);
+    });
+
     it('returns 401 with no Authorization header', async () => {
       const res = await request(app.getHttpServer()).post('/api/platform/estudios').send({ name: 'No Auth' });
       expect(res.status).toBe(401);
@@ -168,6 +176,15 @@ describe('platform self-service: GET/POST /api/platform/estudios, PATCH .../:id,
       const res = await request(app.getHttpServer())
         .patch(`/api/platform/estudios/${estudioId}`)
         .set('Authorization', authHeaderFor('admin', { estudioId: randomUUID() }))
+        .send({ active: false });
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 403 for platform-level colaborador — writes are admin-only', async () => {
+      const estudioId = await createEstudioFixture();
+      const res = await request(app.getHttpServer())
+        .patch(`/api/platform/estudios/${estudioId}`)
+        .set('Authorization', authHeaderFor('colaborador', { estudioId: null }))
         .send({ active: false });
       expect(res.status).toBe(403);
     });
@@ -235,12 +252,40 @@ describe('platform self-service: GET/POST /api/platform/estudios, PATCH .../:id,
       expect(secondRes.status).toBe(409);
     });
 
+    it('returns 409 for an email already registered to a DIFFERENT estudio — users.email is globally unique, not per-estudio', async () => {
+      const estudioA = await createEstudioFixture('Estudio A');
+      const estudioB = await createEstudioFixture('Estudio B');
+      const sharedEmail = email('cross-estudio');
+
+      const firstRes = await request(app.getHttpServer())
+        .post(`/api/platform/estudios/${estudioA}/invite-admin`)
+        .set('Authorization', platformAuth)
+        .send({ email: sharedEmail });
+      expect(firstRes.status).toBe(201);
+      createdUserIds.push(firstRes.body.id);
+
+      const secondRes = await request(app.getHttpServer())
+        .post(`/api/platform/estudios/${estudioB}/invite-admin`)
+        .set('Authorization', platformAuth)
+        .send({ email: sharedEmail });
+      expect(secondRes.status).toBe(409);
+    });
+
     it("returns 403 for an estudio's own admin", async () => {
       const estudioId = await createEstudioFixture();
       const res = await request(app.getHttpServer())
         .post(`/api/platform/estudios/${estudioId}/invite-admin`)
         .set('Authorization', authHeaderFor('admin', { estudioId: randomUUID() }))
         .send({ email: email('forbidden') });
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 403 for platform-level colaborador — writes are admin-only', async () => {
+      const estudioId = await createEstudioFixture();
+      const res = await request(app.getHttpServer())
+        .post(`/api/platform/estudios/${estudioId}/invite-admin`)
+        .set('Authorization', authHeaderFor('colaborador', { estudioId: null }))
+        .send({ email: email('forbidden-colaborador') });
       expect(res.status).toBe(403);
     });
 
