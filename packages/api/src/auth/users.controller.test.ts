@@ -61,7 +61,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
 
   describe('GET /api/users', () => {
     it('lists users as admin, each with a tenant_ids array and no password_hash/invite token leaked', async () => {
-      const user = await createTestUser(pool);
+      const user = await createTestUser(pool, { estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer()).get('/api/users').set('Authorization', adminAuth);
@@ -188,7 +188,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
 
   describe('PATCH /api/users/:id', () => {
     it('deactivates an active user', async () => {
-      const user = await createTestUser(pool, { isActive: true });
+      const user = await createTestUser(pool, { isActive: true, estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer())
@@ -200,7 +200,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
     });
 
     it('reactivates a deactivated user', async () => {
-      const user = await createTestUser(pool, { isActive: false });
+      const user = await createTestUser(pool, { isActive: false, estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer())
@@ -226,7 +226,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
     });
 
     it('returns 400 for a non-boolean is_active', async () => {
-      const user = await createTestUser(pool);
+      const user = await createTestUser(pool, { estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer())
@@ -253,7 +253,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
     });
 
     it('returns 403 as colaborador', async () => {
-      const user = await createTestUser(pool);
+      const user = await createTestUser(pool, { estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer())
@@ -266,7 +266,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
 
   describe('POST /api/users/:id/resend-invite', () => {
     it('mints a fresh invite for an inactive user and returns invite_email_sent (false — no SMTP configured in tests)', async () => {
-      const user = await createTestUser(pool, { isActive: false });
+      const user = await createTestUser(pool, { isActive: false, estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer()).post(`/api/users/${user.id}/resend-invite`).set('Authorization', adminAuth);
@@ -278,7 +278,7 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
     });
 
     it('returns 409 for an already-active user', async () => {
-      const user = await createTestUser(pool, { isActive: true });
+      const user = await createTestUser(pool, { isActive: true, estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer()).post(`/api/users/${user.id}/resend-invite`).set('Authorization', adminAuth);
@@ -291,10 +291,92 @@ describe('backoffice self-service: GET/POST /api/users, PATCH /api/users/:id', (
     });
 
     it('returns 403 as colaborador', async () => {
-      const user = await createTestUser(pool, { isActive: false });
+      const user = await createTestUser(pool, { isActive: false, estudioId });
       createdUserIds.push(user.id);
 
       const res = await request(app.getHttpServer()).post(`/api/users/${user.id}/resend-invite`).set('Authorization', colaboradorAuth);
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('multi-estudio pivot: cross-estudio isolation', () => {
+    let otherEstudioId: string;
+    let otherUserId: string;
+
+    beforeAll(async () => {
+      otherEstudioId = await createTestEstudio(pool, 'users.controller.test other estudio');
+      const otherUser = await createTestUser(pool, { isActive: false, estudioId: otherEstudioId });
+      otherUserId = otherUser.id;
+    });
+
+    afterAll(async () => {
+      await deleteTestUser(pool, otherUserId);
+      await deleteTestEstudio(pool, otherEstudioId);
+    });
+
+    it("GET /api/users never lists another estudio's users", async () => {
+      const res = await request(app.getHttpServer()).get('/api/users').set('Authorization', adminAuth);
+      expect(res.status).toBe(200);
+      expect(res.body.some((u: { id: string }) => u.id === otherUserId)).toBe(false);
+    });
+
+    it('GET /api/users as platform-level staff (estudio_id null) returns 403', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/users')
+        .set('Authorization', authHeaderFor('admin', { estudioId: null }));
+      expect(res.status).toBe(403);
+    });
+
+    it("POST /api/users creates the user under the caller's OWN estudio_id", async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', adminAuth)
+        .send({ email: email('scoped-new'), role: 'admin' });
+      expect(res.status).toBe(201);
+      createdUserIds.push(res.body.id);
+
+      const { rows } = await pool.query<{ estudio_id: string }>('SELECT estudio_id FROM users WHERE id = $1', [res.body.id]);
+      expect(rows[0].estudio_id).toBe(estudioId);
+    });
+
+    it('POST /api/users as platform-level staff (estudio_id null) returns 403', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+        .send({ email: email('should-not-be-created'), role: 'admin' });
+      expect(res.status).toBe(403);
+    });
+
+    it("PATCH /api/users/:id on another estudio's user returns 404, not 200 (no cross-estudio activate/deactivate)", async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/users/${otherUserId}`)
+        .set('Authorization', adminAuth)
+        .send({ is_active: true });
+      expect(res.status).toBe(404);
+
+      const { rows } = await pool.query<{ is_active: boolean }>('SELECT is_active FROM users WHERE id = $1', [otherUserId]);
+      expect(rows[0].is_active).toBe(false);
+    });
+
+    it('PATCH /api/users/:id as platform-level staff (estudio_id null) returns 403, not 404', async () => {
+      const res = await request(app.getHttpServer())
+        .patch(`/api/users/${otherUserId}`)
+        .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+        .send({ is_active: true });
+      expect(res.status).toBe(403);
+    });
+
+    it("POST /api/users/:id/resend-invite on another estudio's user returns 404, not 200", async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/users/${otherUserId}/resend-invite`)
+        .set('Authorization', adminAuth);
+      expect(res.status).toBe(404);
+    });
+
+    it('POST /api/users/:id/resend-invite as platform-level staff (estudio_id null) returns 403, not 404', async () => {
+      const res = await request(app.getHttpServer())
+        .post(`/api/users/${otherUserId}/resend-invite`)
+        .set('Authorization', authHeaderFor('admin', { estudioId: null }));
       expect(res.status).toBe(403);
     });
   });

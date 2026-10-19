@@ -17,12 +17,19 @@ import {
  */
 describe('users.service: createUser / listUsers / setUserActive', () => {
   let pool: Pool;
+  let estudioId: string;
   const createdUserIds: string[] = [];
   const createdTenantIds: string[] = [];
   const createdEstudioIds: string[] = [];
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // Shared across every test below EXCEPT createUser's own dedicated
+    // null/explicit-estudio tests, which create their own estudios (or
+    // pass null) specifically to prove that handling — everything else
+    // just needs ONE real, consistent estudio so listUsers/setUserActive/
+    // resendInvite's new `estudio_id = $N` scoping matches the fixtures.
+    estudioId = await createTestEstudio(pool, 'users.service.test shared estudio');
   });
 
   afterEach(async () => {
@@ -41,6 +48,7 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
   });
 
   afterAll(async () => {
+    await deleteTestEstudio(pool, estudioId);
     await pool.end();
   });
 
@@ -50,7 +58,7 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
 
   describe('createUser', () => {
     it('creates an admin with is_active=false, a throwaway password hash, and a fresh invite token (invite_email_sent:false — no SMTP_USER/SMTP_PASSWORD/APP_BASE_URL in this test env, documents the graceful-degradation contract from invite-email.ts)', async () => {
-      const created = await createUser(pool, { email: email('admin'), role: 'admin', display_name: 'Admin User', tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('admin'), role: 'admin', display_name: 'Admin User', tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
 
       expect(created.is_active).toBe(false);
@@ -73,7 +81,7 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
       const tenantId = await createTestTenant(pool, 'users.service.test tenant');
       createdTenantIds.push(tenantId);
 
-      const created = await createUser(pool, { email: email('cliente'), role: 'cliente', display_name: null, tenant_ids: [tenantId] }, null);
+      const created = await createUser(pool, { email: email('cliente'), role: 'cliente', display_name: null, tenant_ids: [tenantId] }, estudioId);
       createdUserIds.push(created.id);
 
       const { rows } = await pool.query('SELECT tenant_id FROM user_tenant_access WHERE user_id = $1', [created.id]);
@@ -81,7 +89,7 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
     });
 
     it('creates admin/colaborador with zero user_tenant_access rows', async () => {
-      const created = await createUser(pool, { email: email('colab'), role: 'colaborador', display_name: null, tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('colab'), role: 'colaborador', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
 
       const { rows } = await pool.query('SELECT tenant_id FROM user_tenant_access WHERE user_id = $1', [created.id]);
@@ -90,11 +98,11 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
 
     it('rejects a duplicate email with the raw Postgres unique-violation error (controller translates it to 409)', async () => {
       const duplicateEmail = email('dup');
-      const first = await createUser(pool, { email: duplicateEmail, role: 'admin', display_name: null, tenant_ids: [] }, null);
+      const first = await createUser(pool, { email: duplicateEmail, role: 'admin', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(first.id);
 
       await expect(
-        createUser(pool, { email: duplicateEmail, role: 'admin', display_name: null, tenant_ids: [] }, null),
+        createUser(pool, { email: duplicateEmail, role: 'admin', display_name: null, tenant_ids: [] }, estudioId),
       ).rejects.toMatchObject({ code: '23505' });
 
       // The failed attempt must not leave a half-written user_tenant_access/invite behind.
@@ -136,10 +144,10 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
 
   describe('listUsers', () => {
     it('includes a created admin with an empty tenant_ids array', async () => {
-      const created = await createUser(pool, { email: email('list-admin'), role: 'admin', display_name: null, tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('list-admin'), role: 'admin', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
 
-      const rows = await listUsers(pool);
+      const rows = await listUsers(pool, estudioId);
       const found = rows.find((r) => r.id === created.id);
       expect(found).toBeDefined();
       expect(found?.tenant_ids).toEqual([]);
@@ -148,12 +156,26 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
     it('includes a created cliente with its tenant_ids populated', async () => {
       const tenantId = await createTestTenant(pool, 'users.service.test list tenant');
       createdTenantIds.push(tenantId);
-      const created = await createUser(pool, { email: email('list-cliente'), role: 'cliente', display_name: null, tenant_ids: [tenantId] }, null);
+      const created = await createUser(pool, { email: email('list-cliente'), role: 'cliente', display_name: null, tenant_ids: [tenantId] }, estudioId);
       createdUserIds.push(created.id);
 
-      const rows = await listUsers(pool);
+      const rows = await listUsers(pool, estudioId);
       const found = rows.find((r) => r.id === created.id);
       expect(found?.tenant_ids).toEqual([tenantId]);
+    });
+
+    it("multi-estudio pivot: never includes another estudio's users", async () => {
+      const otherEstudioId = await createTestEstudio(pool, 'users.service.test other estudio');
+      createdEstudioIds.push(otherEstudioId);
+      const created = await createUser(
+        pool,
+        { email: email('other-estudio'), role: 'admin', display_name: null, tenant_ids: [] },
+        otherEstudioId,
+      );
+      createdUserIds.push(created.id);
+
+      const rows = await listUsers(pool, estudioId);
+      expect(rows.some((r) => r.id === created.id)).toBe(false);
     });
   });
 
@@ -164,31 +186,31 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
     // never treated as NEVER_ONBOARDED, since that guard only applies to
     // users who went through createUser()'s invite flow at all.
     it('activates a user and returns the updated row', async () => {
-      const user = await createTestUser(pool, { isActive: false });
+      const user = await createTestUser(pool, { isActive: false, estudioId });
       createdUserIds.push(user.id);
 
-      const updated = await setUserActive(pool, user.id, true);
+      const updated = await setUserActive(pool, user.id, true, estudioId);
       expect(updated).toEqual({ id: user.id, is_active: true });
     });
 
     it('deactivates a user', async () => {
-      const user = await createTestUser(pool, { isActive: true });
+      const user = await createTestUser(pool, { isActive: true, estudioId });
       createdUserIds.push(user.id);
 
-      const updated = await setUserActive(pool, user.id, false);
+      const updated = await setUserActive(pool, user.id, false, estudioId);
       expect(updated).toEqual({ id: user.id, is_active: false });
     });
 
     it("returns 'NOT_FOUND' for an unknown user id", async () => {
-      const updated = await setUserActive(pool, randomUUID(), true);
+      const updated = await setUserActive(pool, randomUUID(), true, estudioId);
       expect(updated).toBe('NOT_FOUND');
     });
 
     it("refuses to activate a user created via createUser() who never accepted their invite ('NEVER_ONBOARDED'), without touching is_active", async () => {
-      const created = await createUser(pool, { email: email('never-onboarded'), role: 'admin', display_name: null, tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('never-onboarded'), role: 'admin', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
 
-      const updated = await setUserActive(pool, created.id, true);
+      const updated = await setUserActive(pool, created.id, true, estudioId);
       expect(updated).toBe('NEVER_ONBOARDED');
 
       const { rows } = await pool.query<{ is_active: boolean }>('SELECT is_active FROM users WHERE id = $1', [created.id]);
@@ -196,24 +218,24 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
     });
 
     it('allows reactivating a user who genuinely accepted an invite at least once, even after being deactivated', async () => {
-      const created = await createUser(pool, { email: email('reactivate'), role: 'admin', display_name: null, tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('reactivate'), role: 'admin', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
       // Simulates having gone through accept-invite (PR3) at least once —
       // that service doesn't exist yet on this branch, so this marks the
       // same user_invites.accepted_at (+ consumed_at) columns it would have
       // set on a genuine accept.
       await pool.query('UPDATE user_invites SET consumed_at = now(), accepted_at = now() WHERE user_id = $1', [created.id]);
-      await setUserActive(pool, created.id, false); // e.g. offboarded, then reconsidered
+      await setUserActive(pool, created.id, false, estudioId); // e.g. offboarded, then reconsidered
 
-      const updated = await setUserActive(pool, created.id, true);
+      const updated = await setUserActive(pool, created.id, true, estudioId);
       expect(updated).toEqual({ id: created.id, is_active: true });
     });
 
     it("regression: resendInvite() must NOT look like acceptance — still 'NEVER_ONBOARDED' even though it sets consumed_at on the invalidated first invite", async () => {
-      const created = await createUser(pool, { email: email('resent-not-accepted'), role: 'admin', display_name: null, tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('resent-not-accepted'), role: 'admin', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
 
-      await resendInvite(pool, created.id);
+      await resendInvite(pool, created.id, estudioId);
 
       const { rows: consumedRows } = await pool.query<{ consumed_at: Date | null }>(
         'SELECT consumed_at FROM user_invites WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
@@ -221,17 +243,30 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
       );
       expect(consumedRows[0].consumed_at).not.toBeNull(); // the invalidated first invite
 
-      const updated = await setUserActive(pool, created.id, true);
+      const updated = await setUserActive(pool, created.id, true, estudioId);
       expect(updated).toBe('NEVER_ONBOARDED');
+    });
+
+    it("multi-estudio pivot: returns 'NOT_FOUND' for a user that belongs to a different estudio, never mutating it", async () => {
+      const otherEstudioId = await createTestEstudio(pool, 'users.service.test other estudio');
+      createdEstudioIds.push(otherEstudioId);
+      const user = await createTestUser(pool, { isActive: true, estudioId: otherEstudioId });
+      createdUserIds.push(user.id);
+
+      const updated = await setUserActive(pool, user.id, false, estudioId);
+      expect(updated).toBe('NOT_FOUND');
+
+      const { rows } = await pool.query<{ is_active: boolean }>('SELECT is_active FROM users WHERE id = $1', [user.id]);
+      expect(rows[0].is_active).toBe(true);
     });
   });
 
   describe('resendInvite', () => {
     it('mints a fresh invite for an inactive user, invalidating the previous one', async () => {
-      const created = await createUser(pool, { email: email('resend'), role: 'admin', display_name: null, tenant_ids: [] }, null);
+      const created = await createUser(pool, { email: email('resend'), role: 'admin', display_name: null, tenant_ids: [] }, estudioId);
       createdUserIds.push(created.id);
 
-      const result = await resendInvite(pool, created.id);
+      const result = await resendInvite(pool, created.id, estudioId);
       expect(result).toEqual({ email: created.email, invite_email_sent: false });
 
       const { rows } = await pool.query<{ consumed_at: Date | null }>(
@@ -244,10 +279,10 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
     });
 
     it("returns 'ALREADY_ACTIVE' for an active user, without touching user_invites", async () => {
-      const user = await createTestUser(pool, { isActive: true });
+      const user = await createTestUser(pool, { isActive: true, estudioId });
       createdUserIds.push(user.id);
 
-      const result = await resendInvite(pool, user.id);
+      const result = await resendInvite(pool, user.id, estudioId);
       expect(result).toBe('ALREADY_ACTIVE');
 
       const { rows } = await pool.query('SELECT id FROM user_invites WHERE user_id = $1', [user.id]);
@@ -255,8 +290,21 @@ describe('users.service: createUser / listUsers / setUserActive', () => {
     });
 
     it("returns 'NOT_FOUND' for an unknown user id", async () => {
-      const result = await resendInvite(pool, randomUUID());
+      const result = await resendInvite(pool, randomUUID(), estudioId);
       expect(result).toBe('NOT_FOUND');
+    });
+
+    it("multi-estudio pivot: returns 'NOT_FOUND' for a user that belongs to a different estudio, never sending an invite", async () => {
+      const otherEstudioId = await createTestEstudio(pool, 'users.service.test other estudio');
+      createdEstudioIds.push(otherEstudioId);
+      const user = await createTestUser(pool, { isActive: false, estudioId: otherEstudioId });
+      createdUserIds.push(user.id);
+
+      const result = await resendInvite(pool, user.id, estudioId);
+      expect(result).toBe('NOT_FOUND');
+
+      const { rows } = await pool.query('SELECT id FROM user_invites WHERE user_id = $1', [user.id]);
+      expect(rows).toHaveLength(0);
     });
   });
 });

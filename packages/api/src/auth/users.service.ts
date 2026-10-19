@@ -14,6 +14,13 @@
  * — it never throws (see invite-email.ts), so an SMTP outage can't roll
  * back or block the account that's already committed; invite_email_sent
  * on the result lets the admin know if it actually went out.
+ *
+ * Multi-estudio pivot: listUsers/setUserActive/resendInvite all take a
+ * required `estudioId` (the CALLER's own, resolved by
+ * users.controller.ts's requireEstudioId() before any of these run) and
+ * scope every query to it, collapsing "doesn't exist" and "belongs to
+ * another estudio" into the same NOT_FOUND/empty-list result — same
+ * posture as tenants.controller.ts's own estudio-scoped routes.
  */
 import { randomUUID } from 'crypto';
 import type { Pool } from 'pg';
@@ -44,14 +51,23 @@ export interface CreatedUser {
   invite_email_sent: boolean;
 }
 
-export async function listUsers(pool: Pool): Promise<UserListRow[]> {
+/**
+ * Multi-estudio pivot: scoped to the CALLER's own estudio — the controller
+ * resolves/validates estudioId (rejecting platform-level staff with 403)
+ * before this is ever called, so it takes a required `string`, not
+ * `string | null`, the same contract tenants.controller.ts's own
+ * requireEstudioId() establishes for its own estudio-scoped reads/writes.
+ */
+export async function listUsers(pool: Pool, estudioId: string): Promise<UserListRow[]> {
   const { rows } = await pool.query<UserListRow>(
     `SELECT u.id, u.email, u.role, u.display_name, u.is_active, u.created_at,
             COALESCE(array_agg(uta.tenant_id) FILTER (WHERE uta.tenant_id IS NOT NULL), '{}') AS tenant_ids
      FROM users u
      LEFT JOIN user_tenant_access uta ON uta.user_id = u.id
+     WHERE u.estudio_id = $1
      GROUP BY u.id
      ORDER BY u.created_at DESC`,
+    [estudioId],
   );
   return rows;
 }
@@ -118,6 +134,7 @@ export async function createUser(
 export async function resendInvite(
   pool: Pool,
   userId: string,
+  estudioId: string,
 ): Promise<{ email: string; invite_email_sent: boolean } | 'NOT_FOUND' | 'ALREADY_ACTIVE'> {
   const client = await pool.connect();
   let user: { email: string; display_name: string | null } | undefined;
@@ -125,9 +142,13 @@ export async function resendInvite(
   try {
     await client.query('BEGIN');
 
+    // Multi-estudio pivot: `AND estudio_id = $2` collapses "doesn't exist"
+    // and "belongs to another estudio" into the same NOT_FOUND — no
+    // existence leak across estudios, same posture as every other
+    // estudio-scoped lookup in this pivot.
     const { rows } = await client.query<{ email: string; display_name: string | null; is_active: boolean }>(
-      'SELECT email, display_name, is_active FROM users WHERE id = $1',
-      [userId],
+      'SELECT email, display_name, is_active FROM users WHERE id = $1 AND estudio_id = $2',
+      [userId, estudioId],
     );
     const found = rows[0];
     if (!found) {
@@ -180,34 +201,51 @@ export type SetUserActiveResult = { id: string; is_active: boolean } | 'NOT_FOUN
  * Deactivating (isActive=false), and reactivating a user who has
  * genuinely accepted at least once, have no such restriction.
  */
-async function updateIsActive(pool: Pool, userId: string, isActive: boolean): Promise<{ id: string; is_active: boolean } | undefined> {
+async function updateIsActive(
+  pool: Pool,
+  userId: string,
+  isActive: boolean,
+  estudioId: string,
+): Promise<{ id: string; is_active: boolean } | undefined> {
   const { rows } = await pool.query<{ id: string; is_active: boolean }>(
-    'UPDATE users SET is_active = $1, updated_at = now() WHERE id = $2 RETURNING id, is_active',
-    [isActive, userId],
+    'UPDATE users SET is_active = $1, updated_at = now() WHERE id = $2 AND estudio_id = $3 RETURNING id, is_active',
+    [isActive, userId, estudioId],
   );
   return rows[0];
 }
 
-export async function setUserActive(pool: Pool, userId: string, isActive: boolean): Promise<SetUserActiveResult> {
+/**
+ * Multi-estudio pivot: `estudioId` is the CALLER's own estudio (controller-
+ * resolved, never from the request) — every lookup/update below is scoped
+ * to it, collapsing "doesn't exist" and "belongs to another estudio" into
+ * the same NOT_FOUND, same posture as resendInvite above.
+ */
+export async function setUserActive(
+  pool: Pool,
+  userId: string,
+  isActive: boolean,
+  estudioId: string,
+): Promise<SetUserActiveResult> {
   if (!isActive) {
-    return (await updateIsActive(pool, userId, false)) ?? 'NOT_FOUND';
+    return (await updateIsActive(pool, userId, false, estudioId)) ?? 'NOT_FOUND';
   }
 
   const { rows: checkRows } = await pool.query<{ id: string; has_any_invite: boolean; has_accepted_invite: boolean }>(
     `SELECT u.id,
             EXISTS (SELECT 1 FROM user_invites WHERE user_id = u.id) AS has_any_invite,
             EXISTS (SELECT 1 FROM user_invites WHERE user_id = u.id AND accepted_at IS NOT NULL) AS has_accepted_invite
-     FROM users u WHERE u.id = $1`,
-    [userId],
+     FROM users u WHERE u.id = $1 AND u.estudio_id = $2`,
+    [userId, estudioId],
   );
   const check = checkRows[0];
   if (!check) return 'NOT_FOUND';
   if (check.has_any_invite && !check.has_accepted_invite) return 'NEVER_ONBOARDED';
 
   // No `?? 'NOT_FOUND'` fallback here, unlike the deactivate branch above:
-  // the check above already confirmed this row exists, and nothing in this
-  // codebase can delete a user (018_init_users_and_roles.sql's own
-  // "deactivate, never delete" posture) — a fallback for that gap would be
-  // untested dead code for a state that can't occur.
-  return (await updateIsActive(pool, userId, true))!;
+  // the check above already confirmed this row exists (within this
+  // estudio), and nothing in this codebase can delete a user
+  // (018_init_users_and_roles.sql's own "deactivate, never delete"
+  // posture) — a fallback for that gap would be untested dead code for a
+  // state that can't occur.
+  return (await updateIsActive(pool, userId, true, estudioId))!;
 }
