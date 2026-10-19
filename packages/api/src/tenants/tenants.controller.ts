@@ -12,6 +12,7 @@ import { isUuid, validateTenantIdParam, validateUpdateTenantConfigBody } from '.
 import { AuthGuard, type AuthenticatedRequest } from '../auth/auth-guard';
 import { assertTenantAccess } from '../auth/tenant-access';
 import { assertRole } from '../auth/role-check';
+import type { AuthenticatedUser } from '../auth/users-types';
 import { fetchPendientesHistorico, fetchVouchersForExport } from './pendientes-historico';
 import { validateComprobanteArcaManualRequest } from './comprobante-arca-manual-validation';
 import { createComprobanteArcaManual } from './comprobante-arca-manual';
@@ -40,6 +41,23 @@ export interface TenantRow {
 }
 
 /**
+ * Multi-estudio pivot: every estudio-scoped write/list in this controller
+ * needs the caller's OWN estudio_id, and platform-level staff (null) must
+ * be rejected with the SAME 403 assertTenantAccess itself uses for that
+ * case — factored into one helper (rather than four copies of the same
+ * inline check) specifically so a future route can't end up missing it the
+ * way updateTenant/setActive originally did (caught in code review: both
+ * relied on `estudio_id = NULL` never matching a row instead of 403ing
+ * explicitly, which is correct-by-accident, not correct-by-construction).
+ */
+function requireEstudioId(user: AuthenticatedUser): string {
+  if (user.estudio_id === null) {
+    throw new HttpException({ error: 'no tenés acceso a este tenant' }, HttpStatus.FORBIDDEN);
+  }
+  return user.estudio_id;
+}
+
+/**
  * T38 (Fase 2, autenticacion-roles): every endpoint here requires a valid
  * token (class-level @UseGuards — this controller has no unauthenticated
  * endpoint, unlike AuthController). `:id` IS the tenant id, so
@@ -51,12 +69,13 @@ export interface TenantRow {
 @UseGuards(AuthGuard)
 export class TenantsController {
   /**
-   * Backoffice self-service (admin-only): list every tenant. No tenant `:id`
-   * to scope by, so there's no assertTenantAccess call here — admin already
-   * sees every tenant implicitly (same posture assertTenantAccess itself
-   * grants admin/colaborador), this just exposes that same visibility as a
-   * real endpoint instead of only being true "by omission" inside
-   * assertTenantAccess.
+   * Backoffice self-service (admin-only): list every tenant WITHIN THE
+   * CALLER'S OWN ESTUDIO. No tenant `:id` to scope by, so this can't go
+   * through assertTenantAccess — it filters by req.user.estudio_id
+   * directly, the same boundary assertTenantAccess itself now enforces
+   * (multi-estudio pivot). Platform-level staff (estudio_id === null) gets
+   * 403, not an empty list — same "no implicit access to any estudio"
+   * posture as listMyTenants/assertTenantAccess.
    */
   @Get()
   async listTenants(@Req() req: AuthenticatedRequest) {
@@ -64,15 +83,24 @@ export class TenantsController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
-      'SELECT id, name, cuit, active, created_at, updated_at FROM tenants ORDER BY name ASC',
+      'SELECT id, name, cuit, active, created_at, updated_at FROM tenants WHERE estudio_id = $1 ORDER BY name ASC',
+      [estudioId],
     );
     return rows;
   }
 
-  /** Backoffice self-service (admin-only): create a tenant (name + cuit only — see tenants-admin-validation.ts). */
+  /**
+   * Backoffice self-service (admin-only): create a tenant (name + cuit only
+   * — see tenants-admin-validation.ts) INSIDE the caller's own estudio.
+   * estudio_id always comes from req.user, never the request body — same
+   * posture as every other estudio-scoped write in this pivot. Platform-
+   * level staff (estudio_id === null) gets 403: tenants belong to an
+   * estudio, and platform staff doesn't have one.
+   */
   @Post()
   async createTenant(@Body() body: unknown, @Req() req: AuthenticatedRequest) {
     const validation = validateCreateTenantBody(body);
@@ -84,11 +112,12 @@ export class TenantsController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
-      'INSERT INTO tenants (name, cuit) VALUES ($1, $2) RETURNING id, name, cuit, active, created_at, updated_at',
-      [validation.value.name, validation.value.cuit],
+      'INSERT INTO tenants (name, cuit, estudio_id) VALUES ($1, $2, $3) RETURNING id, name, cuit, active, created_at, updated_at',
+      [validation.value.name, validation.value.cuit, estudioId],
     );
     return rows[0];
   }
@@ -101,9 +130,16 @@ export class TenantsController {
    * :id/config with unrelated fields.
    *
    * No assertTenantAccess call here (unlike the :id-scoped GET routes
-   * below): assertRole already restricts this route to 'admin', and
-   * assertTenantAccess unconditionally no-ops for 'admin', so calling it
-   * would only be dead code pretending to be a scoping check.
+   * below): assertRole already restricts this route to 'admin'. Multi-
+   * estudio pivot: requireEstudioId() rejects platform-level staff (403,
+   * same as listTenants/createTenant) BEFORE the UPDATE runs — relying on
+   * `estudio_id = NULL` never matching a row would also "work" (0 rows →
+   * 404), but that's correct by accident, not by construction, and would
+   * return a different status than every other estudio-scoped route for
+   * the exact same actor. The `AND estudio_id = $N` below still does its
+   * job for the "wrong estudio, not null" case: collapsing "not found"
+   * and "not yours" into the same 404 (no existence leak, same posture as
+   * tenant-access.ts's own doc).
    */
   @Put(':id')
   async updateTenant(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
@@ -121,13 +157,14 @@ export class TenantsController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
     const pool = getPgPool();
     const { rows } = await pool.query<TenantRow>(
       `UPDATE tenants SET name = $1, cuit = $2, updated_at = now()
-       WHERE id = $3
+       WHERE id = $3 AND estudio_id = $4
        RETURNING id, name, cuit, active, created_at, updated_at`,
-      [validation.value.name, validation.value.cuit, id],
+      [validation.value.name, validation.value.cuit, id, estudioId],
     );
     if (rows.length === 0) {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);
@@ -145,6 +182,11 @@ export class TenantsController {
    * Disabling only blocks `cliente`-role access to this tenant
    * (tenant-access.ts's assertTenantAccess, cliente branch) — admin/colaborador
    * are unaffected, so they can still reactivate it or do cleanup.
+   *
+   * Multi-estudio pivot: requireEstudioId() rejects platform-level staff
+   * (403) BEFORE the UPDATE runs, same reasoning as updateTenant above;
+   * `AND estudio_id = $N` in the UPDATE's WHERE still collapses "not
+   * found" vs "not yours" for the "wrong estudio, not null" case.
    */
   @Patch(':id')
   async setActive(@Param('id') id: unknown, @Body() body: unknown, @Req() req: AuthenticatedRequest) {
@@ -156,6 +198,7 @@ export class TenantsController {
     if (roleFailure) {
       throw new HttpException({ error: roleFailure.error }, roleFailure.status);
     }
+    const estudioId = requireEstudioId(req.user!);
 
     const b = (body ?? {}) as Record<string, unknown>;
     if (typeof b.active !== 'boolean') {
@@ -164,8 +207,8 @@ export class TenantsController {
 
     const pool = getPgPool();
     const { rows } = await pool.query<{ id: string; active: boolean }>(
-      'UPDATE tenants SET active = $1, updated_at = now() WHERE id = $2 RETURNING id, active',
-      [b.active, id],
+      'UPDATE tenants SET active = $1, updated_at = now() WHERE id = $2 AND estudio_id = $3 RETURNING id, active',
+      [b.active, id, estudioId],
     );
     if (rows.length === 0) {
       throw new HttpException({ error: 'tenant not found' }, HttpStatus.NOT_FOUND);

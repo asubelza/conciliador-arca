@@ -6,9 +6,11 @@ import ExcelJS from 'exceljs';
 import { AppModule } from '../app.module';
 import {
   authHeaderFor,
+  createTestEstudio,
   createTestPeriodo,
   createTestTenant,
   createTestUser,
+  deleteTestEstudio,
   deleteTestTenant,
   deleteTestUser,
 } from '../test-support/pg-test-helpers';
@@ -177,6 +179,96 @@ describe('T20: /api/tenants/:id/config (integration)', () => {
         .set('Authorization', authHeaderFor('colaborador'))
         .send({ name: 'Should Not Rename' });
       expect(res.status).toBe(403);
+    });
+
+    describe('multi-estudio pivot: cross-estudio isolation', () => {
+      let otherEstudioId: string;
+      let otherTenantId: string;
+
+      beforeAll(async () => {
+        otherEstudioId = await createTestEstudio(pool, 'tenants.controller.test other estudio');
+        otherTenantId = await createTestTenant(pool, 'Other Estudio Tenant', undefined, otherEstudioId);
+      });
+
+      afterAll(async () => {
+        await deleteTestTenant(pool, otherTenantId);
+        await deleteTestEstudio(pool, otherEstudioId);
+      });
+
+      it("GET /api/tenants never lists another estudio's tenants", async () => {
+        const res = await request(app.getHttpServer()).get('/api/tenants').set('Authorization', adminAuth);
+        expect(res.status).toBe(200);
+        expect(res.body.some((t: { id: string }) => t.id === otherTenantId)).toBe(false);
+      });
+
+      it('GET /api/tenants as platform-level staff (estudio_id null) returns 403', async () => {
+        const res = await request(app.getHttpServer())
+          .get('/api/tenants')
+          .set('Authorization', authHeaderFor('admin', { estudioId: null }));
+        expect(res.status).toBe(403);
+      });
+
+      it("POST /api/tenants creates the tenant under the caller's OWN estudio_id, never from the body", async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/tenants')
+          .set('Authorization', adminAuth)
+          .send({ name: 'Scoped New Tenant' });
+        expect(res.status).toBe(201);
+
+        const { rows } = await pool.query<{ estudio_id: string }>('SELECT estudio_id FROM tenants WHERE id = $1', [
+          res.body.id,
+        ]);
+        expect(rows[0].estudio_id).toBe(estudioId);
+        await deleteTestTenant(pool, res.body.id);
+      });
+
+      it('POST /api/tenants as platform-level staff (estudio_id null) returns 403', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/tenants')
+          .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+          .send({ name: 'Should Not Be Created' });
+        expect(res.status).toBe(403);
+      });
+
+      it("PUT /api/tenants/:id on another estudio's tenant returns 404, not 200 (no cross-estudio mutation)", async () => {
+        const res = await request(app.getHttpServer())
+          .put(`/api/tenants/${otherTenantId}`)
+          .set('Authorization', adminAuth)
+          .send({ name: 'Hijacked Name' });
+        expect(res.status).toBe(404);
+
+        const { rows } = await pool.query<{ name: string }>('SELECT name FROM tenants WHERE id = $1', [otherTenantId]);
+        expect(rows[0].name).toBe('Other Estudio Tenant');
+      });
+
+      it("PATCH /api/tenants/:id on another estudio's tenant returns 404, not 200 (no cross-estudio disable/enable)", async () => {
+        const res = await request(app.getHttpServer())
+          .patch(`/api/tenants/${otherTenantId}`)
+          .set('Authorization', adminAuth)
+          .send({ active: false });
+        expect(res.status).toBe(404);
+
+        const { rows } = await pool.query<{ active: boolean }>('SELECT active FROM tenants WHERE id = $1', [
+          otherTenantId,
+        ]);
+        expect(rows[0].active).toBe(true);
+      });
+
+      it('PUT /api/tenants/:id as platform-level staff (estudio_id null) returns 403, not 404 (same contract as GET/POST, not "correct by accident")', async () => {
+        const res = await request(app.getHttpServer())
+          .put(`/api/tenants/${tenantId}`)
+          .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+          .send({ name: 'Should Not Rename' });
+        expect(res.status).toBe(403);
+      });
+
+      it('PATCH /api/tenants/:id as platform-level staff (estudio_id null) returns 403, not 404 (same contract as GET/POST, not "correct by accident")', async () => {
+        const res = await request(app.getHttpServer())
+          .patch(`/api/tenants/${tenantId}`)
+          .set('Authorization', authHeaderFor('admin', { estudioId: null }))
+          .send({ active: false });
+        expect(res.status).toBe(403);
+      });
     });
   });
 
