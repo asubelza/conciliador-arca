@@ -140,7 +140,7 @@ const emptyPendientesHistorico = {
  */
 describe('T31: PeriodoReportViewer', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {
@@ -242,7 +242,7 @@ describe('T31: PeriodoReportViewer', () => {
 
   describe('role-gating (T39, autenticacion-roles)', () => {
     it('cliente never sees "Cerrar Conciliación del Mes" even while abierto (read-only, RF-14)', async () => {
-      setSession('fake-token', { id: 'u2', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      setSession('fake-token', { id: 'u2', email: 'cliente@example.com', role: 'cliente', display_name: null, estudio_id: 'test-estudio-id' });
       global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => openReportBody }) as unknown as typeof fetch;
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
@@ -300,7 +300,7 @@ describe('T31: PeriodoReportViewer', () => {
     });
 
     it('cliente sees the section but no Confirmar/Descartar/mark buttons (read-only, RF-14)', async () => {
-      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null, estudio_id: 'test-estudio-id' });
       global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithCoincidencia }) as unknown as typeof fetch;
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
@@ -362,7 +362,7 @@ describe('T31: PeriodoReportViewer', () => {
     });
 
     it('cliente can open the comparison dialog but sees no Confirmar/Descartar inside it (read-only, RF-14)', async () => {
-      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null, estudio_id: 'test-estudio-id' });
       global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithCoincidencia }) as unknown as typeof fetch;
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
@@ -543,7 +543,7 @@ describe('T31: PeriodoReportViewer', () => {
     });
 
     it('does not show "Match manual" for a cliente (read-only, RF-14)', async () => {
-      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null });
+      setSession('fake-token', { id: 'u3', email: 'cliente@example.com', role: 'cliente', display_name: null, estudio_id: 'test-estudio-id' });
       global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => reportWithNoExiste }) as unknown as typeof fetch;
 
       render(<PeriodoReportViewer periodoId={PERIODO_ID} />);
@@ -604,7 +604,7 @@ describe('T31: PeriodoReportViewer', () => {
  */
 describe('2026-08-23 (feature 1 de 3, corregido): "Ver pendientes sistema" in PeriodoReportViewer', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {

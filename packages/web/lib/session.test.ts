@@ -1,7 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { clearSession, getSession, setSession, useAuth } from './session';
 
-const USER = { id: 'u1', email: 'a@example.com', role: 'admin' as const, display_name: 'Admin' };
+const USER = { id: 'u1', email: 'a@example.com', role: 'admin' as const, display_name: 'Admin', estudio_id: 'test-estudio-id' };
 
 /**
  * T39 (Fase 3, autenticacion-roles): the frontend session store —
@@ -86,6 +86,15 @@ describe('T39: lib/session', () => {
 
   it('ignores malformed localStorage content instead of throwing', () => {
     window.localStorage.setItem('conciliador_session', 'not valid json');
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fresh = require('./session');
+    expect(fresh.getSession()).toBeNull();
+  });
+
+  it('multi-estudio pivot: discards a session persisted before estudio_id existed, forcing a fresh login instead of misreading undefined as null', () => {
+    const { estudio_id, ...staleUser } = USER;
+    window.localStorage.setItem('conciliador_session', JSON.stringify({ token: 'tok-5', user: staleUser }));
     jest.resetModules();
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fresh = require('./session');

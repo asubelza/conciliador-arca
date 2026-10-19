@@ -79,7 +79,7 @@ const populatedBody: PendientesHistoricoResult = {
  */
 describe('2026-08-23 (feature 3 de 3): PendientesHistoricoViewer', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {
@@ -160,7 +160,7 @@ describe('2026-08-23 (feature 3 de 3): PendientesHistoricoViewer', () => {
  */
 describe('2026-10-12 (manual ARCA voucher creation): Agregar comprobante ARCA', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {
@@ -358,7 +358,7 @@ const twoRowsBody: PendientesHistoricoResult = {
 
 describe('2026-10-12 (Histórico filters + "Archivar")', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {
@@ -551,7 +551,7 @@ describe('2026-10-12 (Histórico filters + "Archivar")', () => {
  */
 describe('2026-10-12 (Histórico filters + export): Descargar Excel/CSV', () => {
   beforeEach(() => {
-    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null });
+    setSession('fake-token', { id: 'u1', email: 'admin@example.com', role: 'admin', display_name: null, estudio_id: 'test-estudio-id' });
   });
 
   afterEach(() => {

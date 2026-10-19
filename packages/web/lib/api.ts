@@ -104,6 +104,13 @@ export interface SessionUser {
   email: string;
   role: 'admin' | 'colaborador' | 'cliente';
   display_name: string | null;
+  /**
+   * Multi-estudio pivot: null means platform-level staff — see
+   * lib/session.ts's own SessionUser doc for the full reasoning (these
+   * two interfaces are a pre-existing, known duplication, not unified by
+   * this pivot).
+   */
+  estudio_id: string | null;
 }
 
 export interface LoginResponse {
